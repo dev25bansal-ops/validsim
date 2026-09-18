@@ -1,5 +1,11 @@
 # ValidSim 24/7 Continuous Build — Execution Memory
 
+## PIPELINE DIRECTIVE (updated 2026-09-19 by setup agent — read every run)
+- The repository is now a git repo (baseline commit `0a63beb`, branch `main`).
+- **After a green build**: if the working tree has uncommitted changes, run `git add -A` and commit with message `chore(ci): continuous-build checkpoint YYYY-MM-DD HH:MM`. **Never push** to any remote.
+- **If the build is red**: do NOT commit; fix first.
+- New since baseline: dashboard v0 served by FastAPI at `/` (design truth: `design-system/validsim/MASTER.md`), LLM scenario generator (`scenarios/llm_generator.py`, env-gated, rule-based fallback), PostgreSQL store (`store/postgres.py`, `VALIDSIM_STORE=postgres`). Remaining backlog: CLI `--latest` flag, PDF scorecard branding (Week 8), Timescale retention, Isaac Sim backend (needs DGX credits).
+
 ## 2026-09-18 ~20:55 UTC (run #7)
 - Build: PASS first try (133 tests), PASS after change (135 tests, 8.9s).
 - Forward-progress task (from run #6 candidate list): fixed API `/compare`

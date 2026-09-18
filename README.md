@@ -23,7 +23,7 @@ This repository contains the ValidSim MVP codebase, the founding blueprint, and 
 # Continuous build (installs deps into .venv, runs tests, updates vault status)
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
-# Run the API
+# Run the API + dashboard v0 (dashboard at http://127.0.0.1:8000/)
 .venv\Scripts\python.exe -m uvicorn validsim.api.main:app --reload
 
 # CLI: validate a checkpoint (mock backend in MVP)
@@ -52,10 +52,13 @@ submit checkpoint → simulate (parallel episodes + domain randomization)
 
 - [x] Week 1: repo, Docker, CI/CD pipeline
 - [x] Weeks 2–5 skeleton: episode runner (mock), randomization, evaluation, safety, regression, scorecard
-- [x] Weeks 4/6: scenario generator, API, CLI, **SQLite persistent store, scorecard Markdown/HTML exports, webhook dispatcher**
+- [x] Weeks 4/6: scenario generator, API, CLI, SQLite persistent store, scorecard Markdown/HTML exports, webhook dispatcher
 - [x] Week 6: **GitHub Actions plugin prototype** (`actions/validate`, `actions/scorecard`, `examples/robot-validation.yml`, `docs/github-actions.md`)
-- [ ] Isaac Sim/Lab backend replacing `MockIsaacBackend`
-- [ ] PostgreSQL/Timescale store, LLM adversarial generator, dashboard
+- [x] Week 4 upgrade: **LLM adversarial scenario generator** (`scenarios/llm_generator.py` — OpenAI-compatible provider, strict schema validation, deterministic rule-based fallback)
+- [x] Week 5 upgrade: **PostgreSQL store** (`store/postgres.py` — JSONB + indexed columns, `VALIDSIM_STORE=postgres`)
+- [x] Week 7: **Dashboard v0** — dark-theme scorecard/history/failed-mode charts served by FastAPI at `/` (design system: `design-system/validsim/MASTER.md`)
+- [ ] Real Isaac Sim/Lab backend replacing `MockIsaacBackend` (needs DGX credits)
+- [ ] Timescale retention, LLM scenario polish on real models, Next.js production dashboard
 
 See the vault: `05 - Execution/8-Week Sprint Plan.md`
 
