@@ -1,0 +1,56 @@
+# =============================================================================
+# ValidSim — .dockerignore
+# Keeps the build context small and the runtime image clean:
+# no VCS data, no secrets, no tests/docs/CI tooling in the production image.
+# =============================================================================
+
+# --- Version control ---------------------------------------------------------
+.git
+.gitignore
+
+# --- Secrets / credentials — NEVER bake into an image -------------------------
+vault/
+.env
+.env.*
+*.pem
+*.key
+
+# --- Python build & cache artifacts -------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtual environments ------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Tests: kept out of the runtime image (CI runs them from source) -----------
+tests/
+
+# --- Docs & business files ------------------------------------------------------
+*.docx
+*.md
+docs/
+
+# --- Local tooling & CI configs (not needed inside the image) -------------------
+.github/
+scripts/
+Makefile
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# --- OS / editor noise -----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

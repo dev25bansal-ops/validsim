@@ -1,0 +1,75 @@
+# =============================================================================
+# ValidSim Nightly — the 24/7 continuous-validation story, applied to
+# ValidSim itself. Every night at 03:00 UTC the FULL test suite runs on a
+# clean checkout and its results are archived, so regressions that slipped
+# past per-PR CI (flaky tests, dependency drift, time-of-day effects) are
+# caught before founders demo anything.
+#
+# Also supports manual triggering from the Actions tab (workflow_dispatch).
+# =============================================================================
+name: Nightly Validation
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  full-test:
+    name: Full pytest suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run full test suite (pytest)
+        run: python -m pytest tests/ -v --junitxml=nightly-pytest-results.xml
+
+      - name: Publish test summary
+        if: always()
+        run: |
+          {
+            echo "## Nightly pytest summary"
+            python - <<'PY'
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          p = pathlib.Path("nightly-pytest-results.xml")
+          if p.exists():
+              root = ET.parse(p).getroot()
+              suite = root if root.tag == "testsuite" else root.find("testsuite")
+              if suite is not None:
+                  a = suite.attrib
+                  print(
+                      f"- tests: {a.get('tests', '?')} | failures: {a.get('failures', '?')} "
+                      f"| errors: {a.get('errors', '?')} | skipped: {a.get('skipped', '?')} "
+                      f"| time: {a.get('time', '?')}s"
+                  )
+          else:
+              print("- no JUnit report produced (suite crashed before writing it)")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload nightly artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-pytest-${{ github.run_number }}
+          path: nightly-pytest-results.xml
+          retention-days: 30

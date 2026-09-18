@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ValidSim — Sim-to-Real Validation Dashboard</title>
+  <meta name="description" content="ValidSim: submit a robot model checkpoint, run parallel sim episodes, gate deploys on the composite scorecard (APPROVE/BLOCK).">
+  <link rel="stylesheet" href="/static/styles.css">
+  <!-- Chart.js via CDN; if the network is unavailable the onerror flag makes
+       app.js fall back to the HTML table (see renderTaxonomy/drawChart). -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer onerror="window.__vsChartJsFailed = true;"></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="brand">
+      <!-- Inline SVG wordmark glyph: robot head feeding a CI/CD pipeline. No emoji. -->
+      <svg class="brand-glyph" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true" focusable="false">
+        <line x1="20" y1="6" x2="20" y2="9.5" stroke="#3B82F6" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="20" cy="4.4" r="2" fill="#F59E0B"/>
+        <rect x="9.5" y="9.5" width="21" height="14.5" rx="4" fill="none" stroke="#3B82F6" stroke-width="2"/>
+        <circle cx="16" cy="16.8" r="2.1" fill="#F59E0B"/>
+        <circle cx="24" cy="16.8" r="2.1" fill="#F59E0B"/>
+        <path d="M15.5 21.2h9" stroke="#3B82F6" stroke-width="1.6" stroke-linecap="round"/>
+        <line x1="20" y1="24" x2="20" y2="29.5" stroke="#3B82F6" stroke-width="2" stroke-linecap="round"/>
+        <line x1="7.5" y1="33" x2="32.5" y2="33" stroke="#1E40AF" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="7.5" cy="33" r="3" fill="#0B1220" stroke="#3B82F6" stroke-width="2"/>
+        <circle cx="20" cy="33" r="3" fill="#0B1220" stroke="#3B82F6" stroke-width="2"/>
+        <circle cx="32.5" cy="33" r="3.4" fill="#F59E0B"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">ValidSim</span>
+        <span class="brand-tag">Sim-to-Real CI/CD · checkpoint → sim episodes → scorecard → gate</span>
+      </div>
+    </div>
+
+    <form id="run-form" class="run-form" autocomplete="off" novalidate>
+      <div class="field">
+        <label for="checkpoint-id">Checkpoint ID</label>
+        <input class="input" id="checkpoint-id" name="checkpoint_id" type="text" value="ckpt-franka-7b" required maxlength="64">
+      </div>
+      <div class="field">
+        <label for="task-id">Task</label>
+        <input class="input" id="task-id" name="task_id" type="text" value="pick-place" required maxlength="64">
+      </div>
+      <div class="field">
+        <label for="episodes">Episodes</label>
+        <input class="input" id="episodes" name="episodes" type="number" min="100" max="5000" step="100" value="1000" required>
+      </div>
+      <div class="field">
+        <label for="threshold">Threshold</label>
+        <input class="input" id="threshold" name="threshold" type="number" min="0" max="100" step="1" value="85" required>
+      </div>
+      <button class="btn-run" id="run-btn" type="submit" aria-busy="false">
+        <svg class="btn-spinner" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="42 16"/>
+        </svg>
+        <svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+          <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/>
+        </svg>
+        <span class="btn-label" id="run-btn-label">Run Validation</span>
+      </button>
+    </form>
+  </header>
+
+  <main id="main-content">
+    <p id="run-status" class="run-status" role="status" aria-live="polite">
+      Idle — submit a checkpoint to start a validation run.
+    </p>
+
+    <section class="panel scorecard-panel" aria-labelledby="scorecard-title">
+      <div class="panel-head">
+        <h2 id="scorecard-title">Validation Scorecard</h2>
+        <p id="scorecard-run-meta" class="panel-meta">No run loaded</p>
+      </div>
+      <div class="scorecard-grid">
+        <div class="composite-block">
+          <p class="composite-label">Composite score</p>
+          <p class="composite-value" id="sc-composite">--</p>
+          <p class="composite-gate" id="sc-gate">gate ≥ 85.0</p>
+          <p id="sc-verdict" class="verdict verdict--pending">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+            </svg>
+            <span>PENDING</span>
+          </p>
+        </div>
+        <div class="metrics">
+          <article class="metric-card">
+            <h3>Success rate</h3>
+            <p class="metric-value" id="m-success">--</p>
+          </article>
+          <article class="metric-card">
+            <h3>Safety</h3>
+            <p class="metric-value" id="m-safety">--</p>
+          </article>
+          <article class="metric-card">
+            <h3>Robustness</h3>
+            <p class="metric-value" id="m-robustness">--</p>
+          </article>
+          <article class="metric-card">
+            <h3>Regression Δ</h3>
+            <p class="metric-value" id="m-regression">--</p>
+          </article>
+          <article class="metric-card">
+            <h3>95% CI (success)</h3>
+            <p class="metric-value" id="m-ci">--</p>
+          </article>
+          <article class="metric-card">
+            <h3>Episodes</h3>
+            <p class="metric-value" id="m-episodes">--</p>
+          </article>
+          <article class="metric-card">
+            <h3>Duration</h3>
+            <p class="metric-value" id="m-duration">--</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel taxonomy-panel" aria-labelledby="taxonomy-title">
+      <div class="panel-head">
+        <h2 id="taxonomy-title">Failure Taxonomy</h2>
+        <p id="taxonomy-meta" class="panel-meta"></p>
+      </div>
+      <p id="taxonomy-empty" class="empty-note">No failures recorded for the current run.</p>
+      <div class="chart-wrap" id="taxonomy-chart-wrap" hidden>
+        <canvas id="taxonomy-chart" role="img" aria-label="Horizontal bar chart of failure modes by episode count"></canvas>
+      </div>
+      <!-- Table fallback: shown when Chart.js is unavailable (offline CDN or init
+           error); otherwise kept in the DOM as the accessible data alternative. -->
+      <table id="taxonomy-table" class="data-table taxonomy-table">
+        <caption class="is-visually-hidden">Failure taxonomy: failure mode, count, and share of failed episodes</caption>
+        <thead>
+          <tr>
+            <th scope="col">Failure mode</th>
+            <th scope="col">Count</th>
+            <th scope="col">Share</th>
+          </tr>
+        </thead>
+        <tbody id="taxonomy-tbody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel history-panel" aria-labelledby="history-title">
+      <div class="panel-head">
+        <h2 id="history-title">Run History</h2>
+        <p id="history-stats" class="panel-meta">Loading…</p>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table history-table">
+          <caption class="is-visually-hidden">Past validation runs, newest first. Activate a row to load its scorecard.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Run</th>
+              <th scope="col">Checkpoint</th>
+              <th scope="col" class="col-task">Task</th>
+              <th scope="col">Composite</th>
+              <th scope="col">Decision</th>
+              <th scope="col" class="col-created">Created (UTC)</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>ValidSim v0 · Week-7 dashboard · composite = 0.4·success + 0.3·safety + 0.2·robustness + 0.1·regression</p>
+  </footer>
+</body>
+</html>

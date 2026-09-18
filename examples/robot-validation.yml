@@ -1,0 +1,78 @@
+# ValidSim — Robot Policy Validation (ready-to-copy example)
+#
+# Copy this file to `.github/workflows/robot-validation.yml` in your repo.
+#
+# MVP mode: the actions below run ValidSim's LOCAL mock validation pipeline on
+# your own runner (no SaaS backend yet, no API key needed). Cloud execution
+# with GPU simulation via VALIDSIM_API_KEY is coming — until then the
+# `deploy` job below is the pattern for how the gate blocks rollouts.
+#
+# Uses the monorepo path form (./actions/...). Once published, swap to
+# `uses: validsim/validate-action@v1` / `validsim/scorecard-action@v1`.
+
+name: Robot Policy Validation
+
+on:
+  push:
+    paths:
+      - 'models/**'
+      - 'policies/**'
+  pull_request:
+    paths:
+      - 'models/**'
+      - 'policies/**'
+
+permissions:
+  contents: read
+  pull-requests: write   # required for the scorecard PR comment
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    # Surface the run id + score to downstream jobs (e.g. deploy, Slack bots).
+    outputs:
+      run-id: ${{ steps.validate.outputs.run-id }}
+      score: ${{ steps.validate.outputs.score }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Composite actions cannot set up Python themselves — do it here.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Sim-to-Real Validation
+        id: validate
+        uses: ./actions/validate
+        with:
+          checkpoint: ./models/policy_latest.pt   # treated as an id in MVP mode
+          task: bin_picking
+          robot: franka_panda
+          episodes: 1000
+          adversarial: 50
+          fail-below-score: 85                    # job fails if composite < 85
+          # validsim-version: ""                  # set once validsim is on PyPI
+
+      - name: Post Scorecard
+        if: always()                              # comment even when gate BLOCKs
+        uses: ./actions/scorecard
+        with:
+          run-id: ${{ steps.validate.outputs.run-id }}
+          comment-on-pr: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # The gate in action: this job only runs if `validsim gate` exited 0
+  # (APPROVE). Wire your real fleet rollout in here.
+  deploy:
+    name: Deploy checkpoint (gated)
+    needs: validate
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Roll out approved checkpoint
+        run: |
+          echo "Composite score ${{ needs.validate.outputs.score }} cleared the gate."
+          echo "Deploying ./models/policy_latest.pt to the fleet (run id ${{ needs.validate.outputs.run-id }})."
+          # ./scripts/deploy_fleet.sh --checkpoint ./models/policy_latest.pt

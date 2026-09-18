@@ -1,0 +1,62 @@
+---
+tags:
+  - product
+  - vision
+status: complete
+created: 2026-09-18
+area: "03 - Product"
+---
+
+# 🧭 Product Vision
+
+> [!quote]
+> **"Submit a model checkpoint. Receive a defensible safety-and-success scorecard. Deploy with confidence."**
+
+A **cloud-native platform** that sits between the model training pipeline and real-world deployment ([[Solution Architecture]] for the full system view).
+
+## The five product capabilities
+
+| # | Capability | What it replaces today |
+|---|---|---|
+| 1 | Automated, **massively parallel** simulation-based validation (1,000–100,000 episodes/run) | Hand-built test scenes (hours–days each) |
+| 2 | **Adversarial scenario generation** (LLM-powered, 12 categories) | "We didn't think of that" field failures |
+| 3 | **Regression detection** against previous model versions | Silent breakage of working behaviors |
+| 4 | **Safety scoring** and compliance evidence generation | Judgment calls + ad-hoc spreadsheets |
+| 5 | **CI/CD-style API integration** (GitHub Actions / GitLab CI compatible) | Nothing — the gap itself |
+
+## The product in one loop
+
+```
+checkpoint push ──▶ GitHub Action / CLI ──▶ 1,000–100,000 sim episodes
+      ▲                                              │
+      │                                              ▼
+  fix & retrain ◀── scorecard + regressions ◀── evaluation engine
+                          │
+                          ▼
+              DEPLOYMENT GATE: APPROVE ✅ / BLOCK ❌
+```
+
+The scorecard is not a report — **it is a decision** ([[Product Principles]] #4, [[Scorecard UX]]).
+
+## Evolution of the product
+
+| Horizon | Product | Evidence |
+|---|---|---|
+| Now (MVP) | One VLA stack, one benchmark task, 1,000–5,000 episodes, scorecard + PDF ([[MVP Scope]]) | [[8-Week Sprint Plan]] |
+| Year 1–2 | Multi-embodiment, fleet gating, compliance packages ([[MVP Non-Goals]]) | [[90-Day Roadmap]] → [[Go-to-Market]] Phase 2 |
+| Year 3+ | The de-facto robot safety evidence standard ([[Moat]]) | Tier-4 buyers, [[Buyer Tiers]] |
+
+## Who it's for
+
+Five personas, one wedge: the **ML Engineer** at a Tier-1 robot FM company ([[User Personas]], [[Buyer Tiers]]). The CTO dashboard and compliance-officer PDF exist so the engineer's purchase survives procurement ([[Core User Flows]]).
+
+## What "defensible" means (product bar)
+
+- **Statistical confidence intervals** on every metric — bootstrap resampling, 95% CI ([[Module Specs]] Module 4)
+- **Immutable audit trail** — timestamped, hash-chained logs for insurers/regulators ([[Data Flow]] step 6)
+- **Reproducibility** — episode recordings (video, joint states, forces, contacts) so any claim can be re-watched ([[Tech Stack]])
+
+> [!warning] The temptation to resist
+> Building 9 robot embodiments and 5 task libraries "for completeness" instead of 1 stack + 1 task that produces a real scorecard for ≥1 external user by week 6 ([[90-Day Roadmap]] failure mode: "scope creep beyond the single wedge task"; list of deferred scope: [[MVP Non-Goals]]).
+
+Links: [[Vision & Positioning]] · [[MVP Scope]] · [[Product Principles]] · [[Solution Architecture]] · [[Home]]

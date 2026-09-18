@@ -1,0 +1,11 @@
+ValidSim validation complete
+  Version:       0.1.0
+  Run ID:        vrun-14d8634a
+  Checkpoint:    ./models/policy_v42.pt
+  Task:          bin_picking (1000 nominal + 50 adversarial)
+  Success rate:  69.8%
+  Safety score:  81.1
+  Robustness:    100.0
+  Composite:     82.2 (threshold 85.0)
+  Decision:      BLOCK
+  Top failures:  joint_limit=54, perception_error=49, timeout=46

@@ -1,0 +1,27 @@
+{
+  "run_id": "vrun-14d8634a",
+  "checkpoint_id": "./models/policy_v42.pt",
+  "task_id": "bin_picking",
+  "composite_score": 82.25,
+  "success_rate": 0.6981,
+  "safety_score": 81.1,
+  "robustness_score": 100.0,
+  "regression_delta": null,
+  "confidence_interval": [
+    0.6705,
+    0.7229
+  ],
+  "deploy_decision": "BLOCK",
+  "threshold": 85.0,
+  "created_at": "2026-09-18T17:46:48+00:00",
+  "episode_count": 1050,
+  "failure_taxonomy": {
+    "joint_limit": 54,
+    "perception_error": 49,
+    "timeout": 46,
+    "unstable_placement": 44,
+    "grasp_failure": 43,
+    "emergency_stop": 41,
+    "collision": 40
+  }
+}

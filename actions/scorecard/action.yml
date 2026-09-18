@@ -1,0 +1,178 @@
+name: "ValidSim Scorecard"
+description: >-
+  Render a ValidSim validation scorecard as Markdown, attach it to the job
+  summary, and optionally post it as a pull-request comment. MVP mode reads
+  the local scorecard cache written by the ValidSim Validate action in the
+  same job — the hosted SaaS backend (API-key based) is coming.
+author: "ValidSim"
+
+# ---------------------------------------------------------------------------
+# NOTES
+# * Composite actions cannot run actions/setup-python@v5; run it in the
+#   consumer workflow before this action (same rule as validsim/validate).
+# * `validsim scorecard --format markdown` does NOT exist in the MVP CLI
+#   (validsim/cli.py only prints the cached scorecard as JSON). Therefore the
+#   Markdown comment body is produced by piping `python -m validsim.cli
+#   scorecard --run-id <id>` (JSON on stdout) through a small inline
+#   stdlib-only renderer below. When the CLI gains a markdown formatter, this
+#   step should switch to it.
+# * The cache lives at $VALIDSIM_CACHE_FILE (pinned to <runner.temp>/validsim/
+#   scorecards.json by both actions), so Validate and Scorecard must run in
+#   the SAME job until the cloud backend exists.
+# * Posting a comment requires `pull-requests: write` on the consumer job.
+# ---------------------------------------------------------------------------
+
+inputs:
+  run-id:
+    description: >-
+      ValidSim run id to render (output `run-id` of the ValidSim Validate
+      action, format vrun-<8 hex>).
+    required: true
+  comment-on-pr:
+    description: >-
+      Post the scorecard as a pull-request comment. Silently skipped when the
+      workflow run has no associated PR (e.g. plain `push` events).
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used for `gh pr comment` (needs pull-requests: write)."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify Python availability
+      id: python
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v python >/dev/null 2>&1; then
+          echo "bin=python" >> "$GITHUB_OUTPUT"
+        elif command -v python3 >/dev/null 2>&1; then
+          echo "bin=python3" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::No python interpreter found. Add 'uses: actions/setup-python@v5' before this action."
+          exit 1
+        fi
+        # Same absolute cache path the Validate action pins, so both actions
+        # share the local scorecard store within one job.
+        echo "VALIDSIM_CACHE_FILE=${RUNNER_TEMP}/validsim/scorecards.json" >> "$GITHUB_ENV"
+
+    - name: Ensure ValidSim is importable
+      shell: bash
+      run: |
+        set -euo pipefail
+        PY="${{ steps.python.outputs.bin }}"
+        if "$PY" -c "import validsim" >/dev/null 2>&1; then
+          echo "validsim already importable."
+        elif [ -f requirements.txt ]; then
+          echo "::notice::validsim not importable; installing requirements.txt + PYTHONPATH (monorepo mode)."
+          "$PY" -m pip install --disable-pip-version-check -r requirements.txt
+          echo "PYTHONPATH=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
+        else
+          echo "::error::validsim is not importable and no requirements.txt found. Run the ValidSim Validate action (or install validsim) first."
+          exit 1
+        fi
+      working-directory: ${{ github.workspace }}
+
+    - name: Render scorecard Markdown
+      id: render
+      shell: bash
+      run: |
+        set -euo pipefail
+        PY="${{ steps.python.outputs.bin }}"
+        JSON="${RUNNER_TEMP}/validsim-scorecard.json"
+        MD="${RUNNER_TEMP}/validsim-scorecard.md"
+
+        if "$PY" -m validsim.cli scorecard --run-id "$VS_RUN_ID" > "$JSON" 2> "${JSON}.err"; then
+          # NOTE: the heredoc body below is written at the YAML block's base
+          # indent (8 spaces). YAML strips those 8 spaces, so bash receives
+          # the body and the closing PYX at column 0 — required because bash
+          # cannot strip space-indented heredocs and Python rejects leading
+          # indentation. Do not re-indent this block.
+          "$PY" - "$JSON" "$MD" <<'PYX'
+        import json, sys
+
+        sc = json.load(open(sys.argv[1], encoding="utf-8"))
+        approved = sc.get("deploy_decision") == "APPROVE"
+        badge = "✅ APPROVE" if approved else "❌ BLOCK"
+        lines = [
+            f"## 🤖 ValidSim Scorecard — `{sc.get('run_id', '?')}`",
+            "",
+            f"**Decision: {badge}** — composite **{sc.get('composite_score')}** "
+            f"vs threshold **{sc.get('threshold')}**",
+            "",
+            "| Checkpoint | Task | Episodes | Created (UTC) |",
+            "|---|---|---|---|",
+            f"| `{sc.get('checkpoint_id')}` | `{sc.get('task_id')}` "
+            f"| {sc.get('episode_count')} | {sc.get('created_at')} |",
+            "",
+            "| Metric | Value |",
+            "|---|---|",
+            f"| Success rate | {float(sc.get('success_rate', 0)) * 100:.1f}% |",
+            f"| Safety score | {sc.get('safety_score')} |",
+            f"| Robustness score | {sc.get('robustness_score')} |",
+        ]
+        ci = sc.get("confidence_interval")
+        if ci:
+            lines.append(f"| Success rate 95% CI | [{ci[0] * 100:.1f}%, {ci[1] * 100:.1f}%] |")
+        if sc.get("regression_delta") is not None:
+            lines.append(f"| Regression delta (success rate) | {sc['regression_delta']} |")
+        tax = sc.get("failure_taxonomy") or {}
+        if tax:
+            top = ", ".join(
+                f"`{k}` × {v}" for k, v in sorted(tax.items(), key=lambda kv: -kv[1])[:5]
+            )
+            lines += ["", f"**Top failure modes:** {top}"]
+        lines += ["", "<sub>ValidSim self-hosted MVP (local mock pipeline) — "
+                        "cloud backend via API key coming.</sub>"]
+        with open(sys.argv[2], "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        PYX
+        else
+          # No cached run (e.g. validation crashed before writing the
+          # scorecard). Still emit a useful comment instead of failing.
+          {
+            echo "## 🤖 ValidSim Scorecard — \`${VS_RUN_ID}\`"
+            echo ""
+            echo "**❌ No scorecard available.** The validation run produced no cached results."
+            echo ""
+            echo '```'
+            cat "${JSON}.err" 2>/dev/null || true
+            echo '```'
+          } > "$MD"
+          echo "::warning::validsim scorecard --run-id '$VS_RUN_ID' failed; posted a fallback notice instead."
+        fi
+
+        cat "$MD" >> "$GITHUB_STEP_SUMMARY"
+        echo "body-file=${MD}" >> "$GITHUB_OUTPUT"
+      env:
+        VS_RUN_ID: ${{ inputs.run-id }}
+
+    - name: Post scorecard as PR comment
+      if: ${{ inputs.comment-on-pr == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        MD="${{ steps.render.outputs.body-file }}"
+        PY="${{ steps.python.outputs.bin }}"
+
+        # Resolve the PR number for this run. push events have none — skip
+        # gracefully (the job summary still carries the scorecard).
+        PR_NUMBER=""
+        if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -n "${GITHUB_EVENT_PATH:-}" ]; then
+          PR_NUMBER=$("$PY" -c "import json,os;print(json.load(open(os.environ['GITHUB_EVENT_PATH'])).get('number',''))" 2>/dev/null || true)
+        fi
+        if [ -z "$PR_NUMBER" ]; then
+          PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null || true)
+        fi
+        if [ -z "$PR_NUMBER" ]; then
+          echo "::notice::No pull request associated with this run — skipping comment (scorecard is in the job summary)."
+          exit 0
+        fi
+
+        gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$MD"
+        echo "Posted ValidSim scorecard to PR #${PR_NUMBER}."
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}

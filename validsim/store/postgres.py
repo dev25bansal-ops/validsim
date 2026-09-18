@@ -1,0 +1,379 @@
+"""Persistent validation store backed by PostgreSQL via the psycopg 3 driver.
+
+:class:`PostgresValidationStore` mirrors the public interface of the
+in-memory :class:`~validsim.store.memory.ValidationStore` and the
+:class:`~validsim.store.sqlite.SqliteValidationStore`
+(save/get/list_for_checkpoint/history/new_run_id/__len__/close) so callers
+can be swapped between backends without change. Following the SQLite
+pattern, each run is persisted as one row: the composite
+:class:`~validsim.engine.scorecard.Scorecard` is stored as a JSONB blob
+while the query-hot fields (checkpoint, score, decision, timestamp) are
+promoted to indexed columns.
+
+Two properties make this backend safe to select in environments that do
+not have the driver installed:
+
+1. **Lazy driver import.** ``psycopg`` is imported only inside
+   :func:`_import_psycopg`, never at module level, so importing this
+   module always succeeds; a missing driver surfaces as a clear
+   ``RuntimeError`` ("pip install 'psycopg[binary]'") at first use.
+2. **Deferred connection + schema setup (design choice).** ``__init__``
+   performs pure configuration validation only — whitelist-checking the
+   table name and resolving the DSN (fail-fast ``ValueError`` when no
+   DSN is available *and* the driver is present). The single connection
+   is opened, and ``CREATE TABLE/INDEX IF NOT EXISTS`` executed, lazily
+   on the first query (``_ensure_ready``). This lets
+   ``create_store()`` return a configured store without touching the
+   network. For tests the private ``_conn_factory`` parameter injects a
+   stand-in connection object, so SQL construction (placeholder usage,
+   conflict clause, identifier interpolation) can be asserted without a
+   live server. Both mechanisms are provided; the fake-factory is what
+   the unit tests use.
+
+Security rules baked into the SQL layer:
+
+* The table name is a SQL *identifier* and cannot be parameterized, so it
+  is validated against ``^[a-z_][a-z0-9_]*$`` and anything else is
+  rejected — interpolation only ever happens after that check.
+* All *values* travel exclusively through ``%s`` placeholders; no value
+  is ever formatted into a SQL string.
+
+Note that, unlike the SQLite backend, only the scorecard is persisted
+here (per the Week-5 schema); :meth:`get` reconstructs ``evaluation`` /
+``safety`` approximately from the scorecard (the same fallback SQLite
+uses for legacy rows) and returns empty ``episodes`` with no
+``regression``/``baseline_run_id``. ``save`` uses
+``ON CONFLICT (run_id) DO NOTHING``: the first write for a run id wins,
+making the deployed verdict log append-only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+from typing import Any, Callable
+
+from validsim.engine.evaluation import EvaluationResult
+from validsim.engine.safety import SafetyResult
+from validsim.engine.scorecard import Scorecard
+from validsim.store.memory import StoredRun, ValidationStore
+
+__all__ = ["PostgresValidationStore"]
+
+#: Env var supplying the default PostgreSQL DSN (libpq connection string).
+_PG_URL_ENV = "VALIDSIM_PG_URL"
+
+#: Whitelist for the table identifier. SQL identifiers cannot be sent as
+#: query parameters, so the name is validated against this strict pattern
+#: before ever being interpolated into a statement (security rule).
+_TABLE_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+#: Schema DDL templates; ``{table}`` is substituted only after the
+#: whitelist check above. Statement list (not a script) because psycopg 3
+#: executes one command per ``execute()`` call.
+_SCHEMA_STATEMENTS: tuple[str, ...] = (
+    """
+CREATE TABLE IF NOT EXISTS {table} (
+    run_id           TEXT PRIMARY KEY,
+    checkpoint_id    TEXT NOT NULL,
+    task_id          TEXT,
+    composite_score  DOUBLE PRECISION,
+    deploy_decision  TEXT,
+    created_at       TEXT,
+    scorecard        JSONB
+)
+""",
+    "CREATE INDEX IF NOT EXISTS idx_{table}_checkpoint ON {table} (checkpoint_id)",
+    "CREATE INDEX IF NOT EXISTS idx_{table}_created ON {table} (created_at)",
+)
+
+
+def _import_psycopg() -> Any:
+    """Import and return the psycopg 3 driver module.
+
+    Raises:
+        RuntimeError: If the driver is not installed (or is not psycopg 3),
+            with an actionable install hint. Importing this module never
+            triggers this failure: the call is deliberately lazy.
+    """
+    try:
+        import psycopg
+        from psycopg import Connection  # noqa: F401  (v3-only symbol)
+    except ImportError as exc:
+        raise RuntimeError(
+            "The PostgreSQL validation store requires the psycopg 3 driver, "
+            "which is not installed. Install it with: "
+            "pip install 'psycopg[binary]'"
+        ) from exc
+    version = str(getattr(psycopg, "__version__", ""))
+    if version and not version.startswith("3"):
+        raise RuntimeError(
+            f"psycopg 3.x is required by PostgresValidationStore, found "
+            f"{version!r}. Install it with: pip install 'psycopg[binary]'"
+        )
+    return psycopg
+
+
+def _validate_table(table: str) -> str:
+    """Return ``table`` if it is a safe bare identifier, else raise.
+
+    Raises:
+        ValueError: If ``table`` does not match ``^[a-z_][a-z0-9_]*$``.
+            Identifiers cannot be parameterized, so anything else (quotes,
+            semicolons, schema qualification, injection attempts) is
+            rejected outright.
+    """
+    if not isinstance(table, str) or not _TABLE_NAME_RE.match(table):
+        raise ValueError(
+            f"Invalid PostgreSQL table name {table!r}: must match "
+            f"{_TABLE_NAME_RE.pattern!r} (a plain lowercase identifier — "
+            "SQL identifiers cannot be parameterized, so anything else is "
+            "rejected to prevent injection)."
+        )
+    return table
+
+
+def _scorecard_from_dict(data: dict[str, Any]) -> Scorecard:
+    """Rebuild a frozen :class:`Scorecard` from its ``to_dict`` mapping.
+
+    Mirrors the SQLite backend's restore logic: JSON has no tuple type, so
+    ``confidence_interval`` is restored from the serialized list back to a
+    ``(low, high)`` tuple to preserve equality with the stored object.
+    """
+    ci = data.get("confidence_interval")
+    return Scorecard(
+        run_id=data["run_id"],
+        checkpoint_id=data["checkpoint_id"],
+        task_id=data["task_id"],
+        composite_score=data["composite_score"],
+        success_rate=data["success_rate"],
+        safety_score=data["safety_score"],
+        robustness_score=data["robustness_score"],
+        regression_delta=data["regression_delta"],
+        confidence_interval=tuple(ci) if ci is not None else None,
+        deploy_decision=data["deploy_decision"],
+        threshold=data["threshold"],
+        created_at=data["created_at"],
+        episode_count=data["episode_count"],
+        failure_taxonomy=dict(data.get("failure_taxonomy", {})),
+    )
+
+
+def _blob_to_dict(blob: Any) -> dict[str, Any]:
+    """Normalize a JSONB column value (decoded dict or raw text) to a dict.
+
+    psycopg 3 decodes ``jsonb`` to Python objects automatically, but a
+    driver configured for raw output (or a test double) may hand back the
+    JSON text; accept both.
+    """
+    if isinstance(blob, str):
+        return json.loads(blob)
+    if isinstance(blob, (bytes, bytearray)):
+        return json.loads(blob.decode("utf-8"))
+    return dict(blob)
+
+
+def _run_from_scorecard_blob(blob: Any) -> StoredRun:
+    """Reconstruct a :class:`StoredRun` from a persisted scorecard blob.
+
+    Only the scorecard is persisted by this backend, so ``evaluation`` and
+    ``safety`` are approximated from it (the same fallback the SQLite
+    backend applies to legacy rows) and episodes/regression come back
+    empty/``None``.
+    """
+    scorecard = _scorecard_from_dict(_blob_to_dict(blob))
+    total = scorecard.episode_count
+    evaluation = EvaluationResult(
+        total_episodes=total,
+        success_count=round(scorecard.success_rate * total),
+        success_rate=scorecard.success_rate,
+        failure_taxonomy=dict(scorecard.failure_taxonomy),
+    )
+    safety = SafetyResult(0.0, 0.0, None, 0.0, scorecard.safety_score)
+    return StoredRun(
+        run_id=scorecard.run_id,
+        checkpoint_id=scorecard.checkpoint_id,
+        task_id=scorecard.task_id,
+        created_at=scorecard.created_at,
+        scorecard=scorecard,
+        evaluation=evaluation,
+        safety=safety,
+        episodes=[],
+        baseline_run_id=None,
+        regression=None,
+    )
+
+
+class PostgresValidationStore(ValidationStore):
+    """PostgreSQL-backed store satisfying the :class:`ValidationStore` interface.
+
+    Subclasses the in-memory store purely to advertise interface
+    compatibility (and reuse :meth:`new_run_id`); every state-touching
+    method is overridden to talk to PostgreSQL through a single
+    autocommit connection guarded by a :class:`threading.Lock` (psycopg
+    connections are not safe for concurrent use by multiple threads).
+
+    Connection and schema setup are deferred to first use — see the
+    module docstring for the design rationale.
+    """
+
+    def __init__(
+        self,
+        dsn: str | None = None,
+        table: str = "validations",
+        *,
+        _conn_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        """Configure the store without opening any connection.
+
+        Args:
+            dsn: libpq connection string; defaults to the
+                ``VALIDSIM_PG_URL`` environment variable.
+            table: Target table name; must be a plain lowercase
+                identifier (``^[a-z_][a-z0-9_]*$``) or ``ValueError`` is
+                raised (identifiers cannot be parameterized).
+            _conn_factory: Test seam — a zero-argument callable returning
+                a connection-like object. When omitted, the store opens a
+                real ``psycopg.connect(dsn, autocommit=True)`` connection
+                on first use.
+
+        Raises:
+            ValueError: On an invalid ``table``, or when no DSN is
+                available (argument or env var) and the psycopg driver is
+                installed. With the driver missing, construction still
+                succeeds and the actionable missing-driver ``RuntimeError``
+                surfaces at first use instead.
+        """
+        self._table = _validate_table(table)
+        self._lock = threading.Lock()
+        self._conn: Any | None = None
+        self._conn_factory = _conn_factory
+
+        resolved = (dsn or "").strip() or (os.environ.get(_PG_URL_ENV) or "").strip()
+        if not resolved and _conn_factory is None:
+            # Fail fast only when the driver is present; otherwise the
+            # more actionable error (missing driver) surfaces at first use.
+            try:
+                _import_psycopg()
+            except RuntimeError:
+                pass
+            else:
+                raise ValueError(
+                    "No PostgreSQL DSN configured: pass dsn= or set the "
+                    f"{_PG_URL_ENV} environment variable."
+                )
+        self._dsn: str | None = resolved or None
+
+    # -- introspection ----------------------------------------------------
+
+    @property
+    def dsn(self) -> str | None:
+        """Resolved connection string (``None`` when a conn factory was given)."""
+        return self._dsn
+
+    @property
+    def table(self) -> str:
+        """Validated name of the backing table."""
+        return self._table
+
+    # -- connection lifecycle ----------------------------------------------
+
+    def _default_connect(self) -> Any:
+        """Open the real autocommit psycopg 3 connection (first use)."""
+        psycopg = _import_psycopg()
+        if not self._dsn:
+            raise ValueError(
+                "No PostgreSQL DSN configured: pass dsn= or set the "
+                f"{_PG_URL_ENV} environment variable."
+            )
+        return psycopg.connect(self._dsn, autocommit=True)
+
+    def _ensure_ready(self) -> Any:
+        """Return a live connection, opening it and creating the schema on demand.
+
+        Callers must hold ``self._lock``.
+        """
+        if self._conn is not None and not getattr(self._conn, "closed", False):
+            return self._conn
+        factory = self._conn_factory or self._default_connect
+        conn = factory()
+        try:
+            for statement in _SCHEMA_STATEMENTS:
+                conn.execute(statement.format(table=self._table))
+        except Exception:
+            conn.close()
+            raise
+        self._conn = conn
+        return conn
+
+    # -- ValidationStore interface -------------------------------------------
+
+    def save(self, run: StoredRun) -> StoredRun:
+        """Insert ``run``'s scorecard row; the first write for a run id wins.
+
+        Uses ``INSERT ... ON CONFLICT (run_id) DO NOTHING`` (append-only
+        verdict log), which differs from the in-memory/SQLite backends
+        where re-saving overwrites. Returns the run unchanged either way.
+        """
+        card = run.scorecard
+        sql = (
+            f"INSERT INTO {self._table} ("
+            " run_id, checkpoint_id, task_id, composite_score,"
+            " deploy_decision, created_at, scorecard)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)"
+            " ON CONFLICT (run_id) DO NOTHING"
+        )
+        params = (
+            run.run_id,
+            run.checkpoint_id,
+            run.task_id,
+            card.composite_score,
+            card.deploy_decision,
+            run.created_at,
+            card.to_json(),
+        )
+        with self._lock:
+            self._ensure_ready().execute(sql, params)
+        return run
+
+    def get(self, run_id: str) -> StoredRun | None:
+        """Return the reconstructed run for ``run_id`` or ``None`` if unknown."""
+        sql = f"SELECT scorecard FROM {self._table} WHERE run_id = %s"
+        with self._lock:
+            row = self._ensure_ready().execute(sql, (run_id,)).fetchone()
+        return _run_from_scorecard_blob(row[0]) if row is not None else None
+
+    def list_for_checkpoint(self, checkpoint_id: str) -> list[StoredRun]:
+        """All runs for a checkpoint, oldest first."""
+        sql = (
+            f"SELECT scorecard FROM {self._table} "
+            "WHERE checkpoint_id = %s ORDER BY created_at ASC"
+        )
+        with self._lock:
+            rows = self._ensure_ready().execute(sql, (checkpoint_id,)).fetchall()
+        return [_run_from_scorecard_blob(row[0]) for row in rows]
+
+    def history(self) -> list[StoredRun]:
+        """Every stored run, oldest first."""
+        sql = f"SELECT scorecard FROM {self._table} ORDER BY created_at ASC"
+        with self._lock:
+            rows = self._ensure_ready().execute(sql).fetchall()
+        return [_run_from_scorecard_blob(row[0]) for row in rows]
+
+    def __len__(self) -> int:
+        """Number of persisted runs."""
+        sql = f"SELECT COUNT(*) FROM {self._table}"
+        with self._lock:
+            (count,) = self._ensure_ready().execute(sql).fetchone()
+        return int(count)
+
+    def close(self) -> None:
+        """Close the underlying connection (a later query reopens it)."""
+        with self._lock:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                finally:
+                    self._conn = None

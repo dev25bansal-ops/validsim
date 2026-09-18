@@ -1,0 +1,182 @@
+name: "ValidSim Validate"
+description: >-
+  Run a ValidSim Sim-to-Real validation for a robot model checkpoint and fail
+  the job (deploy gate) when the composite score is below the configured
+  threshold. MVP mode: executes the local mock validation pipeline inside this
+  job — the hosted SaaS backend (API-key based) is coming.
+author: "ValidSim"
+
+# ---------------------------------------------------------------------------
+# IMPORTANT — Python setup
+# Composite actions are NOT allowed to run pre-job actions such as
+# actions/setup-python@v5. The CONSUMER workflow must set up Python before
+# calling this action, e.g.:
+#
+#   - uses: actions/setup-python@v5
+#     with:
+#       python-version: "3.12"
+#
+# This action only verifies that a python interpreter exists and fails with a
+# clear error if it does not.
+# ---------------------------------------------------------------------------
+
+inputs:
+  checkpoint:
+    description: >-
+      Checkpoint id or path to validate (e.g. "./models/policy_v42.pt").
+      In MVP mode the value is passed through as an opaque checkpoint id to
+      `validsim run --checkpoint`; the mock pipeline does not read the file.
+    required: true
+  task:
+    description: "Task identifier (validsim run --task)."
+    required: false
+    default: "bin_picking"
+  robot:
+    description: "Robot name (validsim run --robot)."
+    required: false
+    default: "franka_panda"
+  episodes:
+    description: "Number of nominal episodes (validsim run --episodes)."
+    required: false
+    default: "1000"
+  adversarial:
+    description: "Number of adversarial scenarios (validsim run --adversarial)."
+    required: false
+    default: "50"
+  fail-below-score:
+    description: >-
+      Composite score (0-100) below which the job fails. Forwarded to both
+      `validsim run --threshold` (so the stored verdict uses it) and
+      `validsim gate --threshold` (explicit CI-friendly override).
+    required: false
+    default: "85"
+  validsim-version:
+    description: >-
+      Optional ValidSim version to install from PyPI (e.g. "0.1.0"). Reserved
+      for the future standalone-action / SaaS release. When empty, the action
+      installs from the current checkout: `pip install .` first, falling back
+      to `pip install -r requirements.txt` + PYTHONPATH (monorepo mode — the
+      ValidSim repo currently ships no pyproject.toml/setup.py, so the
+      fallback is the normal path today).
+    required: false
+    default: ""
+
+outputs:
+  run-id:
+    description: "ValidSim run id (vrun-<8 hex>) of the validation that ran."
+    value: ${{ steps.parse-run.outputs.run-id }}
+  score:
+    description: "Composite score (0-100) reported by `validsim run`."
+    value: ${{ steps.parse-run.outputs.score }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify Python availability
+      id: python
+      shell: bash
+      run: |
+        set -euo pipefail
+        # actions/setup-python@v5 cannot run inside a composite action — the
+        # consumer workflow must provide Python (see header note + docs).
+        if command -v python >/dev/null 2>&1; then
+          echo "bin=python" >> "$GITHUB_OUTPUT"
+          python --version
+        elif command -v python3 >/dev/null 2>&1; then
+          echo "bin=python3" >> "$GITHUB_OUTPUT"
+          python3 --version
+        else
+          echo "::error::No python interpreter found. Add 'uses: actions/setup-python@v5' before this action."
+          exit 1
+        fi
+        # Pin the scorecard cache to an absolute path shared by the run/gate
+        # steps below and by the ValidSim Scorecard action in the same job
+        # (validsim.cli honours VALIDSIM_CACHE_FILE; default is CWD-relative).
+        echo "VALIDSIM_CACHE_FILE=${RUNNER_TEMP}/validsim/scorecards.json" >> "$GITHUB_ENV"
+
+    - name: Install ValidSim
+      shell: bash
+      run: |
+        set -euo pipefail
+        PY="${{ steps.python.outputs.bin }}"
+        if [ -n "$VS_VERSION" ]; then
+          echo "Installing validsim==$VS_VERSION from PyPI (future SaaS distribution)."
+          "$PY" -m pip install --disable-pip-version-check "validsim==${VS_VERSION}"
+        else
+          echo "Installing ValidSim from the checkout (MVP monorepo mode)."
+          if "$PY" -m pip install --disable-pip-version-check . ; then
+            echo "Installed via 'pip install .'."
+          else
+            echo "::notice::'pip install .' failed (no packaging metadata in this repo); falling back to requirements.txt + PYTHONPATH."
+            "$PY" -m pip install --disable-pip-version-check -r requirements.txt
+            echo "PYTHONPATH=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
+          fi
+        fi
+      env:
+        VS_VERSION: ${{ inputs.validsim-version }}
+
+    - name: Run validation
+      shell: bash
+      # CLI output contract relied upon (validsim/cli.py, `run` command):
+      #   ValidSim validation complete
+      #     Run ID:        vrun-<8 hex>      <- parsed for output `run-id`
+      #     Composite:     <score> (threshold <t>)  <- parsed for output `score`
+      #     Decision:      APPROVE|BLOCK
+      # The regex mirrors cli.py's own _RUN_ID_RE = r"vrun-[0-9a-f]{8}".
+      run: |
+        set -euo pipefail
+        PY="${{ steps.python.outputs.bin }}"
+        "$PY" -m validsim.cli run \
+          --checkpoint "$VS_CHECKPOINT" \
+          --task "$VS_TASK" \
+          --robot "$VS_ROBOT" \
+          --episodes "$VS_EPISODES" \
+          --adversarial "$VS_ADVERSARIAL" \
+          --threshold "$VS_FAIL_BELOW" \
+          | tee "${RUNNER_TEMP}/validsim-run.log"
+      env:
+        VS_CHECKPOINT: ${{ inputs.checkpoint }}
+        VS_TASK: ${{ inputs.task }}
+        VS_ROBOT: ${{ inputs.robot }}
+        VS_EPISODES: ${{ inputs.episodes }}
+        VS_ADVERSARIAL: ${{ inputs.adversarial }}
+        VS_FAIL_BELOW: ${{ inputs.fail-below-score }}
+
+    - name: Parse run id and composite score
+      id: parse-run
+      shell: bash
+      run: |
+        set -euo pipefail
+        LOG="${RUNNER_TEMP}/validsim-run.log"
+        # Robust extraction: scan the whole log, last match wins.
+        RUN_ID=$(grep -oE 'vrun-[0-9a-f]{8}' "$LOG" | tail -n 1 || true)
+        SCORE=$(grep -E 'Composite:' "$LOG" | tail -n 1 \
+                | grep -oE '[0-9]+(\.[0-9]+)?' | head -n 1 || true)
+        if [ -z "$RUN_ID" ]; then
+          echo "::error::Could not parse a run id (vrun-<8 hex>) from 'validsim run' output. The CLI output contract changed? See step log."
+          exit 1
+        fi
+        if [ -z "$SCORE" ]; then
+          echo "::error::Could not parse the composite score from the 'Composite:' line of 'validsim run' output."
+          exit 1
+        fi
+        echo "run-id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+        echo "score=${SCORE}" >> "$GITHUB_OUTPUT"
+        echo "ValidSim run-id=${RUN_ID} composite=${SCORE}"
+
+    - name: Gate deployment decision (fails job on BLOCK)
+      shell: bash
+      # `validsim gate` exit codes (validsim/cli.py):
+      #   0 = APPROVE (composite >= threshold)
+      #   1 = BLOCK   (composite <  threshold) -> this step, and the job, fail
+      #   2 = unknown/cached-missing run id   -> also fails the job
+      run: |
+        set -euo pipefail
+        PY="${{ steps.python.outputs.bin }}"
+        "$PY" -m validsim.cli gate \
+          --run-id "$VS_RUN_ID" \
+          --threshold "$VS_FAIL_BELOW"
+        echo "ValidSim gate passed: composite score meets threshold ${VS_FAIL_BELOW}."
+      env:
+        VS_RUN_ID: ${{ steps.parse-run.outputs.run-id }}
+        VS_FAIL_BELOW: ${{ inputs.fail-below-score }}
