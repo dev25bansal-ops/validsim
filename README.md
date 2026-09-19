@@ -57,8 +57,12 @@ submit checkpoint → simulate (parallel episodes + domain randomization)
 - [x] Week 4 upgrade: **LLM adversarial scenario generator** (`scenarios/llm_generator.py` — OpenAI-compatible provider, strict schema validation, deterministic rule-based fallback)
 - [x] Week 5 upgrade: **PostgreSQL store** (`store/postgres.py` — JSONB + indexed columns, `VALIDSIM_STORE=postgres`)
 - [x] Week 7: **Dashboard v0** — dark-theme scorecard/history/failed-mode charts served by FastAPI at `/` (design system: `design-system/validsim/MASTER.md`)
-- [ ] Real Isaac Sim/Lab backend replacing `MockIsaacBackend` (needs DGX credits)
-- [ ] Timescale retention, LLM scenario polish on real models, Next.js production dashboard
+- [x] **Isaac worker adapter** — `sim/isaac_worker.py` HTTP client + `docs/isaac-worker.md` worker contract (`VALIDSIM_BACKEND=isaac`); GPU worker image awaits DGX credits
+- [x] Week 8: **branded PDF scorecard** — `engine/pdf.py` + `GET /api/v1/validations/{id}/scorecard.pdf`
+- [x] **Model registry endpoints** — `GET /api/v1/models`, `GET /api/v1/models/{id}/history`
+- [x] **Packaging** — `pyproject.toml`, `pip install .`, `validsim` console script, CLI `--latest` flag
+- [ ] Real Isaac Sim/Lab GPU worker image (contract + client are done; needs DGX credits)
+- [ ] Timescale retention, LLM scenarios on real models, Next.js production dashboard, MIT open-source CLI (Phase 2)
 
 See the vault: `05 - Execution/8-Week Sprint Plan.md`
 

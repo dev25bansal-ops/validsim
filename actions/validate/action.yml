@@ -54,10 +54,11 @@ inputs:
     description: >-
       Optional ValidSim version to install from PyPI (e.g. "0.1.0"). Reserved
       for the future standalone-action / SaaS release. When empty, the action
-      installs from the current checkout: `pip install .` first, falling back
-      to `pip install -r requirements.txt` + PYTHONPATH (monorepo mode — the
-      ValidSim repo currently ships no pyproject.toml/setup.py, so the
-      fallback is the normal path today).
+      installs from the current checkout: `pip install .` first (the repo now
+      ships pyproject.toml, so this is the normal path), falling back to
+      `pip install -r requirements.txt` + PYTHONPATH only if the packaged
+      install fails for some unexpected reason (monorepo mode — the fallback
+      is kept purely as a defensive safety net).
     required: false
     default: ""
 
@@ -107,7 +108,7 @@ runs:
           if "$PY" -m pip install --disable-pip-version-check . ; then
             echo "Installed via 'pip install .'."
           else
-            echo "::notice::'pip install .' failed (no packaging metadata in this repo); falling back to requirements.txt + PYTHONPATH."
+            echo "::notice::'pip install .' failed unexpectedly (packaging metadata exists in pyproject.toml); falling back to requirements.txt + PYTHONPATH as a defensive safety net."
             "$PY" -m pip install --disable-pip-version-check -r requirements.txt
             echo "PYTHONPATH=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
           fi

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from validsim import __version__
 from validsim.config import ValidationRequest
 from validsim.engine.evaluation import evaluate
+from validsim.engine.pdf import scorecard_pdf_bytes
 from validsim.engine.regression import compare
 from validsim.engine.safety import compute_safety
 from validsim.engine.scorecard import build_scorecard
@@ -170,6 +171,65 @@ def create_app(store: ValidationStore | None = None) -> FastAPI:
             if run.regression is not None and run.regression.has_regressions:
                 out.append({**run.summary(), "regression": run.regression.to_dict()})
         return out
+
+    @application.get("/api/v1/validations/{run_id}/scorecard.pdf")
+    def get_scorecard_pdf(run_id: str, st: ValidationStore = Depends(get_store)) -> Response:
+        """One-page branded PDF scorecard, served as a file attachment.
+
+        Returns 404 for an unknown run and 501 when the optional ``reportlab``
+        dependency is not installed (the rest of the platform runs fine without
+        it; only PDF export is gated).
+        """
+        run = _require_run(st, run_id)
+        try:
+            data = scorecard_pdf_bytes(run.scorecard.to_dict())
+        except RuntimeError as exc:  # reportlab missing -> friendly 501
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        filename = f"{run.run_id}-scorecard.pdf"
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @application.get("/api/v1/models")
+    def list_models(st: ValidationStore = Depends(get_store)) -> list[dict[str, Any]]:
+        """Model-registry view: one row per validated checkpoint.
+
+        Aggregated from the store's chronological history (oldest first), so the
+        "latest" fields reflect each checkpoint's most recent run. Checkpoints
+        appear in order of first validation.
+        """
+        runs_by_checkpoint: dict[str, list[StoredRun]] = {}
+        for run in st.history():
+            runs_by_checkpoint.setdefault(run.checkpoint_id, []).append(run)
+        models: list[dict[str, Any]] = []
+        for checkpoint_id, runs in runs_by_checkpoint.items():
+            latest = runs[-1]  # history() is oldest-first -> last is newest
+            models.append(
+                {
+                    "checkpoint_id": checkpoint_id,
+                    "runs": len(runs),
+                    "latest_composite": latest.scorecard.composite_score,
+                    "latest_decision": latest.scorecard.deploy_decision,
+                    "last_validated": latest.created_at,
+                }
+            )
+        return models
+
+    @application.get("/api/v1/models/{checkpoint_id}/history")
+    def get_model_history(
+        checkpoint_id: str, st: ValidationStore = Depends(get_store)
+    ) -> list[dict[str, Any]]:
+        """Chronological (oldest-first) compact scorecard summaries for a checkpoint.
+
+        Reuses the same compact dict shape as ``/api/v1/dashboard/history``
+        (:meth:`StoredRun.summary`). Returns 404 for an unknown checkpoint.
+        """
+        runs = st.list_for_checkpoint(checkpoint_id)
+        if not runs:
+            raise HTTPException(status_code=404, detail=f"checkpoint {checkpoint_id} not found")
+        return [run.summary() for run in runs]
 
     from validsim.api.dashboard import mount_dashboard; mount_dashboard(application)  # dashboard: router + /static + /
 

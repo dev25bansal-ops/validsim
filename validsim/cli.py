@@ -4,7 +4,9 @@
 full run to the configured validation store (``VALIDSIM_STORE``; see
 :func:`validsim.store.create_store`), and caches the scorecard as JSON (path
 overridable via ``VALIDSIM_CACHE_FILE``) so follow-up commands ``status`` /
-``scorecard`` / ``gate`` can inspect it across processes.
+``scorecard`` / ``gate`` can inspect it across processes. Those three commands
+target a run via either ``--run-id`` or ``--latest`` (the newest cached run);
+exactly one of the two is required.
 ``gate`` exits non-zero on ``BLOCK``, making it directly usable in CI.
 """
 
@@ -68,6 +70,45 @@ def _require_cached(run_id: str) -> dict[str, Any]:
         typer.echo(f"error: no cached run '{run_id}' (run `validsim run` first)", err=True)
         raise typer.Exit(code=2)
     return scorecard
+
+
+def _newest_run_id(cache: dict[str, Any]) -> str:
+    """Return the run id of the newest cached scorecard.
+
+    Ordering is by ``created_at`` — an ISO-8601 string, so lexicographic
+    comparison matches chronological order. Ties are broken by insertion
+    order: the last-inserted key wins.
+    """
+    best_run_id = ""
+    best_key: tuple[str, int] | None = None
+    for index, (run_id, entry) in enumerate(cache.items()):
+        created_at = str(entry.get("created_at", "")) if isinstance(entry, dict) else ""
+        key = (created_at, index)
+        if best_key is None or key > best_key:
+            best_key = key
+            best_run_id = run_id
+    return best_run_id
+
+
+def _resolve_run_id(run_id: str | None, latest: bool) -> str:
+    """Return the run id to act on from the ``--run-id`` / ``--latest`` pair.
+
+    Exactly one of the two must be supplied; otherwise a
+    :class:`typer.BadParameter` (exit code 2) is raised. ``--latest`` resolves
+    the newest cached run and aborts with exit code 2 when the cache is empty.
+    """
+    if run_id and latest:
+        raise typer.BadParameter("provide exactly one of --run-id or --latest, not both")
+    if not run_id and not latest:
+        raise typer.BadParameter("one of --run-id or --latest is required")
+    if latest:
+        cache = _load_cache()
+        if not cache:
+            typer.echo("error: no cached runs (run `validsim run` first)", err=True)
+            raise typer.Exit(code=2)
+        return _newest_run_id(cache)
+    assert run_id is not None
+    return run_id
 
 
 def _persist_to_store(run: StoredRun) -> None:
@@ -149,9 +190,15 @@ def run(
 
 @app.command()
 def status(
-    run_id: str = typer.Option(..., "--run-id", help="Run id returned by `validsim run`."),
+    run_id: str | None = typer.Option(
+        None, "--run-id", help="Run id returned by `validsim run`."
+    ),
+    latest: bool = typer.Option(
+        False, "--latest", help="Use the newest cached run instead of --run-id."
+    ),
 ) -> None:
     """Show cached status for a previous run."""
+    run_id = _resolve_run_id(run_id, latest)
     scorecard = _require_cached(run_id)
     typer.echo(f"Run ID:       {run_id}")
     typer.echo(f"Checkpoint:   {scorecard['checkpoint_id']}")
@@ -162,26 +209,36 @@ def status(
 
 @app.command()
 def scorecard(
-    run_id: str = typer.Option(..., "--run-id", help="Run id returned by `validsim run`."),
+    run_id: str | None = typer.Option(
+        None, "--run-id", help="Run id returned by `validsim run`."
+    ),
+    latest: bool = typer.Option(
+        False, "--latest", help="Use the newest cached run instead of --run-id."
+    ),
 ) -> None:
     """Print the full cached scorecard as JSON."""
-    typer.echo(json.dumps(_require_cached(run_id), indent=2))
+    resolved = _resolve_run_id(run_id, latest)
+    typer.echo(json.dumps(_require_cached(resolved), indent=2))
 
 
 @app.command()
 def gate(
-    run_id: str = typer.Option(..., "--run-id", help="Run id to gate on."),
+    run_id: str | None = typer.Option(None, "--run-id", help="Run id to gate on."),
+    latest: bool = typer.Option(
+        False, "--latest", help="Use the newest cached run instead of --run-id."
+    ),
     threshold: float = typer.Option(
         -1.0, "--threshold", help="Override the stored approval threshold."
     ),
 ) -> None:
     """Exit non-zero (1) when the run's composite score is below threshold."""
-    scorecard_dict = _require_cached(run_id)
+    resolved = _resolve_run_id(run_id, latest)
+    scorecard_dict = _require_cached(resolved)
     effective = scorecard_dict["threshold"] if threshold < 0 else threshold
     approved = float(scorecard_dict["composite_score"]) >= float(effective)
     verdict = "APPROVE" if approved else "BLOCK"
     typer.echo(
-        f"gate: {run_id} composite={scorecard_dict['composite_score']} "
+        f"gate: {resolved} composite={scorecard_dict['composite_score']} "
         f"threshold={effective} -> {verdict}"
     )
     if not approved:

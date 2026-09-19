@@ -4,7 +4,9 @@
 - The repository is now a git repo (baseline commit `0a63beb`, branch `main`).
 - **After a green build**: if the working tree has uncommitted changes, run `git add -A` and commit with message `chore(ci): continuous-build checkpoint YYYY-MM-DD HH:MM`. **Never push** to any remote.
 - **If the build is red**: do NOT commit; fix first.
-- New since baseline: dashboard v0 served by FastAPI at `/` (design truth: `design-system/validsim/MASTER.md`), LLM scenario generator (`scenarios/llm_generator.py`, env-gated, rule-based fallback), PostgreSQL store (`store/postgres.py`, `VALIDSIM_STORE=postgres`). Remaining backlog: CLI `--latest` flag, PDF scorecard branding (Week 8), Timescale retention, Isaac Sim backend (needs DGX credits).
+- New since baseline: dashboard v0 served by FastAPI at `/` (design truth: `design-system/validsim/MASTER.md`), LLM scenario generator (`scenarios/llm_generator.py`, env-gated, rule-based fallback), PostgreSQL store (`store/postgres.py`, `VALIDSIM_STORE=postgres`).
+- Cycle 4 (2026-09-19) added: `pyproject.toml` packaging + `validsim` console script, CLI `--latest` flag, `engine/pdf.py` branded PDF + `/scorecard.pdf` endpoint, model registry endpoints (`/api/v1/models`, `/models/{id}/history`), `sim/isaac_worker.py` HTTP adapter + `docs/isaac-worker.md` contract (`VALIDSIM_BACKEND=isaac`). Suite: 250 passed, 2 skipped.
+- Remaining backlog (pick one per run): Timescale retention policy docs/migrations, PDF polish (episode replay links), dashboard episode-detail view, LLM prompt eval harness, CI matrix (3.11/3.12/3.13), `--format pdf` in CLI scorecard command, mock-backend fidelity notes for shadow-mode comparison.
 
 ## 2026-09-18 ~20:55 UTC (run #7)
 - Build: PASS first try (133 tests), PASS after change (135 tests, 8.9s).

@@ -154,3 +154,54 @@ class TestCompareAndRegressions:
             seed=stable_seed(cur, base),
         )
         assert report["items"] == expected.to_dict()["items"]
+
+
+pytest.importorskip("reportlab", reason="PDF export requires the optional reportlab dep")
+
+
+class TestScorecardPdfExport:
+    def test_pdf_ok_headers_and_body(self, client: TestClient) -> None:
+        run_id = client.post("/api/v1/validations", json=_request_body()).json()["run_id"]
+        response = client.get(f"/api/v1/validations/{run_id}/scorecard.pdf")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/pdf"
+        disposition = response.headers["content-disposition"]
+        assert "attachment" in disposition
+        assert f"{run_id}-scorecard.pdf" in disposition
+        assert response.content.startswith(b"%PDF-")
+
+    def test_pdf_unknown_run_404(self, client: TestClient) -> None:
+        response = client.get("/api/v1/validations/vrun-ffffffff/scorecard.pdf")
+        assert response.status_code == 404
+
+
+class TestModelRegistry:
+    def test_models_aggregation(self, client: TestClient) -> None:
+        # Two runs of ckpt-alpha, one of ckpt-beta.
+        client.post("/api/v1/validations", json=_request_body("ckpt-alpha"))
+        client.post("/api/v1/validations", json=_request_body("ckpt-alpha"))
+        client.post("/api/v1/validations", json=_request_body("ckpt-beta"))
+        models = {m["checkpoint_id"]: m for m in client.get("/api/v1/models").json()}
+        assert set(models) == {"ckpt-alpha", "ckpt-beta"}
+        assert models["ckpt-alpha"]["runs"] == 2
+        assert models["ckpt-beta"]["runs"] == 1
+        for entry in models.values():
+            assert entry["latest_decision"] in {"APPROVE", "BLOCK"}
+            assert 0.0 <= entry["latest_composite"] <= 100.0
+            assert isinstance(entry["last_validated"], str) and entry["last_validated"]
+
+    def test_models_empty_registry(self, client: TestClient) -> None:
+        assert client.get("/api/v1/models").json() == []
+
+    def test_model_history_chronological(self, client: TestClient) -> None:
+        first = client.post("/api/v1/validations", json=_request_body("ckpt-alpha")).json()["run_id"]
+        second = client.post("/api/v1/validations", json=_request_body("ckpt-alpha")).json()["run_id"]
+        history = client.get("/api/v1/models/ckpt-alpha/history").json()
+        assert [row["run_id"] for row in history] == [first, second]  # oldest first
+        assert all(row["checkpoint_id"] == "ckpt-alpha" for row in history)
+        # Compact dict mirrors StoredRun.summary() / dashboard history.
+        assert {"run_id", "composite_score", "deploy_decision", "created_at"} <= set(history[0])
+
+    def test_model_history_unknown_404(self, client: TestClient) -> None:
+        assert client.get("/api/v1/models/ckpt-nope/history").status_code == 404
+

@@ -29,6 +29,7 @@ builds/
 # Temp extraction artifacts
 _extracted_project.txt
 _loc_check.py
+collect.txt
 
 # Obsidian workspace state (keep vault config, drop per-user state)
 vault/.obsidian/workspace.json

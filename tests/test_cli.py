@@ -134,3 +134,105 @@ class TestStorePersistence:
                          "--checkpoint", "ckpt-mem")
         assert result.exit_code == 0, result.output
         assert not (tmp_path / "validsim.db").exists()
+
+
+class TestLatest:
+    """``--latest`` resolves the newest cached run for status/scorecard/gate.
+
+    Cache entries are written directly (via the autouse ``cache_file``
+    fixture, which points VALIDSIM_CACHE_FILE at a tmp_path file) so the
+    created_at ordering can be controlled precisely.
+    """
+
+    @staticmethod
+    def _entry(run_id: str, created_at: str, composite: float = 90.0) -> dict:
+        """Build a minimal scorecard dict matching cli.py's cache schema."""
+        return {
+            "run_id": run_id,
+            "checkpoint_id": "ckpt-latest",
+            "task_id": "pick-place",
+            "composite_score": composite,
+            "success_rate": 0.9,
+            "safety_score": 95.0,
+            "robustness_score": 90.0,
+            "regression_delta": None,
+            "confidence_interval": [0.85, 0.95],
+            "deploy_decision": "APPROVE" if composite >= 85.0 else "BLOCK",
+            "threshold": 85.0,
+            "created_at": created_at,
+            "episode_count": 48,
+            "failure_taxonomy": {},
+        }
+
+    @staticmethod
+    def _seed(cache_file: Path, entries: list[dict]) -> None:
+        """Write the given scorecard entries into the cache, keyed by run id."""
+        cache_file.write_text(
+            json.dumps({e["run_id"]: e for e in entries}, indent=2),
+            encoding="utf-8",
+        )
+
+    def test_latest_returns_newest_by_created_at(self, cache_file: Path) -> None:
+        self._seed(cache_file, [
+            self._entry("vrun-aaaaaaaa", "2024-01-01T00:00:00+00:00"),
+            self._entry("vrun-bbbbbbbb", "2024-06-01T12:30:00+00:00"),
+        ])
+        result = _invoke("status", "--latest")
+        assert result.exit_code == 0, result.output
+        assert "vrun-bbbbbbbb" in result.output  # type: ignore[attr-defined]
+
+    def test_latest_tie_break_prefers_last_inserted(self, cache_file: Path) -> None:
+        ts = "2024-03-03T00:00:00+00:00"
+        self._seed(cache_file, [
+            self._entry("vrun-11111111", ts),
+            self._entry("vrun-22222222", ts),
+        ])
+        result = _invoke("status", "--latest")
+        assert result.exit_code == 0, result.output
+        assert "vrun-22222222" in result.output  # type: ignore[attr-defined]
+
+    def test_scorecard_latest_matches_newest(self, cache_file: Path) -> None:
+        self._seed(cache_file, [
+            self._entry("vrun-aaaaaaaa", "2024-01-01T00:00:00+00:00"),
+            self._entry("vrun-bbbbbbbb", "2024-06-01T12:30:00+00:00", composite=70.0),
+        ])
+        result = _invoke("scorecard", "--latest")
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)  # type: ignore[arg-type]
+        assert payload["run_id"] == "vrun-bbbbbbbb"
+
+    def test_neither_flag_errors(self) -> None:
+        result = _invoke("status")
+        assert result.exit_code == 2
+
+    def test_both_flags_errors(self, cache_file: Path) -> None:
+        self._seed(cache_file, [
+            self._entry("vrun-aaaaaaaa", "2024-01-01T00:00:00+00:00"),
+        ])
+        result = _invoke("status", "--run-id", "vrun-aaaaaaaa", "--latest")
+        assert result.exit_code == 2
+
+    def test_latest_empty_cache_errors(self, cache_file: Path) -> None:
+        # cache_file does not exist yet -> _load_cache() returns {} -> exit 2.
+        result = _invoke("gate", "--latest")
+        assert result.exit_code == 2
+
+    def test_gate_latest_respects_threshold_contract(self, cache_file: Path) -> None:
+        # Newest is vrun-bbbbbbbb (composite 60); gate must honour the same
+        # 0/1/2 exit-code contract the actions depend on.
+        self._seed(cache_file, [
+            self._entry("vrun-aaaaaaaa", "2024-01-01T00:00:00+00:00", composite=90.0),
+            self._entry("vrun-bbbbbbbb", "2024-06-01T12:30:00+00:00", composite=60.0),
+        ])
+        approve = _invoke("gate", "--latest", "--threshold", "50")
+        assert approve.exit_code == 0, approve.output
+        assert "vrun-bbbbbbbb" in approve.output  # type: ignore[attr-defined]
+        assert "APPROVE" in approve.output  # type: ignore[attr-defined]
+
+        block = _invoke("gate", "--latest", "--threshold", "80")
+        assert block.exit_code == 1
+        assert "BLOCK" in block.output  # type: ignore[attr-defined]
+
+        stored = _invoke("gate", "--latest")  # stored threshold 85 > 60 -> BLOCK
+        assert stored.exit_code == 1
+        assert "BLOCK" in stored.output  # type: ignore[attr-defined]
