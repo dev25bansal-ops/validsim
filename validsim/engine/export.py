@@ -15,8 +15,6 @@ from validsim.engine.scorecard import Scorecard
 
 __all__ = ["scorecard_to_markdown", "scorecard_to_html"]
 
-_VERDICT_LABEL = {"APPROVE": "APPROVE", "BLOCK": "BLOCK"}
-
 
 def _fmt(value: float | None, spec: str = "{:.1f}", dash: str = "—") -> str:
     """Format an optional number, returning ``dash`` when the value is None."""
@@ -43,7 +41,7 @@ def scorecard_to_markdown(sc: Scorecard) -> str:
     Returns:
         A Markdown document as a single string.
     """
-    verdict = _VERDICT_LABEL.get(sc.deploy_decision, sc.deploy_decision)
+    verdict = sc.deploy_decision
     relation = "meets or exceeds" if sc.deploy_decision == "APPROVE" else "is below"
     lines: list[str] = [
         "# ValidSim Validation Report",
@@ -77,7 +75,13 @@ def scorecard_to_markdown(sc: Scorecard) -> str:
         lines += [f"| {mode} | {count} |" for mode, count in sc.failure_taxonomy.items()]
     else:
         lines.append("_No failures recorded._")
-    lines += ["", "## Confidence Interval", "", f"95% bootstrap CI of success rate: {_ci_text(sc)}", ""]
+    lines += [
+        "",
+        "## Confidence Interval",
+        "",
+        f"95% bootstrap CI of success rate: {_ci_text(sc)}",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -100,7 +104,8 @@ def scorecard_to_html(sc: Scorecard) -> str:
     """Render ``sc`` as a self-contained, styled HTML card.
 
     All CSS is inlined (no external assets) so the output can be dropped into
-    an email or converted to PDF later. Values are HTML-escaped.
+    an email or rendered as a branded PDF by :mod:`validsim.engine.pdf`.
+    Values are HTML-escaped.
 
     Args:
         sc: The scorecard to render.
@@ -141,7 +146,8 @@ def scorecard_to_html(sc: Scorecard) -> str:
         f"<p>Checkpoint {escape(sc.checkpoint_id)} &middot; Task {escape(sc.task_id)}</p></div>"
         "<div class='body'>"
         f"<p class='score'>{sc.composite_score}</p>"
-        f"<p class='muted'>Composite score &middot; threshold {sc.threshold} &middot; created {escape(sc.created_at)}</p>"
+        f"<p class='muted'>Composite score &middot; threshold {sc.threshold}"
+        f" &middot; created {escape(sc.created_at)}</p>"
         f"<table><tr><th>Metric</th><th>Value</th></tr>{metric_html}</table>"
         f"{tax_html}"
         "</div></div></body></html>"

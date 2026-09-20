@@ -38,13 +38,13 @@ Security rules baked into the SQL layer:
 * All *values* travel exclusively through ``%s`` placeholders; no value
   is ever formatted into a SQL string.
 
-Note that, unlike the SQLite backend, only the scorecard is persisted
-here (per the Week-5 schema); :meth:`get` reconstructs ``evaluation`` /
-``safety`` approximately from the scorecard (the same fallback SQLite
-uses for legacy rows) and returns empty ``episodes`` with no
-``regression``/``baseline_run_id``. ``save`` uses
-``ON CONFLICT (run_id) DO NOTHING``: the first write for a run id wins,
-making the deployed verdict log append-only.
+``save`` uses ``ON CONFLICT (run_id) DO NOTHING``: the first write for a
+run id wins, making the deployed verdict log append-only. The full run
+detail (evaluation, safety, raw episodes, baseline id and regression
+report) is persisted alongside the scorecard in JSONB detail columns
+that are ``ALTER``-ed onto the schema on first use, so rows written
+before those columns existed remain readable through the same fallback
+the SQLite backend applies to legacy rows.
 """
 
 from __future__ import annotations
@@ -53,11 +53,14 @@ import json
 import os
 import re
 import threading
+from dataclasses import asdict
 from typing import Any, Callable
 
 from validsim.engine.evaluation import EvaluationResult
+from validsim.engine.regression import RegressionItem, RegressionReport
 from validsim.engine.safety import SafetyResult
 from validsim.engine.scorecard import Scorecard
+from validsim.sim.runner import EpisodeResult
 from validsim.store.memory import StoredRun, ValidationStore
 
 __all__ = ["PostgresValidationStore"]
@@ -88,6 +91,31 @@ CREATE TABLE IF NOT EXISTS {table} (
     "CREATE INDEX IF NOT EXISTS idx_{table}_checkpoint ON {table} (checkpoint_id)",
     "CREATE INDEX IF NOT EXISTS idx_{table}_created ON {table} (created_at)",
 )
+
+#: Detail columns added after the initial release; ALTERed onto existing
+#: databases inside :meth:`PostgresValidationStore._ensure_ready`. Names and
+#: types are fixed constants (never user input), so interpolating them as
+#: identifiers is safe under the same rule applied to the table name.
+_MIGRATION_COLUMNS: dict[str, str] = {
+    "baseline_run_id": "TEXT",
+    "evaluation_json": "JSONB",
+    "safety_json": "JSONB",
+    "episodes_json": "JSONB",
+    "regression_json": "JSONB",
+}
+
+#: Projection used by every read path; ``scorecard`` always comes first,
+#: followed by the detail columns in the fixed order :func:`_run_from_row`
+#: expects.
+_DETAIL_COLUMNS: tuple[str, ...] = (
+    "scorecard",
+    "baseline_run_id",
+    "evaluation_json",
+    "safety_json",
+    "episodes_json",
+    "regression_json",
+)
+_DETAIL_SELECT: str = ", ".join(_DETAIL_COLUMNS)
 
 
 def _import_psycopg() -> Any:
@@ -161,37 +189,86 @@ def _scorecard_from_dict(data: dict[str, Any]) -> Scorecard:
     )
 
 
-def _blob_to_dict(blob: Any) -> dict[str, Any]:
-    """Normalize a JSONB column value (decoded dict or raw text) to a dict.
+def _jsonb_load(blob: Any) -> Any:
+    """Normalize a JSONB column value to its decoded Python object.
 
     psycopg 3 decodes ``jsonb`` to Python objects automatically, but a
     driver configured for raw output (or a test double) may hand back the
-    JSON text; accept both.
+    JSON text; accept both. A SQL ``NULL`` (``None``) passes through
+    unchanged so callers can apply their own fallback.
     """
     if isinstance(blob, str):
         return json.loads(blob)
     if isinstance(blob, (bytes, bytearray)):
         return json.loads(blob.decode("utf-8"))
-    return dict(blob)
+    return blob
 
 
-def _run_from_scorecard_blob(blob: Any) -> StoredRun:
-    """Reconstruct a :class:`StoredRun` from a persisted scorecard blob.
+def _blob_to_dict(blob: Any) -> dict[str, Any]:
+    """Normalize a JSONB *object* column to a dict (used for the scorecard)."""
+    return dict(_jsonb_load(blob))  # type: ignore[arg-type]
 
-    Only the scorecard is persisted by this backend, so ``evaluation`` and
-    ``safety`` are approximated from it (the same fallback the SQLite
-    backend applies to legacy rows) and episodes/regression come back
-    empty/``None``.
+
+def _episodes_to_json(episodes: list[EpisodeResult]) -> str:
+    """Serialize raw episode results to a JSON array string."""
+    return json.dumps([asdict(e) for e in episodes])
+
+
+def _regression_to_json(report: RegressionReport | None) -> str | None:
+    """Serialize a regression report's items (``None`` passes through)."""
+    if report is None:
+        return None
+    return json.dumps([asdict(i) for i in report.items])
+
+
+def _run_from_row(row: Any) -> StoredRun:
+    """Reconstruct a :class:`StoredRun` from a persisted ``validations`` row.
+
+    ``row[0]`` is the scorecard blob; the remaining elements are nullable
+    and follow the :data:`_DETAIL_COLUMNS` order (``baseline_run_id``,
+    ``evaluation_json``, ``safety_json``, ``episodes_json``,
+    ``regression_json``). Full detail is restored exactly when present;
+    legacy rows (or a single-column test double) fall back to an
+    approximate evaluation/safety rebuilt from the scorecard, empty
+    episodes and no regression — the same fallback SQLite applies to
+    pre-detail rows.
     """
-    scorecard = _scorecard_from_dict(_blob_to_dict(blob))
-    total = scorecard.episode_count
-    evaluation = EvaluationResult(
-        total_episodes=total,
-        success_count=round(scorecard.success_rate * total),
-        success_rate=scorecard.success_rate,
-        failure_taxonomy=dict(scorecard.failure_taxonomy),
+    scorecard = _scorecard_from_dict(_blob_to_dict(row[0]))
+    baseline_run_id = row[1] if len(row) > 1 else None
+
+    evaluation_data = _jsonb_load(row[2]) if len(row) > 2 else None
+    safety_data = _jsonb_load(row[3]) if len(row) > 3 else None
+    episodes_data = _jsonb_load(row[4]) if len(row) > 4 else None
+    regression_data = _jsonb_load(row[5]) if len(row) > 5 else None
+
+    evaluation = (
+        EvaluationResult(**evaluation_data)  # type: ignore[arg-type]
+        if evaluation_data is not None
+        else None
     )
-    safety = SafetyResult(0.0, 0.0, None, 0.0, scorecard.safety_score)
+    safety = (
+        SafetyResult(**safety_data)  # type: ignore[arg-type]
+        if safety_data is not None
+        else None
+    )
+    episodes = [EpisodeResult(**e) for e in (episodes_data or [])]
+    regression = (
+        RegressionReport(items=[RegressionItem(**i) for i in regression_data])
+        if regression_data is not None
+        else None
+    )
+
+    if evaluation is None:
+        total = scorecard.episode_count
+        evaluation = EvaluationResult(
+            total_episodes=total,
+            success_count=round(scorecard.success_rate * total),
+            success_rate=scorecard.success_rate,
+            failure_taxonomy=dict(scorecard.failure_taxonomy),
+        )
+    if safety is None:
+        safety = SafetyResult(0.0, 0.0, None, 0.0, scorecard.safety_score)
+
     return StoredRun(
         run_id=scorecard.run_id,
         checkpoint_id=scorecard.checkpoint_id,
@@ -200,9 +277,9 @@ def _run_from_scorecard_blob(blob: Any) -> StoredRun:
         scorecard=scorecard,
         evaluation=evaluation,
         safety=safety,
-        episodes=[],
-        baseline_run_id=None,
-        regression=None,
+        episodes=episodes,
+        baseline_run_id=baseline_run_id,
+        regression=regression,
     )
 
 
@@ -302,6 +379,15 @@ class PostgresValidationStore(ValidationStore):
         try:
             for statement in _SCHEMA_STATEMENTS:
                 conn.execute(statement.format(table=self._table))
+            # Upgrade detail columns onto databases created before they
+            # existed. Column names/types come from the fixed
+            # :data:`_MIGRATION_COLUMNS` constants (never user input), so
+            # they are safe to interpolate as identifiers.
+            for column, sql_type in _MIGRATION_COLUMNS.items():
+                conn.execute(
+                    f"ALTER TABLE {self._table} ADD COLUMN IF NOT EXISTS "
+                    f"{column} {sql_type}"
+                )
         except Exception:
             conn.close()
             raise
@@ -311,7 +397,7 @@ class PostgresValidationStore(ValidationStore):
     # -- ValidationStore interface -------------------------------------------
 
     def save(self, run: StoredRun) -> StoredRun:
-        """Insert ``run``'s scorecard row; the first write for a run id wins.
+        """Insert ``run``'s full-detail row; the first write for a run id wins.
 
         Uses ``INSERT ... ON CONFLICT (run_id) DO NOTHING`` (append-only
         verdict log), which differs from the in-memory/SQLite backends
@@ -321,8 +407,10 @@ class PostgresValidationStore(ValidationStore):
         sql = (
             f"INSERT INTO {self._table} ("
             " run_id, checkpoint_id, task_id, composite_score,"
-            " deploy_decision, created_at, scorecard)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)"
+            " deploy_decision, created_at, scorecard, baseline_run_id,"
+            " evaluation_json, safety_json, episodes_json, regression_json)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb,"
+            " %s::jsonb, %s::jsonb, %s::jsonb)"
             " ON CONFLICT (run_id) DO NOTHING"
         )
         params = (
@@ -333,6 +421,11 @@ class PostgresValidationStore(ValidationStore):
             card.deploy_decision,
             run.created_at,
             card.to_json(),
+            run.baseline_run_id,
+            json.dumps(run.evaluation.to_dict()),
+            json.dumps(run.safety.to_dict()),
+            _episodes_to_json(run.episodes),
+            _regression_to_json(run.regression),
         )
         with self._lock:
             self._ensure_ready().execute(sql, params)
@@ -340,27 +433,77 @@ class PostgresValidationStore(ValidationStore):
 
     def get(self, run_id: str) -> StoredRun | None:
         """Return the reconstructed run for ``run_id`` or ``None`` if unknown."""
-        sql = f"SELECT scorecard FROM {self._table} WHERE run_id = %s"
+        sql = f"SELECT {_DETAIL_SELECT} FROM {self._table} WHERE run_id = %s"
         with self._lock:
             row = self._ensure_ready().execute(sql, (run_id,)).fetchone()
-        return _run_from_scorecard_blob(row[0]) if row is not None else None
+        return _run_from_row(row) if row is not None else None
+
+    def delete(self, run_id: str) -> bool:
+        """Delete ``run_id``'s row; return ``True`` if a row was removed.
+
+        Mirrors the in-memory/SQLite contract: an unknown id deletes nothing
+        and returns ``False``. The id travels exclusively through a ``%s``
+        placeholder (never interpolated); the table name is the already
+        whitelisted identifier. ``rowcount`` reflects the affected rows.
+        """
+        sql = f"DELETE FROM {self._table} WHERE run_id = %s"
+        with self._lock:
+            cur = self._ensure_ready().execute(sql, (run_id,))
+        return cur.rowcount > 0
 
     def list_for_checkpoint(self, checkpoint_id: str) -> list[StoredRun]:
         """All runs for a checkpoint, oldest first."""
         sql = (
-            f"SELECT scorecard FROM {self._table} "
+            f"SELECT {_DETAIL_SELECT} FROM {self._table} "
             "WHERE checkpoint_id = %s ORDER BY created_at ASC"
         )
         with self._lock:
             rows = self._ensure_ready().execute(sql, (checkpoint_id,)).fetchall()
-        return [_run_from_scorecard_blob(row[0]) for row in rows]
+        return [_run_from_row(row) for row in rows]
 
-    def history(self) -> list[StoredRun]:
-        """Every stored run, oldest first."""
-        sql = f"SELECT scorecard FROM {self._table} ORDER BY created_at ASC"
+    def history(
+        self, since: str | None = None, until: str | None = None
+    ) -> list[StoredRun]:
+        """Every stored run, oldest first, optionally bounded by a date range.
+
+        ``created_at`` is persisted as ISO-8601 TEXT, so PostgreSQL's lexical
+        ``>=``/``<=`` comparison equals chronological comparison for these
+        fixed-format UTC stamps; both bounds are inclusive. Each bound travels
+        through a ``%s`` placeholder (never interpolated); the table name is
+        the already-whitelisted identifier. With both ``None`` the statement
+        is the original unfiltered history.
+        """
+        clauses: list[str] = []
+        params: list[str] = []
+        if since is not None:
+            clauses.append("created_at >= %s")
+            params.append(since)
+        if until is not None:
+            clauses.append("created_at <= %s")
+            params.append(until)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            f"SELECT {_DETAIL_SELECT} FROM {self._table}{where} "
+            "ORDER BY created_at ASC"
+        )
         with self._lock:
-            rows = self._ensure_ready().execute(sql).fetchall()
-        return [_run_from_scorecard_blob(row[0]) for row in rows]
+            rows = self._ensure_ready().execute(sql, tuple(params)).fetchall()
+        return [_run_from_row(row) for row in rows]
+
+    def count(self) -> int:
+        """Number of persisted runs.
+
+        Runs ``SELECT COUNT(*) FROM <table>``. The table name is the already
+        whitelisted identifier (validated in :meth:`__init__`); the statement
+        carries no user-supplied values, so there is nothing to interpolate
+        and the query is injection-free by construction. Equivalent to
+        :meth:`__len__`; exposed as a method so every backend offers the same
+        ``count()`` surface for callers such as the CLI ``models`` footer.
+        """
+        sql = f"SELECT COUNT(*) FROM {self._table}"
+        with self._lock:
+            (count,) = self._ensure_ready().execute(sql).fetchone()
+        return int(count)
 
     def __len__(self) -> int:
         """Number of persisted runs."""

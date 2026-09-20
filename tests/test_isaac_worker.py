@@ -456,7 +456,9 @@ class TestFactory:
         monkeypatch.setenv("VALIDSIM_BACKEND", "mujoco")
         assert isinstance(create_backend(), MockIsaacBackend)
 
-    def test_isaac_branch_needs_no_gpu_at_import_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_isaac_branch_needs_no_gpu_at_import_time(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Selecting "isaac" without a URL must not explode until an episode runs."""
         monkeypatch.setenv("VALIDSIM_BACKEND", "isaac")
         backend = create_backend()

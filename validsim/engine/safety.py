@@ -72,7 +72,13 @@ def compute_safety(
     """
     total = len(episodes)
     if total == 0:
-        return SafetyResult(0.0, 0.0, None, 0.0, 100.0)
+        return SafetyResult(
+            collisions_per_episode=0.0,
+            max_force_exceeded_rate=0.0,
+            min_human_proximity_m=None,
+            proximity_violation_rate=0.0,
+            safety_score=100.0,
+        )
 
     collisions = sum(e.collision_count for e in episodes)
     collisions_per_episode = collisions / total

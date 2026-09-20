@@ -2,16 +2,22 @@
 # ValidSim — local development / MVP stack
 #
 #   api      : FastAPI app built from the local Dockerfile (port 8000)
-#   redis    : future job queue / result backend for validation runs
+#   worker   : CPU job worker — consumes queued validation jobs from Redis and
+#              writes results to the shared store (reuses the api image)
+#   redis    : job queue / result backend for validation runs
 #   postgres : system-of-record for runs, scorecards, and audit trail
 #
-# All three services define healthchecks; `api` waits for its data stores to
-# become healthy before starting. Credentials below are LOCAL DEV DEFAULTS —
-# override via environment variables / a .env file (never commit real ones).
+# The api and worker services wait for their data stores to become healthy
+# before starting; every service defines a healthcheck and `restart:
+# unless-stopped`. POSTGRES_PASSWORD is REQUIRED — set it via environment / a
+# .env file (see .env.example; never commit real ones); compose aborts with
+# "set POSTGRES_PASSWORD" if it is unset or empty.
 #
-# NOTE: The GPU Isaac Sim validation worker is intentionally NOT part of this
-# stack yet — this repo has no GPU host in the loop. See the commented
-# placeholder at the bottom of this file for the Week 2+ wiring.
+# NOTE: The `worker` service above is the CPU (mock-backend) job worker that
+# drains the Redis queue. The GPU Isaac Sim validation worker is still
+# intentionally NOT part of this stack — this repo has no GPU host in the loop.
+# See the commented `worker-gpu` placeholder at the bottom of this file for the
+# Week 2+ wiring.
 # =============================================================================
 
 name: validsim
@@ -28,8 +34,15 @@ services:
       - "8000:8000"
     environment:
       VALIDSIM_ENV: development
+      VALIDSIM_STORE: "${VALIDSIM_STORE:-postgres}"
       VALIDSIM_REDIS_URL: "redis://redis:6379/0"
-      VALIDSIM_DATABASE_URL: "postgresql://validsim:${POSTGRES_PASSWORD:-validsim_dev_only}@postgres:5432/validsim"
+      # NOTE on TLS: the postgres:16-alpine image ships with SSL disabled by
+      # default, so appending `?sslmode=require` to this DSN would make every
+      # connection fail ("server does not support SSL, but SSL was required").
+      # Do NOT add it until the postgres service is configured with TLS
+      # (e.g. mounted server.crt/server.key + `ssl=on`); it is internal-network
+      # only for now, and the host binding is loopback-restricted (127.0.0.1).
+      VALIDSIM_PG_URL: "postgresql://validsim:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/validsim"
     depends_on:
       redis:
         condition: service_healthy
@@ -69,8 +82,8 @@ services:
     environment:
       POSTGRES_DB: validsim
       POSTGRES_USER: validsim
-      # DEV DEFAULT ONLY — set POSTGRES_PASSWORD in your .env for anything real.
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-validsim_dev_only}"
+      # REQUIRED — compose refuses to start without POSTGRES_PASSWORD set.
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
     ports:
       - "127.0.0.1:5432:5432" # host access for debugging only; drop if not needed
     volumes:
@@ -81,6 +94,52 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  worker:
+    # CPU job worker — runs `python -m validsim.cli worker` to drain the Redis
+    # job queue and persist completed runs to the shared validation store. It
+    # reuses the api image (same build context + tag, so Compose builds it
+    # once). This is NOT the GPU Isaac Sim worker (see the placeholder below).
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: validsim:local
+    container_name: validsim-worker
+    command: ["python", "-m", "validsim.cli", "worker"]
+    restart: unless-stopped
+    environment:
+      VALIDSIM_ENV: development
+      # Same store/queue wiring as the api: jobs enqueued through the API are
+      # claimed here and their results land in the same system-of-record.
+      VALIDSIM_STORE: "${VALIDSIM_STORE:-postgres}"
+      # NOTE on TLS: postgres:16-alpine ships with SSL disabled, so do NOT add
+      # `?sslmode=require` here (see the api service comment for details).
+      VALIDSIM_PG_URL: "postgresql://validsim:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/validsim"
+      VALIDSIM_JOB_QUEUE: redis
+      VALIDSIM_REDIS_URL: "redis://redis:6379/0"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # Lightweight liveness probe for a non-HTTP process: the worker serves no
+    # port, so the base image's HTTP :8000 check can never pass here. Instead we
+    # confirm the worker can still reach the Redis queue it drains. redis-py is
+    # not installed in the slim runtime image and redis-cli is not on PATH, so
+    # we speak the Redis PING/PONG handshake over a raw stdlib socket. This is a
+    # liveness proxy: no queue reachability means the worker cannot make
+    # progress. If the worker process itself dies, PID 1 exits and the container
+    # is reported stopped rather than unhealthy.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,socket,sys; u=os.environ.get('VALIDSIM_REDIS_URL','redis://redis:6379/0').split('://')[-1].split('@')[-1].split('/')[0]; h,_,p=u.partition(':'); s=socket.create_connection((h,int(p or 6379)),timeout=3); s.sendall(b'PING\\r\\n'); ok=s.recv(16).startswith(b'+PONG'); s.close(); sys.exit(0 if ok else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   redis-data:
@@ -96,8 +155,9 @@ volumes:
 #      dockerfile: Dockerfile.worker   # Isaac Sim / Omniverse base image (~15 GB)
 #    restart: unless-stopped
 #    environment:
+#      VALIDSIM_STORE: "${VALIDSIM_STORE:-postgres}"
 #      VALIDSIM_REDIS_URL: "redis://redis:6379/0"
-#      VALIDSIM_DATABASE_URL: "postgresql://validsim:${POSTGRES_PASSWORD:-validsim_dev_only}@postgres:5432/validsim"
+#      VALIDSIM_PG_URL: "postgresql://validsim:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/validsim"
 #    depends_on:
 #      redis:
 #        condition: service_healthy

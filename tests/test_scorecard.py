@@ -7,7 +7,7 @@ from itertools import count
 from typing import Sequence
 
 from validsim.config import EnvironmentSpec, RobotSpec, TaskConfig
-from validsim.engine.evaluation import EvaluationResult, evaluate
+from validsim.engine.evaluation import evaluate
 from validsim.engine.regression import RegressionItem, RegressionReport
 from validsim.engine.safety import SafetyResult
 from validsim.engine.scorecard import Scorecard, build_scorecard
@@ -151,3 +151,26 @@ class TestGatingAndSerialization:
         assert card.episode_count == 100
         assert card.regression_delta is None
         assert card.created_at == "2026-01-01T00:00:00+00:00"
+
+
+class TestEvidenceSufficiency:
+    def test_incomplete_run_cannot_approve(self) -> None:
+        """A worker that under-delivers must not earn a deploy approval."""
+        task = TaskConfig(
+            task_id="t", robot=RobotSpec(name="r"), environment=EnvironmentSpec(name="e"),
+            episodes=50,
+        )
+        episodes = _episodes(1, 0)
+        card = build_scorecard(
+            run_id="vrun-cafe1234",
+            checkpoint_id="ckpt-1",
+            task=task,
+            evaluation=evaluate(episodes),
+            safety=_safety(100.0),
+            episodes=episodes,
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        # The weighted math is perfect on the single episode it did see...
+        assert card.composite_score == 100.0
+        # ...but 1 of 50 requested episodes is not evidence to deploy on.
+        assert card.deploy_decision == "BLOCK"

@@ -1,4 +1,4 @@
-"""ValidSim Dashboard API (Week-7 MVP).
+"""ValidSim Dashboard API.
 
 Serves the single-page dashboard (``validsim/web``) from the existing FastAPI
 app — no Node/npm build step. The data endpoints resolve the *same* store

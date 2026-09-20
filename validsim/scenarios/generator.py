@@ -1,15 +1,14 @@
 """Rule-based adversarial scenario generation.
 
-MVP generator: a deterministic, seeded sampler that cycles through the twelve
-adversarial categories required by the ValidSim scorecard and produces varied,
+A deterministic, seeded sampler that cycles through the twelve adversarial
+categories required by the ValidSim scorecard and produces varied,
 task-conditioned parameters for each.
 
 .. note::
-    An LLM-powered backend (e.g. GPT-4o or NVIDIA Cosmos) will replace this
-    rule-based generator in a later milestone to produce richer, open-ended
-    adversarial scenarios. The public surface (:meth:`ScenarioGenerator.
-    generate` returning :class:`AdversarialScenario` objects) is intentionally
-    kept stable so the swap is a drop-in change.
+    The public surface (:meth:`ScenarioGenerator.generate` returning
+    :class:`AdversarialScenario` objects) is intentionally stable, so an
+    LLM-powered backend (e.g. GPT-4o or NVIDIA Cosmos) producing richer,
+    open-ended adversarial scenarios can be swapped in as a drop-in change.
 """
 
 from __future__ import annotations
@@ -50,6 +49,12 @@ _BASE_DIFFICULTY: dict[str, float] = {
     "temporal_pressure": 0.45,
 }
 
+#: How far a full-magnitude ``difficulty_bias`` (±1.0) shifts the sampled
+#: difficulty. A bias of ``b`` adds ``b * _DIFFICULTY_BIAS_SCALE`` to the
+#: jittered base difficulty before clamping, so ``b = -1`` eases the batch by
+#: 0.5 and ``b = +1`` hardens it by 0.5 while leaving room for variety.
+_DIFFICULTY_BIAS_SCALE = 0.5
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     """Return ``value`` constrained to the inclusive ``[low, high]`` range."""
@@ -88,11 +93,31 @@ class ScenarioGenerator:
     in order, so any ``n >= 12`` guarantees full category coverage. All
     randomness is drawn from a :class:`random.Random` seeded from the
     generator seed plus the ``task_id``, making output reproducible.
+
+    An optional ``difficulty_bias`` shifts the *sampled* difficulty toward
+    easier (negative) or harder (positive) without perturbing the RNG stream,
+    so category cycling, ids and parameters are unaffected. The default of
+    ``0.0`` reproduces the unbiased distribution exactly.
     """
 
-    def __init__(self, seed: int = 42) -> None:
-        """Store the base seed; per-task streams are derived from it."""
+    def __init__(self, seed: int = 42, difficulty_bias: float = 0.0) -> None:
+        """Store the base seed and difficulty bias.
+
+        Args:
+            seed: Base seed; per-task streams are derived from it.
+            difficulty_bias: Bias in ``[-1, 1]`` shifting sampled difficulty
+                toward easier (negative) or harder (positive). ``0.0`` (the
+                default) leaves the distribution unchanged.
+
+        Raises:
+            ValueError: If ``difficulty_bias`` is outside ``[-1, 1]``.
+        """
+        if not -1.0 <= difficulty_bias <= 1.0:
+            raise ValueError(
+                f"difficulty_bias must be within [-1, 1], got {difficulty_bias}"
+            )
         self._seed = seed
+        self._difficulty_bias = difficulty_bias
 
     def generate(self, task_id: str, n: int) -> list[AdversarialScenario]:
         """Return ``n`` deterministic adversarial scenarios for ``task_id``.
@@ -107,8 +132,15 @@ class ScenarioGenerator:
         scenarios: list[AdversarialScenario] = []
         for i in range(n):
             category = ADVERSARIAL_CATEGORIES[i % len(ADVERSARIAL_CATEGORIES)]
+            # The bias is applied *after* the seeded jitter and consumes no RNG
+            # draws, so ids/categories/params stay identical across biases and a
+            # bias of 0.0 (adding 0.0) reproduces the unbiased value byte-for-byte.
             difficulty = _clamp(
-                _BASE_DIFFICULTY[category] + rng.uniform(-0.15, 0.15), 0.05, 0.95
+                _BASE_DIFFICULTY[category]
+                + rng.uniform(-0.15, 0.15)
+                + self._difficulty_bias * _DIFFICULTY_BIAS_SCALE,
+                0.05,
+                0.95,
             )
             scenarios.append(
                 AdversarialScenario(
@@ -120,6 +152,32 @@ class ScenarioGenerator:
                 )
             )
         return scenarios
+
+    def coverage(self, task_id: str, n: int) -> dict[str, int]:
+        """Return per-category counts for a generated batch of ``n`` scenarios.
+
+        The result always contains a key for every one of the twelve
+        :data:`ADVERSARIAL_CATEGORIES` (with ``0`` where absent), and the values
+        sum to ``n``. Because scenarios cycle deterministically through the
+        categories, any ``n >= 12`` yields full coverage (every count ``>= 1``).
+
+        Args:
+            task_id: Task identifier, forwarded to :meth:`generate` so the
+                batch matches exactly what :meth:`generate` would produce.
+            n: Number of scenarios in the batch.
+
+        Returns:
+            Mapping of category name to the number of generated scenarios in
+            that category.
+
+        Raises:
+            ValueError: If ``n`` is negative (propagated from :meth:`generate`).
+        """
+        scenarios = self.generate(task_id, n)
+        counts = {category: 0 for category in ADVERSARIAL_CATEGORIES}
+        for scenario in scenarios:
+            counts[scenario.category] += 1
+        return counts
 
 
 def _rcoord(rng: random.Random) -> dict[str, float]:

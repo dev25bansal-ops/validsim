@@ -194,8 +194,12 @@ class TestModelRegistry:
         assert client.get("/api/v1/models").json() == []
 
     def test_model_history_chronological(self, client: TestClient) -> None:
-        first = client.post("/api/v1/validations", json=_request_body("ckpt-alpha")).json()["run_id"]
-        second = client.post("/api/v1/validations", json=_request_body("ckpt-alpha")).json()["run_id"]
+        first = client.post(
+            "/api/v1/validations", json=_request_body("ckpt-alpha")
+        ).json()["run_id"]
+        second = client.post(
+            "/api/v1/validations", json=_request_body("ckpt-alpha")
+        ).json()["run_id"]
         history = client.get("/api/v1/models/ckpt-alpha/history").json()
         assert [row["run_id"] for row in history] == [first, second]  # oldest first
         assert all(row["checkpoint_id"] == "ckpt-alpha" for row in history)

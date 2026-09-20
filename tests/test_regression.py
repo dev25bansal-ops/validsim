@@ -8,7 +8,9 @@ from validsim.engine.regression import RegressionItem, compare
 SEED = 42
 
 
-def _evaluation(success_rate: float, total: int = 2000, mean_duration: float = 10.0) -> EvaluationResult:
+def _evaluation(
+    success_rate: float, total: int = 2000, mean_duration: float = 10.0
+) -> EvaluationResult:
     count = int(total * success_rate)
     return EvaluationResult(
         total_episodes=total,
@@ -79,7 +81,10 @@ class TestReportShape:
         data = report.to_dict()
         assert data["worst_severity"] == "critical"
         assert data["significant_count"] >= 1
-        assert all({"metric", "before", "after", "delta", "p_value", "significant", "severity"} <= set(i) for i in data["items"])
+        assert all(
+            {"metric", "before", "after", "delta", "p_value", "significant", "severity"} <= set(i)
+            for i in data["items"]
+        )
 
     def test_empty_report_defaults(self) -> None:
         from validsim.engine.regression import RegressionReport

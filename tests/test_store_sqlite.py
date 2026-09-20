@@ -73,7 +73,9 @@ def make_store(tmp_path: Path) -> Iterator[Callable[[str], SqliteValidationStore
 
 
 class TestRoundTrip:
-    def test_save_and_get_preserves_scorecard(self, make_store: Callable[[str], SqliteValidationStore]) -> None:
+    def test_save_and_get_preserves_scorecard(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
         store = make_store()
         sc = _scorecard()
         store.save(_run(sc))
@@ -85,17 +87,23 @@ class TestRoundTrip:
         assert got.task_id == sc.task_id
         assert got.created_at == sc.created_at
 
-    def test_get_unknown_returns_none(self, make_store: Callable[[str], SqliteValidationStore]) -> None:
+    def test_get_unknown_returns_none(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
         assert make_store().get("vrun-deadbeef") is None
 
-    def test_repeated_save_overwrites(self, make_store: Callable[[str], SqliteValidationStore]) -> None:
+    def test_repeated_save_overwrites(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
         store = make_store()
         store.save(_run(_scorecard(composite_score=50.0, deploy_decision="BLOCK")))
         store.save(_run(_scorecard(composite_score=95.0, deploy_decision="APPROVE")))
         assert len(store) == 1
         assert store.get("vrun-cafe1234").scorecard.composite_score == 95.0  # type: ignore[union-attr]
 
-    def test_summary_reflects_stored_scorecard(self, make_store: Callable[[str], SqliteValidationStore]) -> None:
+    def test_summary_reflects_stored_scorecard(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
         store = make_store()
         sc = _scorecard()
         store.save(_run(sc))
@@ -110,19 +118,42 @@ class TestQueries:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        store.save(_run(_scorecard("vrun-a0000001", checkpoint_id="ckpt-A", created_at="2026-01-02T00:00:00+00:00")))
-        store.save(_run(_scorecard("vrun-a0000002", checkpoint_id="ckpt-A", created_at="2026-01-01T00:00:00+00:00")))
-        store.save(_run(_scorecard("vrun-b0000001", checkpoint_id="ckpt-B", created_at="2026-01-03T00:00:00+00:00")))
+        store.save(
+            _run(
+                _scorecard(
+                    "vrun-a0000001", checkpoint_id="ckpt-A", created_at="2026-01-02T00:00:00+00:00"
+                )
+            )
+        )
+        store.save(
+            _run(
+                _scorecard(
+                    "vrun-a0000002", checkpoint_id="ckpt-A", created_at="2026-01-01T00:00:00+00:00"
+                )
+            )
+        )
+        store.save(
+            _run(
+                _scorecard(
+                    "vrun-b0000001", checkpoint_id="ckpt-B", created_at="2026-01-03T00:00:00+00:00"
+                )
+            )
+        )
+
         runs = store.list_for_checkpoint("ckpt-A")
         assert [r.run_id for r in runs] == ["vrun-a0000002", "vrun-a0000001"]  # oldest first
 
-    def test_history_orders_oldest_first(self, make_store: Callable[[str], SqliteValidationStore]) -> None:
+    def test_history_orders_oldest_first(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
         store = make_store()
         store.save(_run(_scorecard("vrun-c0000002", created_at="2026-02-02T00:00:00+00:00")))
         store.save(_run(_scorecard("vrun-c0000001", created_at="2026-02-01T00:00:00+00:00")))
         assert [r.run_id for r in store.history()] == ["vrun-c0000001", "vrun-c0000002"]
 
-    def test_len_tracks_saved_runs(self, make_store: Callable[[str], SqliteValidationStore]) -> None:
+    def test_len_tracks_saved_runs(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
         store = make_store()
         assert len(store) == 0
         store.save(_run(_scorecard("vrun-11111111")))

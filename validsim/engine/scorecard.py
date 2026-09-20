@@ -4,8 +4,9 @@
               + 0.1 * regression_component
 
 ``regression_component`` is 100 when no significant regressions were detected,
-otherwise ``100 - 25 * count`` (floored at 0). A run is approved when its
-composite score meets the configured threshold (default 85.0).
+otherwise ``100 - 25 * count`` (floored at 0). A run is approved when it
+delivered at least the episodes its task asked for and its composite score
+meets the configured threshold (default 85.0).
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ _W_SUCCESS, _W_SAFETY, _W_ROBUSTNESS, _W_REGRESSION = 0.4, 0.3, 0.2, 0.1
 _ROBUSTNESS_SCALE = 200.0
 #: Penalty per significant regression in the regression component.
 _REGRESSION_PENALTY = 25.0
+#: Bootstrap resample count for the success-rate confidence interval.
+_CI_N_RESAMPLES = 500
 
 
 def _utc_now_iso() -> str:
@@ -164,7 +167,7 @@ def build_scorecard(
     if evaluation.total_episodes > 0:
         bits = [1.0 if e.success else 0.0 for e in episodes]
         if len(bits) == evaluation.total_episodes:
-            low, high, _ = bootstrap_ci(bits, n_resamples=500, seed=stats_seed)
+            low, high, _ = bootstrap_ci(bits, n_resamples=_CI_N_RESAMPLES, seed=stats_seed)
             ci = (round(low, 4), round(high, 4))
 
     regression_delta: float | None = None
@@ -174,7 +177,12 @@ def build_scorecard(
                 regression_delta = round(item.delta, 4)
                 break
 
-    decision: DeployDecision = "APPROVE" if composite >= threshold else "BLOCK"
+    # An under-delivered run proves nothing however well its few episodes scored:
+    # a worker that returns 1 of 50 episodes would otherwise read as a perfect run.
+    sufficient_evidence = evaluation.total_episodes >= task.episodes > 0
+    decision: DeployDecision = (
+        "APPROVE" if sufficient_evidence and composite >= threshold else "BLOCK"
+    )
     return Scorecard(
         run_id=run_id,
         checkpoint_id=checkpoint_id,

@@ -21,7 +21,7 @@ make docker-build / up    docker build (validsim:ci, push=false)    catches flak
 |---|---|
 | `Dockerfile` | Prod image: `python:3.12-slim`, non-root `USER` (uid 1001), requirements-first layer caching, `HEALTHCHECK` on `/api/v1/health`. |
 | `.dockerignore` | Keeps `tests/`, `vault/`, docs, and CI tooling out of the runtime image. |
-| `docker-compose.yml` | Local MVP stack: `api` + `redis:7` (future job queue) + `postgres:16` (runs/scorecards), all healthchecked. GPU Isaac Sim worker is a commented placeholder — no GPU host yet. |
+| `docker-compose.yml` | Local MVP stack: `api` + `redis:7` (future job queue) + `postgres:16` (runs/scorecards), all healthchecked with `restart: unless-stopped`. `POSTGRES_PASSWORD` is required (no dev default — set it in `.env` or compose aborts). GPU Isaac Sim worker is a commented placeholder — no GPU host yet. |
 | `.github/workflows/ci.yml` | Lint → test → docker build; the build job is gated on tests passing. |
 | `.github/workflows/nightly.yml` | 24/7 story: full suite every night, artifacts archived. |
 | `Makefile` (repo root) | One-command parity with CI: `make lint test run cli-run docker-build docker-up clean`. |

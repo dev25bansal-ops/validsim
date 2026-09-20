@@ -122,4 +122,21 @@ Owners: **Founder 1** = ML/Robotics Lead, **Founder 2** = Platform/Infra Lead ([
 > [!warning] Known schedule conflict
 > Sep 18 start + 8 weeks = Nov 13 > Nov 2 YC deadline. See resolution options in [[YC Countdown]]. Weekly exit-criteria review against this plan is the [[Product Principles]] operating rule.
 
+## Security hardening — API & deployment
+
+- [x] API auth — token middleware on all REST endpoints ([[API Design]])
+- [x] CORS hardening — allow-list origins, no wildcard in prod
+- [x] Webhook HMAC signing + retry — signed payloads, exponential backoff
+- [x] Compose secret handling — secrets via env-file/secrets mount, none committed
+- [x] Multi-stage Docker build — slim production images, build tools excluded
+
+**Exit Criteria:** API surface is authenticated, CORS-restricted, webhook payloads are HMAC-signed with retry, and production images contain no secrets or build tooling.
+
+### Next-week preview
+
+- [ ] Rate limiting on public API endpoints ([[Module Specs]] API Gateway)
+- [ ] Per-client API keys (issue, rotate, revoke) [[API Design]]
+- [ ] GPU worker shadow-run vs. contract in `docs/isaac-worker.md` — validate job payload, result schema, and error semantics match the documented interface
+- [ ] Pagination stress tests on list endpoints (large result sets, deep offsets)
+
 Links: [[MVP Success Metrics]] · [[90-Day Roadmap]] · [[KPIs]] · [[Build Status]] · [[Home]]

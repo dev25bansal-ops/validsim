@@ -48,7 +48,9 @@ class TestMockBackend:
     def test_success_rate_near_base(self) -> None:
         task = _task()
         backend = MockIsaacBackend(base_success_rate=0.9)
-        results = [backend.run_episode(task, seed=s, randomization_level="none") for s in range(800)]
+        results = [
+            backend.run_episode(task, seed=s, randomization_level="none") for s in range(800)
+        ]
         rate = sum(r.success for r in results) / len(results)
         assert 0.83 < rate < 0.96
 

@@ -16,14 +16,17 @@ import os
 import subprocess
 import sys
 import uuid
+from dataclasses import asdict
 from typing import Any
 
 import pytest
 
 import validsim.store.postgres as pg
 from validsim.engine.evaluation import EvaluationResult
+from validsim.engine.regression import RegressionItem, RegressionReport
 from validsim.engine.safety import SafetyResult
 from validsim.engine.scorecard import Scorecard
+from validsim.sim.runner import EpisodeResult
 from validsim.store import ValidationStore, create_store
 from validsim.store.memory import StoredRun
 from validsim.store.postgres import PostgresValidationStore
@@ -66,6 +69,80 @@ def _run(sc: Scorecard) -> StoredRun:
             failure_taxonomy=dict(sc.failure_taxonomy),
         ),
         safety=SafetyResult(0.0, 0.0, None, 0.0, sc.safety_score),
+    )
+
+
+def _full_run(sc: Scorecard) -> StoredRun:
+    """A StoredRun exercising every persisted detail field."""
+    episodes = [
+        EpisodeResult(
+            episode_id="pick-place-seed0000000042",
+            task_id="pick-place",
+            seed=42,
+            success=True,
+            collision_count=0,
+            max_contact_force_n=12.5,
+            min_human_distance_m=1.2,
+            failure_mode=None,
+            duration_s=8.25,
+            joint_states_summary={"position_rms": 0.4, "dof": 7.0},
+            randomization_level="full",
+        ),
+        EpisodeResult(
+            episode_id="pick-place-seed0000000043",
+            task_id="pick-place",
+            seed=43,
+            success=False,
+            collision_count=2,
+            max_contact_force_n=98.75,
+            min_human_distance_m=None,
+            failure_mode="collision",
+            duration_s=15.5,
+            joint_states_summary={},
+            randomization_level="partial",
+        ),
+    ]
+    return StoredRun(
+        run_id=sc.run_id,
+        checkpoint_id=sc.checkpoint_id,
+        task_id=sc.task_id,
+        created_at=sc.created_at,
+        scorecard=sc,
+        evaluation=EvaluationResult(
+            total_episodes=2,
+            success_count=1,
+            success_rate=0.5,
+            per_task_success={"pick-place": 0.5},
+            failure_taxonomy={"collision": 1},
+            mean_duration_s=11.875,
+        ),
+        safety=SafetyResult(1.0, 0.5, 1.2, 0.0, 42.5),
+        episodes=episodes,
+        baseline_run_id="vrun-base0001",
+        regression=RegressionReport(
+            items=[
+                RegressionItem("success_rate", 0.9, 0.5, -0.4, 0.001, True, "critical"),
+                RegressionItem("mean_duration_s", 8.0, 11.875, 3.875, None, False, "info"),
+            ]
+        ),
+    )
+
+
+def _detail_row(run: StoredRun, *, raw: bool = False) -> tuple[Any, ...]:
+    """Build the six-column row shape the store reads back (decoded or raw JSON text)."""
+
+    def enc(obj: Any) -> Any:
+        return json.dumps(obj) if raw else obj
+
+    return (
+        enc(run.scorecard.to_dict()),
+        run.baseline_run_id,
+        enc(run.evaluation.to_dict()),
+        enc(run.safety.to_dict()),
+        enc([asdict(e) for e in run.episodes]),
+        enc([asdict(i) for i in run.regression.items])
+        if run.regression is not None
+        else None,
     )
 
 
@@ -221,7 +298,9 @@ class TestDriverAbsence:
 class TestSqlConstruction:
     """SQL is asserted against an injected fake connection (no server)."""
 
-    def _store(self, select_rows: list[Any] | None = None) -> tuple[PostgresValidationStore, _FakeConnection]:
+    def _store(
+        self, select_rows: list[Any] | None = None
+    ) -> tuple[PostgresValidationStore, _FakeConnection]:
         conn = _FakeConnection(select_rows)
         store = PostgresValidationStore(_conn_factory=lambda: conn)
         return store, conn
@@ -235,13 +314,27 @@ class TestSqlConstruction:
         assert any("checkpoint_id" in s and "CREATE INDEX IF NOT EXISTS" in s for s in stmts)
         assert any("created_at" in s and "CREATE INDEX IF NOT EXISTS" in s for s in stmts)
 
+    def test_first_use_migrates_detail_columns(self) -> None:
+        store, conn = self._store()
+        store.history()  # triggers deferred schema + migration setup
+        alters = [s for s in conn.statements() if s.strip().upper().startswith("ALTER TABLE")]
+        assert len(alters) == 5
+        for column in (
+            "baseline_run_id",
+            "evaluation_json",
+            "safety_json",
+            "episodes_json",
+            "regression_json",
+        ):
+            assert any("ADD COLUMN IF NOT EXISTS" in a and column in a for a in alters), column
+
     def test_save_uses_placeholders_and_conflict_clause(self) -> None:
         store, conn = self._store()
         sc = _scorecard()
         store.save(_run(sc))
         sql, params = conn.find("INSERT")
         assert "ON CONFLICT (run_id) DO NOTHING" in sql
-        assert sql.count("%s") == 7
+        assert sql.count("%s") == 12
         # Values travel only via params — never interpolated into the SQL.
         assert sc.run_id not in sql
         assert params[0] == sc.run_id
@@ -274,13 +367,115 @@ class TestSqlConstruction:
         sc = _scorecard()
         store, conn = self._store(select_rows=[(sc.to_dict(),), (sc.to_dict(),)])
         runs = store.list_for_checkpoint("ckpt-1")
-        sql, params = conn.find("SELECT scorecard FROM validations WHERE checkpoint_id")
-        assert "ORDER BY created_at ASC" in sql and params == ("ckpt-1",)
+        sql, params = conn.find("SELECT scorecard, baseline_run_id, evaluation_json")
+        assert "WHERE checkpoint_id = %s" in sql and params == ("ckpt-1",)
+        assert "ORDER BY created_at ASC" in sql
         assert [r.run_id for r in runs] == [sc.run_id, sc.run_id]
 
         store2, conn2 = self._store(select_rows=[(5,)])
         assert len(store2) == 5
         assert conn2.find("SELECT COUNT")[0] == "SELECT COUNT(*) FROM validations"
+
+
+class TestFullDetailRoundTrip:
+    """The Postgres backend restores every StoredRun field exactly."""
+
+    def _store(
+        self, select_rows: list[Any] | None = None
+    ) -> tuple[PostgresValidationStore, _FakeConnection]:
+        conn = _FakeConnection(select_rows)
+        store = PostgresValidationStore(_conn_factory=lambda: conn)
+        return store, conn
+
+    def test_save_persists_full_detail_columns(self) -> None:
+        store, conn = self._store()
+        run = _full_run(_scorecard())
+        store.save(run)
+        sql, params = conn.find("INSERT")
+        assert sql.count("%s") == 12
+        assert "evaluation_json" in sql
+        assert "episodes_json" in sql
+        assert "baseline_run_id" in sql
+        # params 0-6 are the scorecard columns; 7-11 carry the full detail.
+        assert params[7] == "vrun-base0001"
+        assert json.loads(params[8]) == run.evaluation.to_dict()
+        assert json.loads(params[9]) == run.safety.to_dict()
+        assert json.loads(params[10]) == [asdict(e) for e in run.episodes]
+        assert json.loads(params[11]) == [asdict(i) for i in run.regression.items]  # type: ignore[union-attr]
+
+    def test_round_trip_preserves_entire_run(self) -> None:
+        store, conn = self._store()
+        run = _full_run(_scorecard())
+        store.save(run)
+        _sql, params = conn.find("INSERT")
+        # Replay the captured write params as the database's stored row. The
+        # JSON columns were sent as raw JSON text with a ::jsonb cast.
+        conn._select_rows = [tuple(params[6:])]
+        assert store.get(run.run_id) == run  # dataclass equality across all fields
+
+    def test_get_restores_detail_from_decoded_jsonb(self) -> None:
+        run = _full_run(_scorecard())
+        store, _ = self._store(select_rows=[_detail_row(run)])
+        got = store.get(run.run_id)
+        assert got is not None
+        assert got == run
+        assert got.episodes == run.episodes
+        assert got.evaluation == run.evaluation
+        assert got.safety == run.safety
+        assert got.baseline_run_id == "vrun-base0001"
+        assert got.regression == run.regression
+
+    def test_get_accepts_raw_json_text_for_detail_columns(self) -> None:
+        run = _full_run(_scorecard())
+        store, _ = self._store(select_rows=[_detail_row(run, raw=True)])
+        got = store.get(run.run_id)
+        assert got is not None and got == run
+
+    def test_list_and_history_restore_full_detail(self) -> None:
+        run = _full_run(_scorecard())
+        store, _ = self._store(select_rows=[_detail_row(run), _detail_row(run)])
+        assert store.list_for_checkpoint(run.checkpoint_id) == [run, run]
+        assert store.history() == [run, run]
+
+    def test_null_regression_round_trips_as_none(self) -> None:
+        store, conn = self._store()
+        run = _full_run(_scorecard())
+        run_none = StoredRun(
+            run_id=run.run_id,
+            checkpoint_id=run.checkpoint_id,
+            task_id=run.task_id,
+            created_at=run.created_at,
+            scorecard=run.scorecard,
+            evaluation=run.evaluation,
+            safety=run.safety,
+            episodes=run.episodes,
+            baseline_run_id=None,
+            regression=None,
+        )
+        store.save(run_none)
+        _sql, params = conn.find("INSERT")
+        assert params[7] is None  # NULL baseline_run_id
+        assert params[11] is None  # NULL regression_json
+        conn._select_rows = [tuple(params[6:])]
+        got = store.get(run_none.run_id)
+        assert got is not None
+        assert got.regression is None
+        assert got.baseline_run_id is None
+        assert got.evaluation == run_none.evaluation  # exact, not approximated
+        assert got.episodes == run_none.episodes
+
+    def test_legacy_single_column_row_falls_back(self) -> None:
+        """A pre-detail row (scorecard only) is reconstructed via fallback."""
+        sc = _scorecard()
+        store, _ = self._store(select_rows=[(sc.to_dict(),)])
+        got = store.get(sc.run_id)
+        assert got is not None
+        assert got.scorecard == sc
+        assert got.episodes == []
+        assert got.regression is None
+        assert got.baseline_run_id is None
+        assert got.evaluation.total_episodes == 100  # approximated fallback
+        assert got.evaluation.success_count == 90
 
 
 class TestFactorySelection:

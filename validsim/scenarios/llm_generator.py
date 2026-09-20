@@ -318,10 +318,12 @@ class LLMScenarioGenerator:
     ScenarioGenerator`: :meth:`generate` always returns exactly ``n`` valid
     :class:`~validsim.scenarios.generator.AdversarialScenario` objects. The
     model is asked for ``n`` scenarios; whatever survives schema validation
-    is topped up deterministically from the rule-based ``fallback``. If every
-    provider attempt fails (transport or parse errors, after ``max_retries``
-    retries), the entire batch comes from the fallback so the simulator is
-    never starved.
+    is topped up deterministically from the rule-based ``fallback`` — first
+    prioritizing the canonical categories the LLM output failed to cover
+    (category-diversity guarantee), then filling any remaining count. If
+    every provider attempt fails (transport or parse errors, after
+    ``max_retries`` retries), the entire batch comes from the fallback so
+    the simulator is never starved.
 
     Attributes:
         scenarios_generated: Cumulative count of scenarios produced across
@@ -330,6 +332,10 @@ class LLMScenarioGenerator:
             scenarios (either as top-up or wholesale).
         last_fallback_reason: Human-readable reason for the most recent
             fallback use, or ``None`` when the last call was clean.
+        last_run_diagnostics: Dict describing the most recent call; always
+            contains ``missing_categories`` (count of the twelve canonical
+            categories absent from the accepted LLM scenarios) and
+            ``topup_from_fallback`` (number of fallback scenarios used).
     """
 
     def __init__(
@@ -355,6 +361,7 @@ class LLMScenarioGenerator:
         self.scenarios_generated = 0
         self.last_run_used_fallback = False
         self.last_fallback_reason: str | None = None
+        self.last_run_diagnostics: dict[str, Any] = {}
 
     @property
     def provider(self) -> ScenarioProvider:
@@ -370,9 +377,10 @@ class LLMScenarioGenerator:
         """Return ``n`` adversarial scenarios for ``task_id``.
 
         Flow: render prompt → ask the provider → extract and schema-validate
-        the JSON array → top up shortfalls from the deterministic fallback.
-        On repeated provider/parse errors the full batch comes from the
-        fallback and :attr:`last_fallback_reason` records why.
+        the JSON array → top up missing canonical categories from the
+        deterministic fallback → fill any remaining count. On repeated
+        provider/parse errors the full batch comes from the fallback and
+        :attr:`last_fallback_reason` records why.
 
         Raises:
             ValueError: If ``n`` is negative (mirrors the rule-based API).
@@ -381,6 +389,7 @@ class LLMScenarioGenerator:
             raise ValueError(f"n must be >= 0, got {n}")
         self.last_run_used_fallback = False
         self.last_fallback_reason = None
+        self.last_run_diagnostics = {"missing_categories": 0, "topup_from_fallback": 0}
         if n == 0:
             return []
 
@@ -406,20 +415,109 @@ class LLMScenarioGenerator:
             scenarios = self._fallback.generate(task_id, n)
             self.last_run_used_fallback = True
             self.last_fallback_reason = last_error
+            self.last_run_diagnostics = {
+                "missing_categories": 0,
+                "topup_from_fallback": n,
+            }
         else:
-            needed = n - len(accepted)
-            if needed > 0:
-                accepted.extend(self._fallback.generate(task_id, needed))
-                self.last_run_used_fallback = True
-                self.last_fallback_reason = (
-                    last_error
-                    if last_error is not None
-                    else f"only {len(accepted) - needed} of {n} LLM scenarios passed validation"
+            # Category-diversity guarantee: BEFORE filling any remaining
+            # count, top up every canonical category the LLM output failed
+            # to cover, drawing from the deterministic fallback. Top-ups
+            # count toward ``n`` so the batch-size contract is preserved.
+            llm_count = len(accepted)
+            missing = self._missing_categories(accepted)
+            room = max(0, n - llm_count)
+            self.last_run_diagnostics = {
+                "missing_categories": len(missing),
+                "topup_from_fallback": 0,
+            }
+            fallback_batch: list[AdversarialScenario] = []
+            if missing and room > 0:
+                fallback_batch.extend(
+                    self._top_up_missing_categories(task_id, missing[:room])
                 )
+            needed = n - llm_count - len(fallback_batch)
+            if needed > 0:
+                fallback_batch.extend(self._fallback.generate(task_id, needed))
+            if fallback_batch:
+                self.last_run_used_fallback = True
+                self.last_run_diagnostics["topup_from_fallback"] = len(fallback_batch)
+                accepted.extend(self._with_batch_ids(fallback_batch, task_id))
+                if last_error is not None:
+                    self.last_fallback_reason = last_error
+                elif len(fallback_batch) > needed:
+                    self.last_fallback_reason = (
+                        f"LLM output missed {len(missing)} of "
+                        f"{len(ADVERSARIAL_CATEGORIES)} categories; topped up "
+                        f"{len(fallback_batch) - needed} from the rule-based fallback"
+                    )
+                else:
+                    self.last_fallback_reason = (
+                        f"only {llm_count} of {n} LLM scenarios passed validation"
+                    )
             scenarios = accepted
 
         self.scenarios_generated += len(scenarios)
         return scenarios
+
+    @staticmethod
+    def _missing_categories(
+        scenarios: Sequence[AdversarialScenario],
+    ) -> list[str]:
+        """Return the canonical categories absent from ``scenarios``, in order."""
+        present = {scenario.category for scenario in scenarios}
+        return [cat for cat in ADVERSARIAL_CATEGORIES if cat not in present]
+
+    def _top_up_missing_categories(
+        self,
+        task_id: str,
+        missing: Sequence[str],
+    ) -> list[AdversarialScenario]:
+        """Pick one scenario per missing category, preserving ``missing`` order.
+
+        The rule-based fallback derives its RNG from ``(seed, task_id)`` only,
+        so repeated single-scenario draws are identical; instead, one batch of
+        ``n = len(ADVERSARIAL_CATEGORIES)`` scenarios is drawn — its cycling
+        layout guarantees every category appears exactly once — and each
+        missing category is served from the first matching candidate.
+        """
+        pool = {
+            s.category: s
+            for s in reversed(
+                self._fallback.generate(task_id, len(ADVERSARIAL_CATEGORIES))
+            )
+        }
+        topped_up: list[AdversarialScenario] = []
+        for category in missing:
+            candidate = pool.get(category)
+            if candidate is None:
+                # Deterministic fallback failed to produce the category
+                # (should not happen); skip rather than duplicate coverage.
+                continue
+            topped_up.append(candidate)
+        return topped_up
+
+    @staticmethod
+    def _with_batch_ids(
+        scenarios: Sequence[AdversarialScenario], task_id: str
+    ) -> list[AdversarialScenario]:
+        """Re-id fallback scenarios as ``adv-<task>-<i>`` (contiguous, stable).
+
+        Category top-ups and plain count fills are merged into one batch, so
+        ids are reassigned contiguously from 0 — keeping fallback ids unique
+        within the batch and deterministic regardless of how the batch was
+        assembled.
+        """
+        return [
+            AdversarialScenario(
+                id=f"adv-{task_id}-{i:04d}",
+                category=s.category,
+                name=s.name,
+                params=s.params,
+                difficulty=s.difficulty,
+            )
+            for i, s in enumerate(scenarios)
+        ]
 
     @staticmethod
     def _assign_ids(items: Iterable[AdversarialScenario | None]) -> list[AdversarialScenario]:

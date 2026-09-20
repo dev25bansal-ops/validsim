@@ -1,10 +1,10 @@
 """Simulation execution: backend interface plus a deterministic mock backend.
 
-The MVP ships :class:`MockIsaacBackend`, a fast, seeded stand-in for the real
-Isaac Sim / Isaac Lab backend, reproducing the observable contract (outcomes,
-contact forces, human proximity, failure taxonomy) so the evaluation pipeline
-can run without a GPU. Swapping in the real backend only requires implementing
-:class:`SimulationBackend`.
+This module ships :class:`MockIsaacBackend`, a fast, seeded stand-in for the
+real Isaac Sim / Isaac Lab backend, reproducing the observable contract
+(outcomes, contact forces, human proximity, failure taxonomy) so the
+evaluation pipeline runs without a GPU. Swapping in the real backend only
+requires implementing :class:`SimulationBackend`.
 """
 
 from __future__ import annotations
@@ -187,10 +187,10 @@ def run_validation(
 
 
 __all__ = [
-    "FAILURE_MODES",
     "EpisodeResult",
-    "SimulationBackend",
+    "FAILURE_MODES",
     "MockIsaacBackend",
+    "SimulationBackend",
     "run_validation",
     "stable_seed",
 ]

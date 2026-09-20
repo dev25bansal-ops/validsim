@@ -1,10 +1,10 @@
 """Lightweight bootstrap statistics for ValidSim scoring.
 
 Implemented in pure Python (``random`` + ``statistics``) so the core engine
-carries no numeric dependency. The sample sizes used by the MVP (hundreds of
-thousands of episodes at most, resampled ~1000 times) run comfortably in
-process; a NumPy/CuPy backend can replace these later without changing the
-public signatures.
+carries no numeric dependency. The sample sizes the platform scores against
+(hundreds of thousands of episodes at most, resampled ~1000 times) run
+comfortably in process; the public signatures are fixed so a NumPy/CuPy
+backend can drop in behind them without touching callers.
 """
 
 from __future__ import annotations

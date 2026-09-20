@@ -46,5 +46,7 @@ Desktop.ini
 # Secrets / env
 .env
 .env.*
+# ...but keep the committed example template
+!.env.example
 *.pem
 *.key

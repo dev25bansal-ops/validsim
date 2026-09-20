@@ -8,7 +8,7 @@ Duration is compared descriptively against relative-change thresholds.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 from validsim.engine.evaluation import EvaluationResult
 from validsim.engine.stats import two_proportion_bootstrap_test
@@ -87,7 +87,9 @@ def _binary_sample(success_count: int, total: int) -> list[float]:
     return [1.0] * success_count + [0.0] * (total - success_count)
 
 
-def _success_item(current: EvaluationResult, baseline: EvaluationResult, seed: int) -> RegressionItem:
+def _success_item(
+    current: EvaluationResult, baseline: EvaluationResult, seed: int
+) -> RegressionItem:
     """Compare success rates with the two-proportion permutation test."""
     if current.total_episodes == 0 or baseline.total_episodes == 0:
         delta = current.success_rate - baseline.success_rate
@@ -150,7 +152,5 @@ def compare(
     Returns:
         A :class:`RegressionReport` with one item per compared metric.
     """
-    items: Sequence[RegressionItem] = (
-        [_success_item(current, baseline, seed), _duration_item(current, baseline)]
-    )
-    return RegressionReport(items=list(items))
+    items = [_success_item(current, baseline, seed), _duration_item(current, baseline)]
+    return RegressionReport(items=items)

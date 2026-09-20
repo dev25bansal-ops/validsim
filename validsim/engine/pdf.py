@@ -1,4 +1,4 @@
-"""Branded PDF scorecard export (Week-8 deliverable).
+"""Branded PDF scorecard export.
 
 Renders a frozen :class:`~validsim.engine.scorecard.Scorecard` (as its
 ``to_dict`` mapping) into a one-page, print-ready PDF via reportlab's
@@ -20,9 +20,10 @@ missing (surfaced as a friendly ``RuntimeError("pip install reportlab")``).
 from __future__ import annotations
 
 import io
-from typing import Any
+from typing import Any, Callable
 
 from validsim import __version__
+from validsim.engine._coerce import as_float
 
 __all__ = ["render_scorecard_pdf", "scorecard_pdf_bytes"]
 
@@ -34,17 +35,9 @@ _TABLE_HEADER_BG = "#1E3A8A"  # text-navy header band
 _ROW_ALT_BG = "#F1F5F9"
 
 
-def _as_float(value: Any, default: float | None = None) -> float | None:
-    """Best-effort float coercion, returning ``default`` on bad/missing input."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _num(value: Any, spec: str = "{:.2f}", dash: str = "\u2014") -> str:
     """Format an optional number with ``spec``; ``dash`` when absent/unparseable."""
-    parsed = _as_float(value)
+    parsed = as_float(value, default=None)
     return dash if parsed is None else spec.format(parsed)
 
 
@@ -52,7 +45,7 @@ def _ci_text(ci: Any) -> str:
     """Render a 95% CI ``[low, high]`` pair, or ``not available`` when absent."""
     if not isinstance(ci, (list, tuple)) or len(ci) != 2:
         return "not available"
-    low, high = _as_float(ci[0]), _as_float(ci[1])
+    low, high = as_float(ci[0], default=None), as_float(ci[1], default=None)
     if low is None or high is None:
         return "not available"
     return f"[{low:.4f}, {high:.4f}]"
@@ -80,9 +73,9 @@ def _build_story(scorecard: dict[str, Any]) -> tuple[list[Any], float]:
     task_id = str(scorecard.get("task_id", "\u2014"))
     created_at = str(scorecard.get("created_at", "\u2014"))
     decision = str(scorecard.get("deploy_decision", "BLOCK")).upper()
-    composite = _as_float(scorecard.get("composite_score"), 0.0)
-    threshold = _as_float(scorecard.get("threshold"), 85.0)
-    success_rate = _as_float(scorecard.get("success_rate"), 0.0)
+    composite = as_float(scorecard.get("composite_score"), 0.0)
+    threshold = as_float(scorecard.get("threshold"), 85.0)
+    success_rate = as_float(scorecard.get("success_rate"), 0.0)
     episodes = scorecard.get("episode_count", 0)
     taxonomy = scorecard.get("failure_taxonomy") or {}
 
@@ -210,7 +203,7 @@ def _build_story(scorecard: dict[str, Any]) -> tuple[list[Any], float]:
     return story, content_width
 
 
-def _make_footer():
+def _make_footer() -> Callable[[Any, Any], None]:
     """Return an ``onPage`` callback drawing the branded CONFIDENTIAL footer."""
     from reportlab.lib import colors
     from reportlab.lib.units import mm

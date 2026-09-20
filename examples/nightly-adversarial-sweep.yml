@@ -1,0 +1,152 @@
+# ValidSim — Nightly Adversarial Sweep (ready-to-copy example)
+#
+# Copy this file to `.github/workflows/nightly-adversarial-sweep.yml` in your repo.
+#
+# Companion to `robot-validation.yml`: that workflow keeps the episode budget
+# small for fast PR feedback (1000 + 50); this one is the nightly deep pass —
+# 2000 nominal episodes plus 200 adversarial scenarios at 03:00 UTC, with
+# workflow_dispatch for on-demand sweeps before a release cut. Schedule
+# triggers only fire from the default branch; dispatch works from any branch.
+#
+# Same MVP mode as the PR workflow: the CLI drives ValidSim's LOCAL mock
+# validation pipeline in your own job (no SaaS backend yet, no API key).
+# `run` caches the scorecard as JSON and `gate --latest` blocks the job on a
+# low composite score (exit 1 = BLOCK, exit 2 = empty cache / misuse).
+#
+# This workflow calls the CLI directly (`python -m validsim.cli`) instead of
+# the composite actions — the sweep only needs run → gate, and running with
+# `-m` from the checkout is the supported monorepo mode (no pyproject.toml
+# yet, so there is nothing to pip-install from the repo itself).
+
+name: Nightly Adversarial Sweep
+
+on:
+  schedule:
+    - cron: "0 3 * * *"     # nightly at 03:00 UTC
+  workflow_dispatch:        # manual on-demand sweep
+
+# Read-only job: nothing writes to the repo, and artifact upload does not
+# need extra GITHUB_TOKEN scopes.
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60     # 2000+200 is the heavy pass; fail loudly, don't hang
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Composite actions cannot set up Python themselves — do it here.
+      # pip cache keyed on both requirements files (nightly installs are
+      # frequent; they should be fast).
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      # Monorepo mode (see docs/github-actions.md §3): only third-party deps
+      # are pip-installed; `python -m validsim.cli` runs straight from the
+      # checkout, so no PYTHONPATH shimming is needed either.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # The large-budget sweep. In MVP the checkpoint value is an opaque id
+      # carried through to the scorecard (the mock backend never reads the
+      # file) — same semantics as the validate action's `checkpoint` input.
+      # Task/robot/environment default to pick-place / franka_panda /
+      # mock-scene; the 85.0 approval threshold is stored with the run
+      # (override at run time with --threshold, or at gate time below).
+      - name: Run Nightly Adversarial Sweep
+        run: |
+          python -m validsim.cli run --episodes 2000 --adversarial 200 --checkpoint nightly-checkpoint
+
+      # The gate in action: reads the scorecard cache the step above wrote
+      # and exits 1 on BLOCK (composite < threshold), so the job — and any
+      # job wired behind it via `needs:` — fails on a bad nightly score.
+      # `--latest` targets the newest cached run; exactly one of --run-id /
+      # --latest is accepted.
+      - name: Gate on Nightly Composite
+        run: |
+          python -m validsim.cli gate --latest
+
+      # The MVP CLI has no native JUnit output yet, so wrap the newest cached
+      # scorecard into one JUnit XML testcase (stdlib only — no extra deps).
+      # When the CLI gains a native formatter, call it here instead. Always
+      # runs, so the upload step below still has a file when the gate BLOCKs.
+      - name: Wrap Nightly Scorecard as JUnit XML
+        if: always()                              # produce evidence even on BLOCK
+        run: |
+          python - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          cache_path = Path(".validsim") / "scorecards.json"
+          out_path = Path("validsim-nightly-junit.xml")
+          if not cache_path.exists():
+              print("no scorecard cache — the run step failed before caching; skipping JUnit wrap")
+              raise SystemExit(0)
+
+          runs = json.loads(cache_path.read_text(encoding="utf-8"))
+          if not runs:
+              print("scorecard cache is empty; skipping JUnit wrap")
+              raise SystemExit(0)
+
+          # Same ordering as the CLI's --latest: newest by created_at.
+          sc = max(runs.values(), key=lambda entry: str(entry.get("created_at", "")))
+          blocked = float(sc["composite_score"]) < float(sc["threshold"])
+
+          suites = ET.Element(
+              "testsuites",
+              name="validsim-nightly-adversarial-sweep",
+              tests="1",
+              failures="1" if blocked else "0",
+          )
+          suite = ET.SubElement(
+              suites,
+              "testsuite",
+              name="nightly-adversarial-sweep",
+              tests="1",
+              failures="1" if blocked else "0",
+          )
+          case = ET.SubElement(
+              suite, "testcase", name=f"gate:{sc['run_id']}", classname="validsim.cli.gate"
+          )
+          if blocked:
+              failure = ET.SubElement(
+                  case,
+                  "failure",
+                  message=(
+                      f"composite {sc['composite_score']} below threshold {sc['threshold']}"
+                  ),
+              )
+              failure.text = f"deploy_decision={sc['deploy_decision']}"
+          ET.indent(suites, space="  ")
+          ET.ElementTree(suites).write(out_path, encoding="utf-8", xml_declaration=True)
+          print(f"wrote {out_path} (run {sc['run_id']}, decision {sc['deploy_decision']})")
+          PY
+
+      # Upload the raw evidence regardless of the gate verdict (always()):
+      # the JSON scorecard cache written by `run` (default location, see
+      # VALIDSIM_CACHE_FILE) plus the JUnit wrapper for the Actions UI.
+      # Same-job requirement: `gate --latest` reads the cache written above,
+      # so run → gate → upload must stay in this job (the cache lives on the
+      # runner; cross-run lookups are a cloud-backend feature).
+      - name: Upload Scorecard Cache and JUnit Report
+        if: always()                              # artifacts even when the gate BLOCKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-adversarial-sweep
+          path: |
+            .validsim/scorecards.json
+            validsim-nightly-junit.xml
+          if-no-files-found: warn                 # run step failed before caching anything
+          retention-days: 30                      # nightly sweeps pile up fast

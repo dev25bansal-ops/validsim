@@ -98,6 +98,20 @@ def _scenario_payload(scenario: AdversarialScenario | None) -> list[dict[str, An
     ]
 
 
+def _scenarios_payload(
+    scenarios: list[AdversarialScenario] | None,
+) -> list[dict[str, Any]]:
+    """Serialize many scenarios into the ``scenarios`` list of the request body.
+
+    This is the batched counterpart of :func:`_scenario_payload`: it applies the
+    identical per-scenario wire shape to each entry and concatenates the results,
+    so a batch request is byte-for-byte what the single-episode path would send
+    for the same scenarios. ``None`` and an empty list both mean "no adversarial
+    episodes" and serialize to an empty list.
+    """
+    return [payload for scenario in (scenarios or []) for payload in _scenario_payload(scenario)]
+
+
 def _body_snippet(response: httpx.Response, limit: int = 200) -> str:
     """Return a truncated, single-line excerpt of a response body for errors."""
     try:
@@ -238,7 +252,9 @@ def _episode_from_dict(
             f"{base_seed} plus position {index}); seeded determinism is part of the contract",
         )
     if episode.collision_count < 0:
-        raise _contract_error(label, f"field 'collision_count' must be >= 0, got {episode.collision_count}")
+        raise _contract_error(
+            label, f"field 'collision_count' must be >= 0, got {episode.collision_count}"
+        )
     if episode.failure_mode is not None and episode.failure_mode not in FAILURE_MODES:
         raise _contract_error(
             label,
@@ -267,9 +283,10 @@ def _episodes_from_reply(
     if not isinstance(data, dict):
         raise _contract_error("reply", f"must be a JSON object, got {type(data).__name__}")
     if "episodes" not in data:
+        keys = ", ".join(sorted(map(str, data))) or "nothing"
         raise _contract_error(
             "reply",
-            f"has no top-level 'episodes' key (got {', '.join(sorted(map(str, data))) or 'nothing'})",
+            f"has no top-level 'episodes' key (got {keys})",
         )
     raw = data["episodes"]
     if not isinstance(raw, list):
@@ -406,6 +423,65 @@ class IsaacWorkerBackend:
         )
         results = self._post_run(payload)
         return results[0]
+
+    def run_episodes(
+        self,
+        task: TaskConfig,
+        base_seed: int,
+        episodes: int,
+        randomization_level: str,
+        scenarios: list[AdversarialScenario] | None = None,
+    ) -> list[EpisodeResult]:
+        """Run a batch of episodes in a single ``POST /episodes/run`` round-trip.
+
+        This is the batching counterpart of :meth:`run_episode`: where the
+        single-episode path pays one round-trip per episode (the degenerate
+        batch-of-one the wire contract already permits), this submits
+        ``episodes`` nominal runs plus any ``scenarios`` adversarial runs in one
+        request and splits the reply back into per-episode results. The worker
+        returns ``episodes + len(scenarios)`` results, nominal first, each
+        echoing ``base_seed + position`` — so the returned list is exactly that
+        length, ordered, and every entry is validated through the same strict
+        contract checks as :meth:`run_episode` (exact field set, seed echo,
+        ``failure_mode`` taxonomy, randomization-level echo).
+
+        Args:
+            task: The task specification driving the batch.
+            base_seed: Seed for position 0; episode ``i`` must echo
+                ``base_seed + i`` (matching
+                :func:`validsim.sim.runner.run_validation`'s per-episode seeds).
+            episodes: Number of nominal (non-adversarial) episodes to run.
+            randomization_level: Level requested for the whole batch; echoed
+                per episode and checked against it.
+            scenarios: Adversarial scenarios appended after the nominal
+                episodes; each becomes one extra episode. ``None``/empty means
+                a nominal-only batch.
+
+        Returns:
+            The validated :class:`EpisodeResult` list, nominal episodes first
+            then one per scenario, in request order. An empty batch (no
+            ``episodes`` and no ``scenarios``) is a no-op that returns ``[]``
+            without touching the network.
+
+        Raises:
+            ValueError: If ``episodes`` is negative, or no worker URL is
+                configured (the latter only when the batch actually posts).
+            SimWorkerError: On transport failure after retries, an HTTP error
+                status, or any deviation from the episode contract.
+        """
+        if episodes < 0:
+            raise ValueError(f"episodes must be >= 0, got {episodes}")
+        scenario_list = list(scenarios or [])
+        if episodes == 0 and not scenario_list:
+            return []  # empty batch: nothing to run, so never hit the network
+        payload = self._build_payload(
+            task,
+            base_seed,
+            randomization_level,
+            _scenarios_payload(scenario_list),
+            episodes=episodes,
+        )
+        return self._post_run(payload)
 
     def is_alive(self) -> bool:
         """Probe ``GET /health``; ``True`` only for a 2xx answer.

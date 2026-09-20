@@ -1,9 +1,10 @@
 """In-memory, thread-safe validation result store.
 
-The MVP keeps completed runs in a process-local dictionary guarded by a
+Completed runs are kept in a process-local dictionary guarded by a
 :class:`threading.Lock`. The interface (save/get/list/history) is deliberately
-narrow so it can be backed by Postgres or an object store later without
-touching callers.
+narrow so alternative backends (e.g. the SQLite store in
+:mod:`validsim.store.sqlite`) satisfy the same contract without touching
+callers.
 """
 
 from __future__ import annotations
@@ -91,17 +92,59 @@ class ValidationStore:
         with self._lock:
             return self._runs.get(run_id)
 
+    def delete(self, run_id: str) -> bool:
+        """Remove the run for ``run_id``; return ``True`` if it existed.
+
+        The pop happens under the store lock so a concurrent reader never
+        observes a partially removed record. The operation is idempotent: a
+        second delete of the same id (or an unknown id) removes nothing and
+        returns ``False``.
+        """
+        with self._lock:
+            return self._runs.pop(run_id, None) is not None
+
     def list_for_checkpoint(self, checkpoint_id: str) -> list[StoredRun]:
         """All runs for a checkpoint, oldest first."""
         with self._lock:
             matches = [r for r in self._runs.values() if r.checkpoint_id == checkpoint_id]
         return sorted(matches, key=lambda r: r.created_at)
 
-    def history(self) -> list[StoredRun]:
-        """Every stored run, oldest first."""
+    def history(
+        self, since: str | None = None, until: str | None = None
+    ) -> list[StoredRun]:
+        """Every stored run, oldest first, optionally bounded by a date range.
+
+        Args:
+            since: Inclusive lower bound, an ISO-8601 string. Runs whose
+                ``created_at`` precedes it are dropped.
+            until: Inclusive upper bound, an ISO-8601 string. Runs whose
+                ``created_at`` follows it are dropped.
+
+        ``created_at`` is stored as ISO-8601 UTC text in a fixed format, so
+        lexicographic string comparison equals chronological comparison; the
+        bounds are therefore applied directly with ``>=``/``<=``. A ``None``
+        bound leaves that side unbounded, and with both ``None`` the result is
+        identical to the unfiltered history.
+        """
         with self._lock:
             runs = list(self._runs.values())
+        if since is not None:
+            runs = [r for r in runs if r.created_at >= since]
+        if until is not None:
+            runs = [r for r in runs if r.created_at <= until]
         return sorted(runs, key=lambda r: r.created_at)
+
+    def count(self) -> int:
+        """Number of stored runs.
+
+        Equivalent to :meth:`__len__` but exposed as a method so every
+        :func:`create_store` backend offers the same ``count()`` surface for
+        callers (e.g. the CLI ``models`` footer) that prefer an explicit call
+        over ``len(store)``. The read happens under the store lock so the
+        value is a consistent snapshot of the dictionary.
+        """
+        with self._lock:
+            return len(self._runs)
 
     def __len__(self) -> int:
         """Number of stored runs."""

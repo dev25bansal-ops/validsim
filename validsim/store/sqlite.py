@@ -111,7 +111,7 @@ def _run_from_row(row: sqlite3.Row) -> StoredRun:
     Full detail (episodes, evaluation, safety, regression, baseline id) is
     restored exactly when present. Legacy rows lacking the detail columns fall
     back to an approximate evaluation/safety rebuilt from the scorecard, with
-    empty episodes and no regression — matching the original MVP behaviour.
+    empty episodes and no regression — the documented legacy-row fallback.
     """
     scorecard = _scorecard_from_dict(json.loads(row["scorecard_json"]))
     episodes = [EpisodeResult(**e) for e in _loads(row, "episodes_json") or []]
@@ -232,6 +232,21 @@ class SqliteValidationStore(ValidationStore):
             ).fetchone()
         return _run_from_row(row) if row is not None else None
 
+    def delete(self, run_id: str) -> bool:
+        """Delete ``run_id``'s row; return ``True`` if a row was removed.
+
+        Mirrors the in-memory store's contract: an unknown id deletes nothing
+        and returns ``False``. The id travels through a ``?`` placeholder
+        (never interpolated); ``sqlite3`` reports ``rowcount`` for ``DELETE``,
+        so a no-match delete yields ``0``.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM validations WHERE run_id = ?", (run_id,)
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
+
     def list_for_checkpoint(self, checkpoint_id: str) -> list[StoredRun]:
         """All runs for a checkpoint, oldest first."""
         with self._lock:
@@ -242,13 +257,48 @@ class SqliteValidationStore(ValidationStore):
             ).fetchall()
         return [_run_from_row(r) for r in rows]
 
-    def history(self) -> list[StoredRun]:
-        """Every stored run, oldest first."""
+    def history(
+        self, since: str | None = None, until: str | None = None
+    ) -> list[StoredRun]:
+        """Every stored run, oldest first, optionally bounded by a date range.
+
+        ``created_at`` is persisted as ISO-8601 TEXT, so SQLite's lexical
+        ``>=``/``<=`` comparison equals chronological comparison for these
+        fixed-format UTC stamps; both bounds are inclusive. Each bound travels
+        through a ``?`` placeholder (never interpolated into the SQL). With
+        both ``None`` the statement is the original unfiltered history.
+        """
+        clauses: list[str] = []
+        params: list[str] = []
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("created_at <= ?")
+            params.append(until)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM validations ORDER BY created_at ASC"
+                f"SELECT * FROM validations{where} ORDER BY created_at ASC",
+                params,
             ).fetchall()
         return [_run_from_row(r) for r in rows]
+
+    def count(self) -> int:
+        """Number of persisted runs.
+
+        Runs ``SELECT COUNT(*) FROM validations`` — a fixed statement with no
+        user-supplied values, so there is nothing to interpolate and the query
+        is injection-free by construction (values would travel through ``?``
+        placeholders, as elsewhere in this backend). Equivalent to
+        :meth:`__len__`; exposed as a method so every backend offers the same
+        ``count()`` surface for callers such as the CLI ``models`` footer.
+        """
+        with self._lock:
+            (count,) = self._conn.execute(
+                "SELECT COUNT(*) FROM validations"
+            ).fetchone()
+        return int(count)
 
     def __len__(self) -> int:
         """Number of persisted runs."""

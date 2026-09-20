@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run full test suite (pytest)
         run: python -m pytest tests/ -v --junitxml=nightly-pytest-results.xml

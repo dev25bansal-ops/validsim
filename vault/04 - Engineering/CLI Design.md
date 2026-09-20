@@ -53,6 +53,63 @@ $ validsim ci --github-actions --fail-below 80
 
 Full endpoint reference: [[API Design]].
 
+## Implemented command surface
+
+The shipped CLI (Typer) adds async-job, reporting, and registry commands on top of the original `run` / `status` / `scorecard` / `gate` surface. Run-targeting commands accept `--run-id <id>` **or** `--latest` (newest cached run) — exactly one, otherwise exit `2`.
+
+```bash
+# Enqueue an async validation job (a `validsim worker` runs it later)
+$ validsim job enqueue --checkpoint gr00t_v42 --task bin_picking \
+    --episodes 5000 --adversarial 100
+Enqueued job vrun-1a2b3c4d (status: queued)
+
+# List queued jobs (JOB ID · STATUS · CHECKPOINT · CREATED)
+$ validsim jobs
+
+# Run a worker against the queue + store
+$ validsim worker --once                 # claim & run one job, then exit
+$ validsim worker --watch                # loop, printing "job <id> -> <status>"
+$ validsim worker --watch --max-jobs 10  # bounded loop, self-terminating
+$ validsim worker                        # loop until Ctrl-C (SIGTERM-safe)
+
+# Render a cached scorecard as a report
+$ validsim report --latest --format markdown   # or --format html
+$ validsim report --run-id vrun-1a2b3c4d --json # raw cached scorecard JSON
+
+# Gate a deploy; --json emits {run_id, composite_score, threshold, decision}
+$ validsim gate --latest --threshold 85 --json
+
+# Delete a stored run (CLI parity for the API-only DELETE)
+$ validsim delete --run-id vrun-1a2b3c4d
+$ validsim delete --latest
+
+# Checkpoint registry aggregated from the store
+$ validsim models
+
+# Regression report for two stored runs
+$ validsim compare --candidate vrun-aaaa1111 --baseline vrun-bbbb2222
+$ validsim compare --candidate-latest --baseline vrun-bbbb2222
+
+# Version + one-line feature summary (always exits 0)
+$ validsim version
+```
+
+## Command → behavior (implemented)
+
+| Command | Backing | Notes |
+|---|---|---|
+| `job enqueue` | `JobQueue.enqueue` (env `VALIDSIM_JOB_QUEUE`: memory/Redis) | mirrors `POST /api/v1/jobs`; prints id + `queued` |
+| `jobs` | `JobQueue.list` | reads the same queue the API enqueues to; empty ⇒ friendly notice, exit 0 |
+| `worker` | `JobWorker.run_once` / `run_forever` | `--once` takes precedence; `--watch` echoes `job → status`; `--max-jobs N` bounds any loop (0 = unlimited); `--poll-seconds` idle interval |
+| `report` | `scorecard_to_markdown` / `scorecard_to_html` | `--format markdown\|html` (default markdown); `--json` bypasses rendering ([[Scorecard UX]]) |
+| `gate` | cached scorecard | `--json` for CI consumers; exit `1` on BLOCK either way ([[Product Principles]] #4) |
+| `delete` | `ValidationStore.delete` | exit `0` on success, `2` when the run is absent |
+| `models` | `store.history` + `store.count` | one row per checkpoint: runs, latest composite, decision, last validated |
+| `compare` | `engine.regression.compare` | `--candidate`/`--baseline` (+ `*-latest`); targets **stored** runs; deterministic `stable_seed` |
+| `version` | `__version__` | quick environment/CI sanity check |
+
+The `job enqueue` / `jobs` / `worker` trio is the CLI face of [[Async Job Queue]] and [[Job Queue Worker]]; `report` / `delete` / `models` / `compare` mirror the matching endpoints in [[API Design]].
+
 ## UX contracts
 
 > [!important] Design rules
@@ -77,4 +134,4 @@ Full endpoint reference: [[API Design]].
 - Auth via `VALIDSIM_API_KEY` env var — same secret the GitHub Action uses ([[GitHub Actions Integration]])
 - Roadmap: `validsim fleet` (gating at scale) and `validsim hil` ship only when those leave [[MVP Non-Goals]]
 
-Links: [[API Design]] · [[GitHub Actions Integration]] · [[MVP Scope]] · [[Home]]
+Links: [[API Design]] · [[GitHub Actions Integration]] · [[Async Job Queue]] · [[Job Queue Worker]] · [[Scorecard UX]] · [[MVP Scope]] · [[Home]]

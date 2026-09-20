@@ -14,7 +14,7 @@ requires-python = ">=3.10"
 dynamic = ["version"]
 
 # Runtime dependencies — keep in sync with requirements.txt
-# (requirements.txt additionally pins pytest, which lives in [dev] here).
+# (pytest is pinned in requirements-dev.txt and lives in [dev] here).
 dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
@@ -22,6 +22,7 @@ dependencies = [
     "typer>=0.12",
     "httpx>=0.27",
     "psycopg[binary]>=3.1",
+    "reportlab>=4.0",
 ]
 
 [project.optional-dependencies]

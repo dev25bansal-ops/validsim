@@ -45,6 +45,8 @@ Cross-check vs. plan: Year-1 ARR $240K–$450K at 8–15 customers ([[Financial 
 | Scorecard generation time | **< 5 min post-simulation** |
 | API uptime | **99.5%** |
 | Regression detection accuracy | **> 95%** |
+| Engineering velocity (test suite) | **190 → 1,274 tests** (2026-09-18 → 2026-09-20, [[Build Status]]); **~96%** line/branch coverage against a **90% enforced CI floor** |
+| Reliability & security posture | **100% build pass rate** (last 13 runs); **0 security HIGH findings outstanding** — audit H1–H3/M1/M3 closed 2026-09-20, [[Security Hardening]] |
 
 > [!warning] Throughput target is stated two ways in the founding doc
 > MVP benchmark: 1,000 episodes <30 min on **4× A100** ([[8-Week Sprint Plan]] W2). Platform KPI: 1,000 episodes <30 min on **8× A100**. Treat the 4-GPU figure as the demo bar and the 8-GPU figure as the production SLO; resolve wording in the next [[Decision Log]] entry.

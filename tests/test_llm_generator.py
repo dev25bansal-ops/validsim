@@ -13,7 +13,6 @@ from typing import Any
 import httpx
 import pytest
 
-from validsim.scenarios import generator as generator_mod
 from validsim.scenarios import llm_generator as llm_mod
 from validsim.scenarios.generator import (
     ADVERSARIAL_CATEGORIES,
