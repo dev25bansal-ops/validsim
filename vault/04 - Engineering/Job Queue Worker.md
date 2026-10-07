@@ -159,10 +159,10 @@ worker:
     redis:    { condition: service_healthy }
     postgres: { condition: service_healthy }
   healthcheck:
-    disable: true                  # base-image probe hits :8000, which the worker never serves
+    test: ["CMD", "python", "-c", "<Redis PING/PONG liveness proxy>"]
 ```
 
-The point of the shared env is the **handoff**: jobs enqueued through the API's `POST /api/v1/jobs` land in the same Redis queue the worker drains, and their results land in the same Postgres system-of-record the API reads back. `healthcheck: disable` is deliberate — the worker is not an HTTP server, so the base image's `:8000` probe would falsely mark it unhealthy.
+The point of the shared env is the **handoff**: jobs enqueued through the API's `POST /api/v1/jobs` land in the same Redis queue the worker drains, and their results land in the same Postgres system-of-record the API reads back. The worker has no HTTP server, so Compose uses a Redis reachability probe rather than the base image's `:8000` check.
 
 ## Hardening: depth-cap and SSE-deadline
 

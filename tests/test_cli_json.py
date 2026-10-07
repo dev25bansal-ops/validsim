@@ -6,7 +6,8 @@ Covers three features layered on top of the existing command set:
 * ``validate``      — a discoverability alias of ``run`` (same options,
   identical implementation).
 * ``gate --json``   — print the CI decision as JSON on stdout while keeping
-  the 0/1/2 exit-code contract.
+  the 0/1/2 exit-code contract (decided from the durable store, so these
+  tests request the ``durable_store`` fixture from ``conftest.py``).
 
 The Typer ``app``, the shared ``CliRunner`` and the autouse ``cache_file``
 fixture (which points ``VALIDSIM_CACHE_FILE`` at a temp file) are reused from
@@ -18,12 +19,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 # Reuse the CliRunner, cache-isolating autouse fixture and helpers verbatim so
 # these tests exercise the exact same harness as the base CLI suite.
 from test_cli import (  # noqa: F401  (cache_file is an autouse fixture)
     RUN_ID_RE,
     _invoke,
     _run_and_extract_id,
+    _run_at_threshold,
     cache_file,
     runner,
 )
@@ -131,21 +135,30 @@ class TestValidateAlias:
         assert "validate" in help_result.output
 
 
+@pytest.mark.usefixtures("durable_store")
 class TestGateJson:
-    """``gate --json`` prints the decision as JSON and keeps exit codes."""
+    """``gate --json`` prints the decision as JSON and keeps exit codes.
+
+    Every case needs the sqlite store: ``gate`` refuses to decide from the
+    per-process in-memory backend, and cross-checks the decision against
+    ``scorecard`` (which reads the JSON cache) to prove the two agree.
+    """
 
     def test_gate_json_approve(self) -> None:
-        _, run_id = _run_and_extract_id()
+        run_id, decision = _run_at_threshold("50")
+        assert decision == "APPROVE"
         scorecard = json.loads(
             _invoke("scorecard", "--run-id", run_id).output  # type: ignore[attr-defined]
         )
-        result = _invoke("gate", "--run-id", run_id, "--threshold", "0", "--json")
+        result = _invoke("gate", "--run-id", run_id, "--json")
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)  # type: ignore[arg-type]
-        assert set(payload) == {"run_id", "composite_score", "threshold", "decision"}
+        assert {
+            "run_id", "composite_score", "threshold", "decision"
+        } <= set(payload), "the documented gate JSON fields must all be present"
         assert payload["run_id"] == run_id
         assert payload["composite_score"] == scorecard["composite_score"]
-        assert payload["threshold"] == 0.0
+        assert payload["threshold"] == 50.0
         assert payload["decision"] == "APPROVE"
 
     def test_gate_json_block_preserves_exit_code(self) -> None:
@@ -172,20 +185,23 @@ class TestGateJson:
         assert payload["decision"] == scorecard["deploy_decision"]
 
     def test_gate_json_is_single_json_object(self) -> None:
-        _, run_id = _run_and_extract_id()
-        result = _invoke("gate", "--run-id", run_id, "--threshold", "0", "--json")
+        run_id, _ = _run_at_threshold("50")
+        result = _invoke("gate", "--run-id", run_id, "--json")
         assert result.exit_code == 0, result.output
         # The whole stdout must parse as one JSON object (no human log line).
         payload = json.loads(result.output)  # type: ignore[arg-type]
-        assert set(payload) == {"run_id", "composite_score", "threshold", "decision"}
+        assert {
+            "run_id", "composite_score", "threshold", "decision"
+        } <= set(payload)
 
     def test_gate_json_missing_run_exits_2(self) -> None:
         result = _invoke("gate", "--run-id", "vrun-deadbeef", "--json")
         assert result.exit_code == 2
 
     def test_gate_default_still_human_readable(self) -> None:
-        _, run_id = _run_and_extract_id()
-        result = _invoke("gate", "--run-id", run_id, "--threshold", "0")
+        run_id, decision = _run_at_threshold("50")
+        assert decision == "APPROVE"
+        result = _invoke("gate", "--run-id", run_id)
         assert result.exit_code == 0, result.output
         assert result.output.startswith("gate:")  # type: ignore[attr-defined]
         assert "APPROVE" in result.output  # type: ignore[attr-defined]

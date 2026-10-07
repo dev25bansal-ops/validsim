@@ -60,10 +60,16 @@ _CONFIG_ENV = (
 
 #: Declared metric names, mapped to the Prometheus type the exposition must
 #: advertise for each.
+#:
+#: The run/approval/block series are gauges, not counters: runs are deletable,
+#: so their counts decrease when a run is removed. Declaring a non-monotonic
+#: series as a counter breaks ``rate()`` and can make alerts fire backwards.
+#: Their ``_total`` suffix is kept for backward compatibility with existing
+#: dashboards; the ``gauge`` type is the load-bearing part.
 _EXPECTED_TYPES = {
-    "validsim_runs_total": "counter",
-    "validsim_approvals_total": "counter",
-    "validsim_blocks_total": "counter",
+    "validsim_runs_total": "gauge",
+    "validsim_approvals_total": "gauge",
+    "validsim_blocks_total": "gauge",
     "validsim_composite_score": "gauge",
     "validsim_build_info": "gauge",
     HTTP_METRIC_NAME: "counter",
@@ -347,6 +353,31 @@ class TestRunCounters:
         assert _value(third, "validsim_runs_total") == 1
         assert _value(third, "validsim_blocks_total") == 0
 
+    def test_run_series_are_gauges_because_deletion_lowers_them(
+        self, store: ValidationStore
+    ) -> None:
+        """A ``counter`` must be monotonic; these series demonstrably are not.
+
+        Runs are deletable, so ``validsim_runs_total`` falls from 2 to 1 after
+        a delete. Advertising that as a ``counter`` makes ``rate()`` return a
+        negative value on the next scrape and lets alerts such as
+        ``increase(...[5m]) < 0`` fire backwards. The value behaviour asserted
+        above is correct and intentional -- it is the *declared type* that must
+        be a gauge.
+        """
+        store.save(_make_run("vrun-0000000", "BLOCK", 10.0, "2026-01-01T00:00:00+00:00"))
+        store.save(_make_run("vrun-0000001", "APPROVE", 90.0, "2026-01-01T00:01:00+00:00"))
+        client = TestClient(create_app(store))
+        before = client.get("/metrics").text
+        assert _declared_types(before)["validsim_runs_total"] == "gauge"
+        assert _value(before, "validsim_runs_total") == 2
+
+        assert store.delete("vrun-0000000") is True
+        after = client.get("/metrics").text
+        assert _value(after, "validsim_runs_total") == 1
+        # Still a gauge after the decrease -- the type must not flip back.
+        assert _declared_types(after)["validsim_runs_total"] == "gauge"
+
 
 # --------------------------------------------------------------------------- #
 # Composite score gauge
@@ -372,7 +403,9 @@ class TestCompositeScoreGauge:
         text = render_metrics(store, Metrics())
         assert _value(text, "validsim_composite_score") == 55.5
 
-    def test_gauge_updates_after_a_newer_run_arrives(self, client: TestClient, seeded_store: ValidationStore) -> None:
+    def test_gauge_updates_after_a_newer_run_arrives(
+        self, client: TestClient, seeded_store: ValidationStore
+    ) -> None:
         assert _value(client.get("/metrics").text, "validsim_composite_score") == 72.5
         seeded_store.save(
             _make_run("vrun-latest1", "BLOCK", 6.75, "2026-01-01T12:00:00+00:00")
@@ -409,7 +442,9 @@ class TestBuildInfo:
         text = render_metrics(ValidationStore(), Metrics())
         assert f'validsim_build_info{{version="{__version__}"}} 1' in text
 
-    def test_build_info_matches_the_api_version_reported_by_health(self, client: TestClient) -> None:
+    def test_build_info_matches_the_api_version_reported_by_health(
+        self, client: TestClient
+    ) -> None:
         health = client.get("/api/v1/health").json()
         body = client.get("/metrics").text
         assert _value(body, "validsim_build_info", version=health["version"]) == 1
@@ -534,7 +569,8 @@ class TestExpositionFormat:
                 i for i, line in enumerate(lines) if line.startswith(f"# TYPE {name}")
             )
             sample_index = next(
-                i for i, line in enumerate(lines) if line.startswith(name + " ") or line.startswith(name + "{")
+                i for i, line in enumerate(lines)
+                if line.startswith(name + " ") or line.startswith(name + "{")
             )
             assert type_index < sample_index, f"TYPE for {name} must precede samples"
 

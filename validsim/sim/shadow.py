@@ -378,12 +378,20 @@ def _request(
     scenarios: list[dict[str, Any]] | None = None,
     *,
     task_id: str = "pick-place",
+    checkpoint_id: str | None = "ckpt-v41",
 ) -> dict[str, Any]:
-    """Build a ``POST /episodes/run`` body in the documented wire shape."""
+    """Build a ``POST /episodes/run`` body in the documented wire shape.
+
+    ``checkpoint_id`` is included because it is the field that tells a worker
+    which policy to load. A fixture that omitted it would pass against a
+    contract incapable of expressing the product's core input -- conformance
+    would certify the defect rather than catch it.
+    """
     return {
         "task_id": task_id,
         "robot": {"name": "franka_panda", "urdf_path": "robots/franka.urdf", "dof": 7},
         "environment": {"name": "kitchen", "scene_usd": "scenes/kitchen.usda"},
+        "checkpoint_id": checkpoint_id,
         "seed": seed,
         "episodes": episodes,
         "randomization_level": level,
@@ -460,6 +468,7 @@ def _task_from_request(request: dict[str, Any]) -> TaskConfig:
         environment=EnvironmentSpec(**request["environment"]),
         episodes=max(1, int(request.get("episodes", 1))),
         randomization=str(request["randomization_level"]),  # type: ignore[arg-type]
+        checkpoint_id=request.get("checkpoint_id"),
     )
 
 

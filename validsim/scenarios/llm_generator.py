@@ -1,12 +1,26 @@
-"""LLM-powered adversarial scenario generation (Week-4 upgrade).
+"""LLM-backed adversarial scenario generation — **opt-in, and not yet wired in**.
 
-This module adds an optional large-language-model backend on top of the
-rule-based :class:`~validsim.scenarios.generator.ScenarioGenerator`. The
-public surface is intentionally identical — :meth:`LLMScenarioGenerator.
-generate` accepts ``(task_id, n)`` and returns ``list[AdversarialScenario]``
-— so the LLM path is a drop-in replacement wherever the rule-based
-generator is used today. :func:`create_scenario_generator` picks the right
-backend from the environment so callers can swap without code changes.
+This module implements an optional large-language-model backend on top of the
+rule-based :class:`~validsim.scenarios.generator.ScenarioGenerator`. The public
+surface is intentionally identical — :meth:`LLMScenarioGenerator.generate`
+accepts ``(task_id, n)`` and returns ``list[AdversarialScenario]` — so the LLM
+path is a drop-in replacement wherever the rule-based generator is used.
+
+.. warning::
+    **This backend is not reachable from any entry point today.** The only
+    production code that generates scenarios is
+    :func:`validsim.engine.pipeline.run_and_score`, which hardcodes
+    ``ScenarioGenerator(seed=seed).generate(...)`` (``validsim/engine/pipeline.py:131``).
+    The API, the CLI and the job worker all funnel through that one function, so
+    :func:`create_scenario_generator` below has **zero production callers** and
+    setting ``VALIDSIM_LLM_API_KEY`` changes nothing about a validation run.
+
+    Treat this module as a *tested, unexercised* capability, not a shipped
+    feature. :func:`current_scenario_backend` exists so an operator can ask the
+    process which backend is actually in use instead of inferring it from the
+    environment. Wiring the pipeline to the factory is a deliberate future
+    change, and it is gated behind :data:`_ENABLE_ENV` so that when it happens
+    the default behaviour — and the default cost — do not change.
 
 .. warning::
     **Production notes.** All prompt text is authored and *versioned in this
@@ -18,9 +32,16 @@ backend from the environment so callers can swap without code changes.
     difficulty is clamped before it is ever constructed as an
     :class:`~validsim.scenarios.generator.AdversarialScenario`. LLM output is
     never executed as code, never interpolated into shell commands, and never
-    reaches the simulator unvalidated. Any provider or parse failure degrades
-    gracefully to the deterministic rule-based fallback, so a missing or
-    misbehaving LLM endpoint can never take validation runs down with it.
+    reaches the simulator unvalidated.
+
+.. note::
+    **Safety property.** Every provider or parse failure degrades to the
+    deterministic rule-based generator, and so does every *validation*
+    shortfall, so a missing, slow, rate-limited or misbehaving LLM endpoint can
+    never take a validation run down or starve it of scenarios. ``generate``
+    either returns exactly ``n`` scenarios or raises ``ValueError`` for a
+    negative ``n``; it never returns a short batch and never propagates a
+    provider exception. This is the invariant the test-suite exists to hold.
 """
 
 from __future__ import annotations
@@ -28,6 +49,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from typing import Any, Iterable, Protocol, Sequence, runtime_checkable
 
 import httpx
@@ -39,6 +61,8 @@ from validsim.scenarios.generator import (
 )
 
 __all__ = [
+    "current_scenario_backend",
+    "llm_enabled",
     "ScenarioProviderError",
     "ScenarioParseError",
     "ScenarioProvider",
@@ -56,6 +80,15 @@ _PROMPT_VERSION = "2025-w24-v1"
 _BASE_URL_ENV = "VALIDSIM_LLM_BASE_URL"
 _API_KEY_ENV = "VALIDSIM_LLM_API_KEY"
 _MODEL_ENV = "VALIDSIM_LLM_MODEL"
+
+#: Explicit opt-in switch for the LLM backend. Unset (or any non-truthy
+#: value) keeps the deterministic rule-based generator. This is separate from
+#: the API key on purpose: the presence of a credential must not by itself
+#: change the behaviour of a validation run.
+_ENABLE_ENV = "VALIDSIM_LLM_ENABLED"
+
+#: Values of :data:`_ENABLE_ENV` that count as "on". Anything else is off.
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 #: Used when ``VALIDSIM_LLM_BASE_URL`` is unset (OpenAI-compatible endpoint).
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -132,6 +165,8 @@ class OpenAICompatibleProvider:
             model or os.environ.get(_MODEL_ENV, "").strip() or _DEFAULT_MODEL
         )
         self._timeout = timeout
+        # One client per provider, reused across every request and retry.
+        self._client = httpx.Client(timeout=self._timeout)
 
     @property
     def url(self) -> str:
@@ -145,6 +180,15 @@ class OpenAICompatibleProvider:
 
     def complete(self, prompt: str) -> str:
         """POST ``prompt`` as a single user message; return message content.
+
+        The underlying :class:`httpx.Client` is created once per provider and
+        reused, so a retry does not pay for a fresh TCP/TLS handshake. The
+        client is closed by :meth:`close` (and by :meth:`__enter__`/
+        :meth:`__exit__`), which the owning
+        :class:`LLMScenarioGenerator` calls when it is done. A provider that
+        is never closed leaks the connection pool until the process exits,
+        which is acceptable for a long-lived generator and preferable to
+        rebuilding the pool on every single request.
 
         Raises:
             ScenarioProviderError: On any transport error, non-2xx status,
@@ -162,10 +206,9 @@ class OpenAICompatibleProvider:
             "Content-Type": "application/json",
         }
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(self._url, json=payload, headers=headers)
-                response.raise_for_status()
-                data: Any = response.json()
+            response = self._client.post(self._url, json=payload, headers=headers)
+            response.raise_for_status()
+            data: Any = response.json()
         except httpx.HTTPStatusError as exc:
             raise ScenarioProviderError(
                 f"HTTP {exc.response.status_code} from {self._url}"
@@ -184,6 +227,17 @@ class OpenAICompatibleProvider:
         if not isinstance(content, str):
             raise ScenarioProviderError("chat-completion content is not a string")
         return content
+
+    def close(self) -> None:
+        """Release the underlying connection pool. Safe to call repeatedly."""
+        self._client.close()
+
+    def __enter__(self) -> "OpenAICompatibleProvider":
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        self.close()
+        return False
 
 
 def build_scenario_prompt(
@@ -242,6 +296,48 @@ invent varied, realistic adversarial conditions):
 Return ONLY the JSON array — no prose, no commentary, no markdown fences. \
 Output {n} elements total.
 """
+
+
+#: Suffix appended to the prompt on each retry. Replaying a byte-identical
+#: request is a hot loop against a rate limiter, and many gateways cache by
+#: prompt hash — so the retry names the attempt and asks for a fresh sample.
+_RETRY_NOTE = (
+    "\n\n[ValidSim retry note] This is attempt {attempt} of {total}. The previous "
+    "response was unusable. Produce a different set of scenarios: vary the names "
+    "and parameters, and output exactly {n} elements."
+)
+
+
+def _retry_note(prompt: str, attempt: int, total: int) -> str:
+    """Return ``prompt`` annotated as retry number ``attempt`` of ``total``.
+
+    The versioned body is preserved verbatim and the note is appended, so the
+    prompt version recorded in the audit trail still describes the whole
+    request. ``n`` is recovered from the body's own "Output N elements"
+    instruction so this helper needs no extra argument.
+    """
+    count = _requested_count(prompt)
+    return prompt + _RETRY_NOTE.format(attempt=attempt, total=total, n=count)
+
+
+def _requested_count(prompt: str) -> int:
+    """Extract the requested element count from a rendered prompt.
+
+    Parses the ``Output N elements total.`` tail that
+    :func:`build_scenario_prompt` emits. Falls back to ``0`` if the marker is
+    absent, which only affects the wording of the retry note.
+    """
+    marker = "Output "
+    index = prompt.rfind(marker)
+    if index == -1:
+        return 0
+    digits = ""
+    for char in prompt[index + len(marker) :]:
+        if char.isdigit():
+            digits += char
+        elif digits:
+            break
+    return int(digits) if digits else 0
 
 
 def _clamp01(value: float) -> float:
@@ -343,6 +439,8 @@ class LLMScenarioGenerator:
         provider: ScenarioProvider,
         fallback: ScenarioGenerator | None = None,
         max_retries: int = 1,
+        backoff_base_s: float = 0.5,
+        backoff_max_s: float = 8.0,
     ) -> None:
         """Bind a provider, a deterministic fallback, and a retry budget.
 
@@ -352,12 +450,33 @@ class LLMScenarioGenerator:
                 defaults to a fresh :class:`ScenarioGenerator`.
             max_retries: Extra attempts after the first provider/parse
                 failure (total attempts = ``1 + max_retries``).
+            backoff_base_s: Delay before the *first* retry. Each subsequent
+                retry doubles it. ``0.0`` disables sleeping entirely, which is
+                what the test-suite and non-interactive callers want.
+            backoff_max_s: Ceiling on any single backoff delay, so a large
+                ``max_retries`` cannot stall a run for minutes.
+
+        Raises:
+            ValueError: If ``max_retries < 0`` or a backoff value is negative
+                or ``backoff_max_s < backoff_base_s``.
         """
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
+        if backoff_base_s < 0 or backoff_max_s < 0:
+            raise ValueError(
+                "backoff values must be >= 0, got "
+                f"backoff_base_s={backoff_base_s}, backoff_max_s={backoff_max_s}"
+            )
+        if backoff_max_s < backoff_base_s:
+            raise ValueError(
+                f"backoff_max_s ({backoff_max_s}) must be >= "
+                f"backoff_base_s ({backoff_base_s})"
+            )
         self._provider = provider
         self._fallback = fallback if fallback is not None else ScenarioGenerator()
         self._max_retries = max_retries
+        self._backoff_base_s = backoff_base_s
+        self._backoff_max_s = backoff_max_s
         self.scenarios_generated = 0
         self.last_run_used_fallback = False
         self.last_fallback_reason: str | None = None
@@ -382,6 +501,26 @@ class LLMScenarioGenerator:
         provider/parse errors the full batch comes from the fallback and
         :attr:`last_fallback_reason` records why.
 
+        Retries are real: attempt 1 sends the versioned prompt verbatim and each
+        later attempt appends :data:`_RETRY_NOTE` and is preceded by a
+        geometric, capped :meth:`_backoff_delay` sleep. A run therefore costs at
+        most ``1 + max_retries`` provider calls and
+        ``sum(backoff)`` seconds, and ``backoff_base_s=0.0`` removes the sleeping
+        entirely for non-interactive callers.
+
+        This method either returns exactly ``n`` valid scenarios or raises
+        ``ValueError``; it never returns a short batch and never propagates a
+        provider exception.
+
+        Args:
+            task_id: Identifier of the task under validation.
+            n: Number of scenarios to produce. ``0`` returns ``[]`` without
+                calling the provider at all.
+
+        Returns:
+            Exactly ``n`` schema-valid scenarios. Every id is task-scoped and
+            unique within the batch.
+
         Raises:
             ValueError: If ``n`` is negative (mirrors the rule-based API).
         """
@@ -397,17 +536,32 @@ class LLMScenarioGenerator:
         accepted: list[AdversarialScenario] = []
         last_error: str | None = None
 
-        for _attempt in range(1 + self._max_retries):
+        total_attempts = 1 + self._max_retries
+        for attempt in range(1, total_attempts + 1):
             try:
-                raw = self._provider.complete(prompt)
+                # Attempt 1 sends the versioned prompt verbatim. Later
+                # attempts append a retry note: replaying a byte-identical
+                # request to a rate-limited or briefly-down endpoint is a
+                # hot loop that the provider is likely to reject again, so
+                # the retry must differ in more than timing.
+                attempt_prompt = (
+                    prompt
+                    if attempt == 1
+                    else _retry_note(prompt, attempt, total_attempts)
+                )
+                raw = self._provider.complete(attempt_prompt)
                 parsed = _extract_json_array(raw)
             except Exception as exc:  # noqa: BLE001 - any provider failure degrades
                 last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < total_attempts:
+                    time.sleep(self._backoff_delay(attempt))
                 continue
             # This attempt parsed cleanly; any earlier transient error no
             # longer explains a validation shortfall below.
             last_error = None
-            accepted = self._assign_ids(_validate_item(item) for item in parsed)[:n]
+            accepted = self._assign_ids(
+                (_validate_item(item) for item in parsed), task_id
+            )[:n]
             break
 
         if last_error is not None and not accepted:
@@ -436,6 +590,11 @@ class LLMScenarioGenerator:
                 fallback_batch.extend(
                     self._top_up_missing_categories(task_id, missing[:room])
                 )
+            # The count-fill stage draws exactly the shortfall, so
+            # ``len(fallback_batch) - needed`` is precisely the number of
+            # category-diversity top-ups. ``needed`` is 0 exactly when the
+            # top-ups already filled the batch, in which case no reason is
+            # reported (nothing was short).
             needed = n - llm_count - len(fallback_batch)
             if needed > 0:
                 fallback_batch.extend(self._fallback.generate(task_id, needed))
@@ -443,15 +602,14 @@ class LLMScenarioGenerator:
                 self.last_run_used_fallback = True
                 self.last_run_diagnostics["topup_from_fallback"] = len(fallback_batch)
                 accepted.extend(self._with_batch_ids(fallback_batch, task_id))
-                if last_error is not None:
-                    self.last_fallback_reason = last_error
-                elif len(fallback_batch) > needed:
+                top_up_count = len(fallback_batch) - needed
+                if top_up_count > 0:
                     self.last_fallback_reason = (
                         f"LLM output missed {len(missing)} of "
                         f"{len(ADVERSARIAL_CATEGORIES)} categories; topped up "
-                        f"{len(fallback_batch) - needed} from the rule-based fallback"
+                        f"{top_up_count} from the rule-based fallback"
                     )
-                else:
+                elif needed > 0:
                     self.last_fallback_reason = (
                         f"only {llm_count} of {n} LLM scenarios passed validation"
                     )
@@ -459,6 +617,16 @@ class LLMScenarioGenerator:
 
         self.scenarios_generated += len(scenarios)
         return scenarios
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Return the sleep, in seconds, before the retry that follows ``attempt``.
+
+        Geometric (``base * 2**(attempt-1)``) and capped at
+        ``backoff_max_s`` so a large ``max_retries`` cannot stall a run.
+        """
+        if self._backoff_base_s <= 0:
+            return 0.0
+        return min(self._backoff_max_s, self._backoff_base_s * (2 ** (attempt - 1)))
 
     @staticmethod
     def _missing_categories(
@@ -520,15 +688,26 @@ class LLMScenarioGenerator:
         ]
 
     @staticmethod
-    def _assign_ids(items: Iterable[AdversarialScenario | None]) -> list[AdversarialScenario]:
-        """Drop invalid items and assign stable ``llm-<i>`` ids to survivors."""
+    def _assign_ids(
+        items: Iterable[AdversarialScenario | None], task_id: str
+    ) -> list[AdversarialScenario]:
+        """Drop invalid items and assign stable ``llm-<task_id>-<i>`` ids.
+
+        The task id is part of the identifier. It previously was not, so
+        ``generate("task-A", 2)`` and ``generate("task-B", 2)`` both returned
+        ``["llm-0", "llm-1"]``: two distinct batches shared every id, and any
+        id-keyed store would have silently overwritten one task's scenarios
+        with another's. Task-scoping makes LLM ids consistent with the
+        rule-based path's ``adv-<task_id>-<i>`` ids, which were always
+        task-scoped.
+        """
         scenarios: list[AdversarialScenario] = []
         for item in items:
             if item is None:
                 continue
             scenarios.append(
                 AdversarialScenario(
-                    id=f"llm-{len(scenarios)}",
+                    id=f"llm-{task_id}-{len(scenarios)}",
                     category=item.category,
                     name=item.name,
                     params=item.params,
@@ -543,17 +722,78 @@ def create_scenario_generator(
 ) -> LLMScenarioGenerator | ScenarioGenerator:
     """Environment-driven factory so callers can swap backends with no code change.
 
-    Returns an :class:`LLMScenarioGenerator` wired to
-    :class:`OpenAICompatibleProvider` when ``VALIDSIM_LLM_API_KEY`` is set;
-    otherwise the deterministic rule-based :class:`ScenarioGenerator` (the
-    historical default). The rule-based path performs no network I/O and is
-    fully reproducible, which is why it remains the default.
+    .. warning::
+        **This factory has no production caller.** The only production path that
+        builds scenarios is :func:`validsim.engine.pipeline.run_and_score`, which
+        hardcodes ``ScenarioGenerator(seed=seed).generate(...)`` at
+        ``validsim/engine/pipeline.py:131``. Nothing in the shipped API, CLI or
+        job worker calls this function, so setting the environment variables
+        below has **no effect on a validation run** until the pipeline is
+        changed to route through the factory. It is a working, tested
+        opt-in surface kept for that future change — not a live feature.
+
+    Returns an :class:`LLMScenarioGenerator` only when the feature is explicitly
+    opted into *and* a key is configured:
+
+    * ``VALIDSIM_LLM_ENABLED`` — the opt-in switch. Unset, empty, ``0``, ``false``
+        or ``no`` leaves the deterministic rule-based :class:`ScenarioGenerator`
+        selected. The rule-based path performs no network I/O and is fully
+        reproducible, which is why it is the default and why an API key alone
+        no longer silently changes behaviour.
+    * ``VALIDSIM_LLM_API_KEY`` — the credential. Required *and* sufficient
+        (base URL and model fall back to OpenAI-compatible defaults).
+
+    If the opt-in is on but no key is present, the factory **degrades to the
+    rule-based generator** rather than raising: a misconfigured optional feature
+    must not take a validation run down.
 
     Args:
         seed: Seed for the rule-based fallback (and the pure rule-based path).
+
+    Returns:
+        The selected generator. Never raises for a missing/!invalid LLM
+        configuration.
     """
-    if os.environ.get(_API_KEY_ENV, "").strip():
-        return LLMScenarioGenerator(
-            OpenAICompatibleProvider(), fallback=ScenarioGenerator(seed=seed)
-        )
-    return ScenarioGenerator(seed=seed)
+    fallback = ScenarioGenerator(seed=seed)
+    if not llm_enabled():
+        return fallback
+    if not os.environ.get(_API_KEY_ENV, "").strip():
+        return fallback
+    try:
+        return LLMScenarioGenerator(OpenAICompatibleProvider(), fallback=fallback)
+    except ScenarioProviderError:
+        # Never let an optional feature's misconfiguration break a run.
+        return fallback
+
+
+def llm_enabled() -> bool:
+    """Whether ``VALIDSIM_LLM_ENABLED`` opts into the LLM backend.
+
+    Only an explicit truthy value enables it. Anything else — unset, empty,
+    ``0``, ``false``, ``no``, ``off`` — leaves the deterministic path selected.
+    """
+    return os.environ.get(_ENABLE_ENV, "").strip().lower() in _TRUTHY
+
+
+def current_scenario_backend() -> str:
+    """Return a short label naming the backend a run would actually use.
+
+    This reports the *effective* backend for the current environment, which is
+    always :func:`validsim.engine.pipeline.run_and_score`'s hardcoded
+    rule-based :class:`~validsim.scenarios.generator.ScenarioGenerator` unless
+    the pipeline is changed to call :func:`create_scenario_generator`. When the
+    opt-in is on but unusable, it names the misconfiguration instead of
+    implying the LLM path is active.
+
+    Returns:
+        ``"rule-based"``, ``"llm"``, or ``"rule-based (misconfigured: ...) ..."``.
+    """
+    if not llm_enabled():
+        return "rule-based"
+    if not os.environ.get(_API_KEY_ENV, "").strip():
+        return "rule-based (misconfigured: no API key)"
+    try:
+        OpenAICompatibleProvider()
+    except ScenarioProviderError as exc:
+        return f"rule-based (misconfigured: {exc})"
+    return "llm"

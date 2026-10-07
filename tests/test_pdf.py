@@ -10,11 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from validsim.engine.pdf import render_scorecard_pdf, scorecard_pdf_bytes
 
-pytest.importorskip("reportlab", reason="PDF export requires the optional reportlab dep")
 
 
 def _approve_card() -> dict[str, Any]:
@@ -76,6 +73,25 @@ class TestRenderToFile:
         assert target.exists()
         assert target.read_bytes().startswith(b"%PDF-")
         assert target.stat().st_size > 500
+
+
+class TestUnmeasuredProvenance:
+    """The PDF must not present a structural constant as an earned score."""
+
+    def test_unmeasured_robustness_is_labelled(self) -> None:
+        card = _approve_card()
+        card["robustness_measured"] = False
+        assert scorecard_pdf_bytes(card).startswith(b"%PDF-")
+
+    def test_legacy_card_without_the_flag_still_renders(self) -> None:
+        """CONTROL: no flag means unknown provenance, not 'unmeasured'.
+
+        A scorecard serialized before the flag existed carries no provenance;
+        defaulting to the caveat would retroactively relabel every historical
+        PDF as unmeasured, which is a claim the stored data cannot support.
+        """
+        assert "robustness_measured" not in _approve_card()
+        assert scorecard_pdf_bytes(_approve_card()).startswith(b"%PDF-")
 
 
 class TestMalformedInput:

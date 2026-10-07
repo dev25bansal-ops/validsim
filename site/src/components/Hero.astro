@@ -1,0 +1,153 @@
+---
+/**
+ * Hero. Asymmetric 2fr/1fr: the left column carries the claim, the right column
+ * carries the honesty note. Deliberately NOT centred — a centred single column
+ * is the default layout of every generated landing page.
+ */
+import { transcript } from '../data/content';
+---
+
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <h1>CI for robot <em>foundation models</em>.</h1>
+        <p class="lede">
+          Robot models now release on a weekly cadence borrowed from software. Deployment gating
+          still works like 2015: run it on a few real robots and hope. ValidSim runs a checkpoint
+          through thousands of simulated episodes and returns a scorecard you can block a deploy
+          on.
+        </p>
+        <div class="actions">
+          <a class="btn btn-primary" href="#contact">Get started</a>
+          <a class="btn btn-quiet" href="#pipeline">Read the spec</a>
+        </div>
+      </div>
+
+      <aside class="hero-aside">
+        <p>
+          <strong>Pre-traction.</strong> No customers yet. We are building this in public and talking
+          to the teams who deploy robot models every day.
+        </p>
+        <p>
+          Every number on this page came out of running the tool. Where something is a target rather
+          than a measurement, we say so.
+        </p>
+      </aside>
+    </div>
+
+    <div class="artifact">
+      <div class="artifact-bar"><b>terminal</b> validsim 0.2.0</div>
+      <pre>
+        {
+          transcript.map((line) => (
+            <span class={line.tone === 'plain' ? undefined : `v-${line.tone}`}>{line.text}</span>
+          ))
+        }
+      </pre>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    padding-block: clamp(3rem, 7vw, 5.5rem) 0;
+  }
+  .hero-grid {
+    display: grid;
+    gap: clamp(2rem, 5vw, 4rem);
+    align-items: start;
+  }
+  @media (width > 56rem) {
+    .hero-grid {
+      /* The aside carries the honesty note, so it reads as a marginal column
+         beside the claim rather than a second card. Aligning it to the top and
+         letting the lede run full width under the rule keeps the fold from
+         opening a void where the two columns are unequal. */
+      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+      align-items: start;
+    }
+  }
+
+  h1 {
+    font-size: var(--t-hero);
+    letter-spacing: -0.035em;
+    font-weight: 500;
+    max-width: 15ch;
+  }
+  h1 em {
+    font-style: normal;
+    color: var(--unmeasured);
+  }
+  .lede {
+    margin-block-start: 1.75rem;
+    font-size: var(--t-lg);
+    color: var(--ink-mid);
+    max-width: 52ch;
+  }
+  .actions {
+    margin-block-start: 2.5rem;
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .hero-aside {
+    border-inline-start: 1px solid var(--rule);
+    padding-inline-start: 1.5rem;
+  }
+  /* On wide screens the note sits level with the lede rather than the headline,
+     so the two columns start on the same optical line. */
+  @media (width > 56rem) {
+    .hero-aside {
+      margin-block-start: 0.35rem;
+    }
+  }
+  .hero-aside p {
+    font-size: var(--t-sm);
+    color: var(--ink-dim);
+  }
+  .hero-aside p + p {
+    margin-block-start: 1rem;
+  }
+  .hero-aside strong {
+    color: var(--ink-mid);
+    font-weight: 500;
+  }
+
+  .artifact {
+    margin-block-start: clamp(2.5rem, 5vw, 3.75rem);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--panel);
+    overflow: clip;
+  }
+  .artifact-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.7rem 1rem;
+    border-block-end: 1px solid var(--rule);
+    background: var(--raised);
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    color: var(--ink-dim);
+  }
+  .artifact-bar b {
+    color: var(--ink-mid);
+    font-weight: 500;
+    margin-inline-end: auto;
+  }
+  pre {
+    margin: 0;
+    padding: 1.25rem;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    line-height: 1.8;
+    color: var(--ink-mid);
+    overflow-x: auto;
+  }
+  pre span {
+    display: block;
+  }
+</style>

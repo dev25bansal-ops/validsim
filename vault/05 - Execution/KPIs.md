@@ -12,6 +12,9 @@ area: "05 - Execution"
 
 Post-launch scorecard (§16). MVP acceptance tests live in [[MVP Success Metrics]]; these are the company's operating dashboard — reviewed weekly alongside the [[90-Day Roadmap]] ritual.
 
+> [!warning] Verify before external use — 2026-09-21
+> Product/business values are targets, not achievements. The latest engineering test/coverage row is retained as a dated snapshot, but it was not re-run for this vault pass; use [[Build Status]] and a generated report before quoting it. GPU throughput, uptime, regression accuracy, customers, ARR, LOIs and calls have no verified external evidence in the repository.
+
 ## 16.1 Product metrics
 
 | Metric | Target (Month 6) | Target (Month 12) |
@@ -41,12 +44,12 @@ Cross-check vs. plan: Year-1 ARR $240K–$450K at 8–15 customers ([[Financial 
 
 | Metric | Target |
 |---|---|
-| Simulation throughput | **1,000 episodes in < 30 min on 8× A100** |
-| Scorecard generation time | **< 5 min post-simulation** |
-| API uptime | **99.5%** |
-| Regression detection accuracy | **> 95%** |
-| Engineering velocity (test suite) | **190 → 1,274 tests** (2026-09-18 → 2026-09-20, [[Build Status]]); **~96%** line/branch coverage against a **90% enforced CI floor** |
-| Reliability & security posture | **100% build pass rate** (last 13 runs); **0 security HIGH findings outstanding** — audit H1–H3/M1/M3 closed 2026-09-20, [[Security Hardening]] |
+| Simulation throughput | **1,000 episodes in < 30 min on 8× A100** — *target, unmeasured*; requires GPU/Isaac, and the shipped engine is a serial CPU mock |
+| Scorecard generation time | **< 5 min post-simulation** — *target, unmeasured* |
+| API uptime | **99.5%** — *target; the platform has no production deployment in this repository* |
+| Regression detection accuracy | **> 95%** — *target, unmeasured; no labelled ground truth exists to score against* |
+| Engineering velocity (test suite) | **No count is quoted here on purpose.** A hand-copied number goes stale on the next commit, and this repository's docs have carried at least six mutually incompatible figures (190 / 250 / 338 / 601 / 1,230 / 1,274 / 1,328). The only defensible number is the one the tool prints: `python -m pytest tests/` (totals + coverage `TOTAL`) or `python -m pytest tests/ --collect-only -q` (counts only — a collection count is not a pass count). Use the current generated [[Build Status]] row, and re-run it rather than quoting this page |
+| Reliability & security posture | **Not 100%**: the recorded build history contains a `FAIL` run ([[Build Status]]). **Security HIGH findings outstanding**: see `docs/ISSUE_CATALOG.md` — items 01/02 closed 2026-09-21, 06/07/08/09/10/17/28 open or in progress. Audit H1–H3/M1/M3 closed 2026-09-20, [[Security Hardening]] |
 
 > [!warning] Throughput target is stated two ways in the founding doc
 > MVP benchmark: 1,000 episodes <30 min on **4× A100** ([[8-Week Sprint Plan]] W2). Platform KPI: 1,000 episodes <30 min on **8× A100**. Treat the 4-GPU figure as the demo bar and the 8-GPU figure as the production SLO; resolve wording in the next [[Decision Log]] entry.

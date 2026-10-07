@@ -10,7 +10,10 @@ area: "07 - Fundraising"
 
 # 🟢 NVIDIA Inception Application (Drafted)
 
-Paste-ready application text. Apply **Week 1–2** — immediately after Delaware incorporation and website launch ([[90-Day Roadmap]]). Free to apply, approval in days-to-weeks, and the $100K DGX credits are the direct unlock for the real Isaac Sim backend (see honest limitation in [[YC Application Answers]] Q3).
+Draft application text. Apply **Week 1–2** only after Delaware incorporation and website launch ([[90-Day Roadmap]]). The repository does not verify application submission, acceptance, or a $100K DGX credit award; these are target program benefits that require confirmation ([[NVIDIA Inception]]).
+
+> [!warning] Verify before submission
+> The current workload is a deterministic mock plus an HTTP adapter. The real Isaac/Lab, A100/H100, Kubernetes/Argo, GPU-count, and physics-accuracy statements below describe intended work, not a deployed benchmark. Do not submit them as current execution.
 
 > [!important] The one rule that gets you accepted
 > Name the **GPU-accelerated workload explicitly**. Generic "AI startup" applications stall; ours states the compute shape in the program reviewers' own vocabulary: parallel Isaac Lab episodes on A100/H100.
@@ -20,48 +23,48 @@ Paste-ready application text. Apply **Week 1–2** — immediately after Delawar
 | Requirement | Status |
 |---|---|
 | Incorporated entity | [ ] Delaware C-Corp — target Week 1 ([[Corporate Structure]]) |
-| <10 years old | ✅ founded 2026 |
-| ≥1 developer on staff | ✅ 2 AI/ML founders ([[Founding Team]]) |
+| <10 years old | [verify] founding date |
+| ≥1 developer on staff | [verify] current staffing |
 | Working website | [ ] validsim.com — Week 1 |
-| Pre-revenue stage OK | ✅ by design |
+| Pre-revenue stage | [verify] current financial status |
 
 ## Q: Describe your company
 
-> ValidSim is the CI/CD layer for robot fleets — "GitHub Actions for robots." Robot foundation model companies (Physical Intelligence, Skild AI, Figure, 1X) ship policy updates weekly but validate them with hand-built test scenes and judgment calls. A developer submits a model checkpoint via CLI or GitHub Action; ValidSim returns a defensible safety-and-success scorecard — success rate with 95% confidence intervals, a 0–100 safety score, regression diffs against the previous checkpoint, and an APPROVE/BLOCK deployment gate. We are pure software: no robots, no hardware, no manufacturing.
+> ValidSim is building "GitHub Actions for robots": a CLI/API workflow that turns a checkpoint into statistical success/safety metrics, regression comparisons, and an APPROVE/BLOCK CI verdict. The current simulation is deterministic mock; real Isaac/GPU execution and compliance-grade audit retention are milestones. We plan a software-only product with no robot hardware or manufacturing.
 
 ## Q: What is your GPU-accelerated workload?
 
-> **Large-scale Isaac Lab simulation for robot policy validation, running thousands of parallel GPU episodes on A100/H100 with domain randomization and Omniverse RTX rendering.** Each validation run executes 1,000–100,000 physics-accurate episodes (PhysX 5 rigid/soft-body contact dynamics) across 8–64 GPUs orchestrated by Kubernetes + Argo Workflows, including 50–100 LLM-generated adversarial scenarios per run. The workload is embarrassingly parallel, bursty (triggered by model pushes in CI), and grows with every customer fleet — exactly the profile DGX Cloud is built for.
+> **Target workload after porting our validated pipeline to real Isaac Sim/Lab:** thousands of parallel GPU episodes on A100/H100 with domain randomization, including 50–100 LLM-generated adversarial scenarios per run. We will validate GPU count, runtime, and physics fidelity on shadow runs before presenting a production SLO; Kubernetes/Argo and customer scale are not current capabilities.
 
-## Q: How do you use NVIDIA technology?
+## Q: Planned NVIDIA technology use
 
-| NVIDIA product | Role in ValidSim |
+| NVIDIA product | Intended role after the GPU port |
 |---|---|
-| Isaac Sim 4.x (open-source) | Simulation substrate, scene/asset pipeline (USD) |
+| Isaac Sim 4.x | Simulation substrate, scene/asset pipeline (USD) |
 | Isaac Lab | GPU-parallel RL/IL evaluation environments |
-| PhysX 5 | Contact/force fidelity — the physics that makes a safety score defensible |
-| Omniverse RTX | Photorealistic rendering for visual-domain-randomization validity |
-| NVIDIA Cosmos | Photorealistic visual domain randomization (post-MVP) |
-| TensorRT / ONNX | Checkpoint ingestion for accelerated policy inference in sim |
-| DGX Cloud | Compute for the validation engine itself |
+| PhysX 5 | Contact/force fidelity that must be benchmarked before it supports a safety claim |
+| Omniverse RTX | Planned photorealistic rendering/visual-domain-randomization work |
+| NVIDIA Cosmos | Planned visual randomization (post-MVP) |
+| TensorRT / ONNX | Planned checkpoint-inference integration; no implemented inference path is verified |
+| DGX Cloud | Target compute for the real validation engine |
 
 ## Q: What will you spend the credits on?
 
-> $100K DGX Cloud credits → the Week-1–2 milestone of porting our validated pipeline from the mock backend to real Isaac Sim/Lab on A100 80GB nodes (≥10GB VRAM per instance), then every subsequent design-partner validation run. This is COGS for our first 5–10 customers, not R&D theater: each run is a billable event in the usage-based pricing model ([[Pricing Tiers]]). Complementary credits: up to $100K AWS + up to $150K Nebius via Inception partner offers for the control plane (API, queues, Postgres/Timescale, dashboard).
+> If granted, DGX Cloud credits would fund porting the validated mock pipeline to real Isaac Sim/Lab on A100 80GB nodes (≥10GB VRAM per instance), followed by measured design-partner runs. Partner AWS/Nebius credits would be evaluated against the control plane (API, queues, Postgres/SQLite, static dashboard). No credit award or billable-customer run is verified.
 
 ## Milestones (what we tell NVIDIA we'll do in 6/12 months)
 
-- **6 months:** MVP live on Isaac Sim/Lab with 3–5 design partners; published public benchmark of GR00T/pi0 regression results; GitHub Actions marketplace listing; demo at a GTC-adjacent event.
-- **12 months:** 10–20 paying teams; multi-embodiment support; compliance evidence packages aligned to ISO 10218/13482; NVIDIA co-sell motion into robot FM labs ([[Go-to-Market]]).
+- **6 months, planned:** MVP live on Isaac Sim/Lab with 3–5 design partners; published GR00T/pi0 benchmark; GitHub Actions marketplace listing; GTC-adjacent demo. These are commitments to verify and execute, not achievements.
+- **12 months, planned:** 10–20 paying teams; multi-embodiment support; ISO-aligned compliance evidence packages; NVIDIA co-sell motion. None is a current commitment delivered.
 
 ## Why NVIDIA should care (the strategic frame)
 
-> Every ValidSim run is Isaac Sim consumption at industrial scale. We are demand-creation for the NVIDIA simulation stack: robot teams that validate continuously burn GPU hours weekly, and we make the NVIDIA-native path the default. If a deployment incident forces the compliance question ([[Why Now (2026)]] Force 5), audit-ready NVIDIA-physics evidence is the answer — which makes the Inception relationship itself part of our [[Moat]] against the "NVIDIA will build this" objection ([[Risk Register]] #2).
+> We plan to make each production run consume Isaac Sim GPU time, but the current implementation is mock-only and the audit/compliance trail remains roadmap work. NVIDIA-native execution and evidence retention must be proven before either becomes an investor claim.
 
 ## Submission logistics
 
 - Apply the same week the website goes live; attach the 1-minute demo video once recorded ([[YC Countdown]]).
-- Program benefits tracked: $100K DGX credits · up to $100K AWS · up to $150K Nebius · early Isaac/Omniverse SDK access · GTC visibility ([[Key Figures]]).
+- Program benefits to verify against the recipient's official offer: DGX/AWS/Nebius credits, SDK access, and GTC visibility ([[Key Figures]]).
 - Source: NVIDIA Inception program terms, Thundercompute guide (July 2026), Nebius AI Lift (April 2025) — see [[Sources]] #2, #11, #12.
 
 Links: [[NVIDIA Inception]] · [[YC Application Answers]] · [[Tech Stack]] · [[Home]]

@@ -1,0 +1,86 @@
+---
+import { site, nav } from '../data/content';
+---
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="logo" href="/">
+      <svg width="24" height="24" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+        <rect x="9.5" y="9.5" width="21" height="14.5" rx="3" fill="none" stroke="#F0A92E" stroke-width="2.6"></rect>
+        <circle cx="16" cy="16.8" r="2.1" fill="#E8EEF9"></circle>
+        <circle cx="24" cy="16.8" r="2.1" fill="#E8EEF9"></circle>
+        <line x1="20" y1="24" x2="20" y2="29.5" stroke="#F0A92E" stroke-width="2.2" stroke-linecap="round"></line>
+        <line x1="7.5" y1="33" x2="32.5" y2="33" stroke="#8A6420" stroke-width="2.4" stroke-linecap="round"></line>
+        <circle cx="7.5" cy="33" r="2.8" fill="#1A1814" stroke="#F0A92E" stroke-width="2"></circle>
+        <circle cx="20" cy="33" r="2.8" fill="#1A1814" stroke="#F0A92E" stroke-width="2"></circle>
+        <circle cx="32.5" cy="33" r="3.2" fill="#E8EEF9"></circle>
+      </svg>
+      <b>{site.name}</b>
+    </a>
+
+    <nav class="nav" aria-label="Primary">
+      {nav.map((item) => <a href={item.href}>{item.label}</a>)}
+      <a class="btn btn-primary" href="#contact">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .masthead {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 50;
+    background: color-mix(in oklch, var(--chassis) 88%, transparent);
+    backdrop-filter: blur(12px);
+    border-block-end: 1px solid var(--rule);
+  }
+  .masthead .wrap {
+    display: flex;
+    align-items: center;
+    gap: 1.75rem;
+    min-block-size: 4rem;
+    flex-wrap: wrap;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-inline-end: auto;
+    text-decoration: none;
+  }
+  .logo b {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 1.9rem;
+  }
+  .nav a {
+    color: var(--ink-mid);
+    text-decoration: none;
+    font-size: var(--t-sm);
+    font-weight: 500;
+  }
+  .nav a:hover {
+    color: var(--ink);
+  }
+  /* `.nav a` outranks `.btn-primary` in the cascade, so it was painting the
+     amber CTA with near-white body text — 1.4:1 against its own background.
+     The button keeps its own colours; only the plain links take --ink-mid. */
+  .nav a.btn {
+    color: var(--chassis);
+  }
+  .nav a.btn:hover {
+    color: var(--chassis);
+  }
+  @media (width < 48rem) {
+    .nav {
+      gap: 1.2rem;
+    }
+    .nav a:not(.btn) {
+      display: none;
+    }
+  }
+</style>

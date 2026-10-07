@@ -12,11 +12,14 @@ area: "07 - Fundraising"
 
 §14.1. The accelerator track that runs **parallel** to YC (apply Week 1–2, not either/or) and scores **10/10 fit** in [[Strategic Advantages]] — native Isaac/Omniverse use case.
 
+> [!warning] Verify before external send — 2026-09-21
+> This note does not prove application submission, acceptance, membership, or provisioned credits. The repository has a deterministic mock and HTTP worker adapter, not a deployed GPU workload. Verify the official program terms, eligibility, incorporation/website, submission receipt, acceptance, and credit amounts independently; label the 4× A100 benchmark as a target until measured.
+
 ## Program facts
 
 | Field | Detail |
 |---|---|
-| **Eligibility** | Incorporated, <10 years old, ≥1 developer, working website ✅ |
+| **Eligibility** | Target requirements: incorporate, stay under 10 years, have a developer, launch a working website — **all must be verified** |
 | **Cost** | Free |
 | **Benefits** | **$100K DGX Cloud credits**, **$100K AWS credits**, up to **$150K Nebius credits**, early SDK access, GTC visibility |
 | **Application tip** | Name the GPU-accelerated workload explicitly (below) |
@@ -45,14 +48,14 @@ Why it works: it maps 1:1 to Inception's eligibility requirement of a GPU-accele
 
 ```
 $100K DGX Cloud  +  $100K AWS  +  up to $150K Nebius  ≈  up to $350K compute
-Year 1 total cash burn: $200K–$350K  →  Year 1 is effectively compute-funded
+Year 1 total cash burn: $200K–$350K  →  compute-funded only if credits are actually granted
 ```
-([[Financial Projections]] credits-arbitrage callout.)
+These are maximum planning benefits, not committed cash; acceptance and actual grant terms are unverified.
 
 ## Beyond credits — three strategic uses
 
 1. **Distribution:** NVIDIA co-sell + GTC talks put us in front of every Isaac-using lab ([[Buyer Tiers]] Tier 1 = Isaac Sim users)
-2. **Signal to YC:** "NVIDIA Inception member" is a third-party technical validation line in the application ([[YC Application]] traction checklist)
+2. **Potential YC signal:** "NVIDIA Inception member" may be used only after acceptance is independently confirmed; it is not true merely because the application is drafted.
 3. **Advisor channel:** ex-NVIDIA Isaac team member is a target advisor seat ([[Hiring Plan]] advisory table)
 
 ## Failure modes & fallbacks

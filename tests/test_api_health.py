@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from validsim import __version__
-from validsim.api.main import create_app
+from validsim.api.main import DEFAULT_RATE_LIMIT, create_app
 from validsim.jobs.queue import RedisJobQueue
 from validsim.store.memory import ValidationStore
 from validsim.store.postgres import PostgresValidationStore
@@ -66,10 +66,14 @@ class TestHealthPayload:
         assert body["status"] == "ok"
         assert body["version"] == __version__
 
-        # New readiness fields reflect the default (open, unthrottled) config.
+        # Readiness fields reflect the shipped defaults.
         assert body["auth_enabled"] is False
         assert body["cors_wildcard"] is True  # CORS allow-list defaults to "*"
-        assert body["rate_limit"] is None  # rate limiting disabled by default
+        # Write-route protection ships on; only an explicit 0 disables it.
+        assert body["rate_limit"] == {
+            "requests": DEFAULT_RATE_LIMIT,
+            "window_seconds": 60.0,
+        }
         assert body["store_backend"] == "memory"
         assert body["job_queue_backend"] == "memory"
 
@@ -85,12 +89,14 @@ class TestAuthEnabled:
         monkeypatch.setenv("VALIDSIM_API_KEY", "secret-123")
         client = TestClient(create_app(ValidationStore()))
 
-        # With auth enforced the probe is gated like every /api/v1 route.
-        assert client.get("/api/v1/health").status_code == 401
-
-        body = _health(client, **{"X-API-Key": "secret-123"})
+        # The probe is deliberately exempt from the gate so the container
+        # healthcheck can reach it; what it reports is the policy in force,
+        # which is the whole point of the field.
+        body = _health(client)
         assert body["auth_enabled"] is True
         assert body["status"] == "ok"
+        # Presenting the key is still accepted.
+        assert _health(client, **{"X-API-Key": "secret-123"})["auth_enabled"] is True
 
 
 class TestCorsWildcard:
@@ -109,7 +115,8 @@ class TestCorsWildcard:
 
 
 class TestRateLimit:
-    def test_none_when_disabled(self) -> None:
+    def test_none_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("VALIDSIM_RATE_LIMIT", "0")
         client = TestClient(create_app(ValidationStore()))
         assert _health(client)["rate_limit"] is None
 

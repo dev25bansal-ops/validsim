@@ -41,7 +41,7 @@ def _reference_difficulties(seed: int, task_id: str, n: int) -> list[float]:
             _BASE_DIFFICULTY[category] + rng.uniform(-0.15, 0.15), 0.05, 0.95
         )
         out.append(round(difficulty, 4))
-        _PARAM_SAMPLERS[category](rng, i)  # consume the same draws as generate()
+        _PARAM_SAMPLERS[category](rng)  # consume the same draws as generate()
     return out
 
 

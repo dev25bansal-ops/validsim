@@ -3,11 +3,11 @@
 #
 #   job 1 (test):         ruff lint -> pytest (JUnit XML) -> artifacts + summary
 #   job 2 (docker):       build + push the image to GHCR, gated on `needs: test`
-#                         tags: latest + v<tag-name>
-#   job 3 (publish-pypi): PyPI dry-run via `twine check` only — never a real
-#                         upload. Guarded so the packaging steps only run when
-#                         PYPI_API_TOKEN exists (real credentials are never used
-#                         here; this is a release-time sanity check).
+#                         tags: latest + <tag-name> (the tag already carries `v`)
+#   job 3 (package-check): builds the sdist/wheel and runs `twine check` on every
+#                         tag — never a real upload. Neither step needs a
+#                         credential, so neither is conditional: a green check
+#                         here is proof the release artifacts are valid.
 #
 # The same gate-the-deploy discipline applies: a failing suite can never
 # produce an image or a release artifact.
@@ -32,10 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
@@ -52,7 +52,11 @@ jobs:
 
       - name: Run tests (pytest)
         continue-on-error: false
-        run: python -m pytest tests/ -v --junitxml=pytest-results.xml
+        # The same coverage gate CI runs (pyproject [tool.coverage.report]
+        # fail_under=90), stated explicitly because this job is what gates the
+        # GHCR push: an image must never be publishable from a tree whose
+        # coverage has silently drifted below the floor the project advertises.
+        run: python -m pytest tests/ -v --cov=validsim --cov-report=term-missing --cov-report=xml --cov-fail-under=90 --junitxml=pytest-results.xml
 
       - name: Publish test summary
         if: always()
@@ -81,10 +85,18 @@ jobs:
 
       - name: Upload pytest artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pytest-results
           path: pytest-results.xml
+          retention-days: 14
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-xml
+          path: coverage.xml
           retention-days: 14
 
   docker:
@@ -93,70 +105,62 @@ jobs:
     needs: test # hard gate: only push an image built from green tests
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ValidSim image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:v${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  publish-pypi:
-    name: Publish to PyPI (dry-run via twine check)
+  package-check:
+    name: Build & validate distributions (no upload)
     runs-on: ubuntu-latest
-    needs: docker # publish follows a successfully pushed image
+    needs: docker # packaging checks follow a successfully pushed image
     steps:
-      # GitHub cannot read `secrets.*` in a job-level (or step-level) `if`,
-      # so the token check is turned into an output first, then used to gate
-      # the real packaging steps below. No step here ever performs an actual
-      # PyPI upload — this job is a dry-run release sanity check only.
-      - name: Detect PyPI credentials
-        id: pypi-token
-        env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -n "$PYPI_API_TOKEN" ]; then
-            echo "has-token=true" >> "$GITHUB_OUTPUT"
-            echo "PYPI_API_TOKEN present — running dry-run packaging checks." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "has-token=false" >> "$GITHUB_OUTPUT"
-            echo "PYPI_API_TOKEN not set — skipping PyPI packaging checks." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
+      # `python -m build` and `twine check` take no credentials, so nothing here
+      # is conditional. These steps used to sit behind `if: has-token == 'true'`,
+      # which meant a tag pushed without PYPI_API_TOKEN checked out nothing, built
+      # nothing and still reported a green release. An actual upload would need a
+      # new step, a real secret and an explicit decision to start publishing.
       - name: Checkout
-        if: steps.pypi-token.outputs.has-token == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Python 3.12
-        if: steps.pypi-token.outputs.has-token == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install build tooling
-        if: steps.pypi-token.outputs.has-token == 'true'
         run: python -m pip install build twine
 
       - name: Build distributions
-        if: steps.pypi-token.outputs.has-token == 'true'
         run: python -m build
 
       - name: Validate distributions (twine check — no upload)
-        if: steps.pypi-token.outputs.has-token == 'true'
         run: twine check dist/*
+
+      - name: Record what this job did and did not do
+        if: always()
+        run: |
+          {
+            echo "## Packaging"
+            echo "- Built sdist + wheel from the \`v*\` tag and ran \`twine check\`."
+            echo "- Did **not** upload to PyPI: this workflow has no publish step."
+          } >> "$GITHUB_STEP_SUMMARY"

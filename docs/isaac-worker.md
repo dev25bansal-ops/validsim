@@ -44,6 +44,7 @@ first):
   "task_id": "pick-place",
   "robot": { "name": "franka_panda", "urdf_path": "robots/franka.urdf", "dof": 7 },
   "environment": { "name": "kitchen", "scene_usd": "scenes/kitchen.usda" },
+  "checkpoint_id": "ckpt-v41",
   "seed": 42,
   "episodes": 0,
   "randomization_level": "full",
@@ -57,6 +58,14 @@ first):
   ]
 }
 ```
+
+> [!warning] `checkpoint_id` is the policy under test — do not omit it
+> This field identifies the artifact being validated, and it is `null` only when
+> the caller did not supply one. A worker that ignores it can only ever run a
+> default policy, in which case **every scorecard it produces is a statement
+> about that default rather than about the submitted checkpoint**, and the
+> product cannot rank checkpoints at all. Load the policy named here, and echo
+> it back on each episode so the client can confirm the right artifact ran.
 
 Response — every `EpisodeResult` field is required on the wire (`null` for the
 optional ones); unknown keys are rejected, never ignored:
@@ -90,10 +99,12 @@ not echo the request, and a `seed` that is not `seed + position`.
 ## 3. Episode semantics
 
 * **Seeded determinism.** An episode is a pure function of
-  `(seed, task, randomization_level, scenario)` — the same guarantee
-  `MockIsaacBackend` gives, so `run_validation` needs no changes and a rerun of
-  a stored seed reproduces a stored verdict. `run_validation` assigns
+  `(seed, task, checkpoint_id, randomization_level, scenario)` — the same
+  guarantee `MockIsaacBackend` gives, so `run_validation` needs no changes and a
+  rerun of a stored seed reproduces a stored verdict. `run_validation` assigns
   `seed + i` per episode; the worker must echo those seeds back in order.
+  Determinism is per `(checkpoint, seed)`: the same seed against a *different*
+  checkpoint is a different episode, and must be allowed to differ.
 * **Randomization levels.** `none` = nominal scene. `partial` ≈ −10 pp success,
   `full` ≈ −20 pp (the mock's penalties in `_RANDOMIZATION_PENALTY`): textures,
   lighting, object pose/mass/friction, camera noise. The level is requested once
@@ -107,33 +118,35 @@ not echo the request, and a `seed` that is not `seed + position`.
   joint_limit, perception_error, unstable_placement, emergency_stop`, and must
   be `null` on success.
 
-## 4. Deployment sketch (DGX Cloud, later milestone)
+## 4. Deployment status (future DGX worker)
 
-`docker-compose.yml` already stubs the service; the real form is:
+For this GPU path, the repository currently ships only the HTTP client and its
+contract tests. It does **not** ship an Isaac Sim/Lab worker image, a worker
+Dockerfile, or an active `worker-gpu` Compose service. The commented
+`worker-gpu` block in [`docker-compose.yml`](../docker-compose.yml) is a
+placeholder, not a runnable deployment. There is no runnable GPU-worker build
+recipe in this repository.
 
-```yaml
-worker-gpu:
-  image: validsim-isaac:latest          # Isaac Sim 4.x headless + this contract
-  restart: unless-stopped
-  environment:
-    VALIDSIM_WORKER_TOKEN: "${ISAAC_WORKER_KEY}"
-    ISAAC_SIM_HEADLESS: "1"
-  ports: ["8090:8090"]
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: all                  # one A100 per container
-            capabilities: [gpu]
-```
+A future worker implementation must serve the endpoints in §1. Configure the
+client with:
+
+* `VALIDSIM_ISAAC_WORKER_URL` — the worker's actual base URL. The client has no
+  hard-coded port; the local example in [`.env.example`](../.env.example) is
+  `http://localhost:8080`. Set the host and port to the deployed worker.
+* `VALIDSIM_ISAAC_WORKER_KEY` — the optional bearer token. The client sends
+  `Authorization: Bearer <value>` when the value is non-empty. Source the
+  secret from the deployment environment or secret store; do not commit it or
+  bake it into an image. Leave it empty for local development when the worker
+  does not require authentication.
+
+When a worker is supplied, the following deployment considerations still apply:
 
 * **Sizing:** ≥10 GB VRAM per instance (A100-40/80 GB on DGX Cloud); the API
-  box stays CPU-only and reaches the worker over the private network via
-  `VALIDSIM_ISAAC_WORKER_URL=http://worker-gpu:8090`.
+  box stays CPU-only and reaches the worker over the private network via the
+  configured `VALIDSIM_ISAAC_WORKER_URL`.
 * **Parallelism:** 8–64 concurrent GPU episodes. Run one worker per GPU and
-  fan out with `deploy.replicas` / a job queue rather than packing scenes onto
-  one device; the client reuses one connection pool per backend instance.
+  fan out with replicas / a job queue rather than packing scenes onto one
+  device; the client reuses one connection pool per backend instance.
 * **Batching:** the contract is batch-shaped (`episodes`, `scenarios`), so a
   future `run_validation`-equivalent can submit a whole verdict in one POST.
   Today `run_episode` uses the degenerate batch-of-one, which costs a round trip

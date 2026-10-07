@@ -18,6 +18,7 @@ def _request_body(
     episodes: int = 60,
     adversarial: int = 12,
     baseline: str | None = None,
+    threshold: float | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "checkpoint_id": checkpoint,
@@ -31,6 +32,8 @@ def _request_body(
     }
     if baseline is not None:
         body["baseline_run_id"] = baseline
+    if threshold is not None:
+        body["threshold"] = threshold
     return body
 
 
@@ -91,6 +94,29 @@ class TestValidationLifecycle:
         assert isinstance(payload["failure_taxonomy"], dict)
         assert sum(payload["failure_taxonomy"].values()) == len(payload["episodes"])
         assert all(ep["success"] is False for ep in payload["episodes"])
+
+    def test_explicit_threshold_changes_the_verdict(self, client: TestClient) -> None:
+        """A caller-supplied gate must be honoured end-to-end, not silently dropped.
+
+        The dashboard posts a ``threshold`` field that the v0 request model used
+        to discard, so the knob looked live while always scoring against 85.0.
+        """
+        loose = client.post(
+            "/api/v1/validations", json=_request_body(threshold=10.0)
+        ).json()
+        tight = client.post(
+            "/api/v1/validations", json=_request_body(threshold=100.0)
+        ).json()
+        default = client.post(
+            "/api/v1/validations", json=_request_body()
+        ).json()
+        assert loose["threshold"] == 10.0
+        assert tight["threshold"] == 100.0
+        assert default["threshold"] == 85.0
+        # Same task/checkpoint -> same composite, so only the gate can flip it.
+        assert loose["composite_score"] == tight["composite_score"]
+        assert loose["deploy_decision"] == "APPROVE"
+        assert tight["deploy_decision"] == "BLOCK"
 
 
 class TestCompareAndRegressions:
@@ -156,7 +182,6 @@ class TestCompareAndRegressions:
         assert report["items"] == expected.to_dict()["items"]
 
 
-pytest.importorskip("reportlab", reason="PDF export requires the optional reportlab dep")
 
 
 class TestScorecardPdfExport:

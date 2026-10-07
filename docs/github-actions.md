@@ -12,8 +12,8 @@ sprint prototype of the integration described in the founding blueprint
 > [!important] Self-hosted MVP mode — read this first
 > ValidSim does **not** have a SaaS backend yet. These actions run the
 > **local mock validation pipeline** (`validsim.sim.runner.MockIsaacBackend`)
-> inside your own job: `validsim run` → local scorecard cache →
-> `validsim gate`. No data leaves your runner, and **no API key is required
+> inside your own job: `validsim run` → local store (plus a JSON scorecard
+> cache) → `validsim gate`. No data leaves your runner, and **no API key is required
 > today**. `VALIDSIM_API_KEY` is documented below only as the *future*
 > credential for the hosted cloud backend (GPU simulation via API); when that
 > ships, the actions switch from local execution to submit-and-poll with the
@@ -146,6 +146,13 @@ If either line cannot be found, the action fails with an explicit
 `::error::` rather than guessing. If the CLI's summary format changes, update
 `actions/validate/action.yml` ("Parse run id and composite score" step).
 
+> [!warning] The scorecard action fails closed
+> `validsim/scorecard` renders whatever the validate step produced, and a missing
+> scorecard is a **failed check** (`::error::` + exit 1) — not a warning. That means
+> a green ValidSim check on a PR always has a stored verdict behind it. The job
+> summary still carries the CLI's stderr so you can see why validation produced
+> nothing.
+
 ## 4. `validsim/scorecard` — inputs
 
 | Input | Required | Default | Description |
@@ -169,10 +176,12 @@ If either line cannot be found, the action fails with an explicit
 > `report --format markdown` instead of the inline script.
 
 > [!warning] Same-job constraint (MVP)
-> Results are cached in a JSON file at
+> Results live in two places, both on the runner: a **durable store** (sqlite
+> at `${{ runner.temp }}/validsim/runs.db`, `VALIDSIM_STORE` /
+> `VALIDSIM_SQLITE_PATH`) and a JSON scorecard cache at
 > `${{ runner.temp }}/validsim/scorecards.json` (`VALIDSIM_CACHE_FILE`).
-> The runner temp dir is per-**job**, so validate + scorecard must run in the
-> same job until the cloud store exists. Cross-job/cross-run lookups by
+> The runner temp dir is per-**job**, so validate + gate + scorecard must run
+> in the same job until the cloud store exists. Cross-job/cross-run lookups by
 > `run-id` are a backend feature.
 
 ## 5. The gate: how a bad checkpoint blocks deploys
@@ -182,9 +191,23 @@ If either line cannot be found, the action fails with an explicit
 
 | Exit code | Meaning | Effect in Actions |
 |---|---|---|
-| `0` | `APPROVE` — composite ≥ threshold | step passes, job continues |
-| `1` | `BLOCK` — composite < threshold | **step and job fail** |
-| `2` | unknown run id / no cache | job fails (misuse) |
+| `0` | `APPROVE` — the run's stored verdict is `APPROVE` and its composite ≥ the effective threshold | step passes, job continues |
+| `1` | `BLOCK` — the stored verdict is `BLOCK`, the composite is below the effective threshold, or no recognised verdict is stored | **step and job fail** |
+| `2` | misuse — no durable store (`VALIDSIM_STORE` unset or `memory`), unknown or malformed run id, no stored run for `--latest`, or both flags given | job fails (misuse) |
+
+> [!important] The verdict is authoritative; `--threshold` only tightens
+> `gate` reads the `deploy_decision` the engine recorded rather than
+> recomputing a verdict from the score, because the engine also blocks for
+> reasons the composite cannot express (a run that delivered fewer episodes than
+> its task asked for proves nothing at any score). `--threshold` may raise the
+> bar above the threshold stored in the run; a value below it is ignored, so no
+> CI flag can overturn a `BLOCK`.
+>
+> The run is read from the **store**, never from the JSON cache: the cache is an
+> ordinary file that any step in the job could rewrite, so a verdict taken from
+> it would prove nothing. That is why `actions/validate` exports
+> `VALIDSIM_STORE=sqlite` — without a durable backend the gate refuses to decide
+> (exit `2`) instead of falling back to something forgeable.
 
 > [!tip] Machine-readable gate output (`gate --json`) and `--latest`
 > Add `--json` to have the decision printed to **stdout** as
@@ -192,9 +215,9 @@ If either line cannot be found, the action fails with an explicit
 > text line — handy when a later step parses the verdict (e.g. to feed a Slack
 > badge or a matrix). The `0/1/2` exit-code contract above is **unchanged** by
 > `--json`, so the step still fails the job on `BLOCK`. `gate` also accepts
-> `--latest` (the newest cached run) as an alternative to `--run-id`; exactly
-> one of the two is required. This is how the nightly sweep in §7 gates without
-> threading a run id between steps.
+> `--latest` (the newest run in the store) as an alternative to `--run-id`;
+> exactly one of the two is required. This is how the nightly sweep in §7 gates
+> without threading a run id between steps.
 
 A failed `validate` job blocks anything wired behind it:
 
@@ -254,9 +277,17 @@ See [`examples/nightly-adversarial-sweep.yml`](../examples/nightly-adversarial-s
 | Timeout | `timeout-minutes: 60` — fail loudly rather than hang on the heavy run |
 
 Unlike §7.1 it calls the CLI **directly** (`python -m validsim.cli`) instead of
-the composite actions, because the sweep only needs `run → gate`:
+the composite actions, because the sweep only needs `run → gate`. The job sets
+a durable store so the gate has something to read:
 
 ```yaml
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    env:
+      VALIDSIM_STORE: sqlite
+      VALIDSIM_SQLITE_PATH: ${{ github.workspace }}/.validsim/runs.db
+    steps:
       - name: Run Nightly Adversarial Sweep
         run: |
           python -m validsim.cli run --episodes 2000 --adversarial 200 --checkpoint nightly-checkpoint
@@ -268,19 +299,24 @@ the composite actions, because the sweep only needs `run → gate`:
 
 Key points to mirror if you adapt it:
 
-- **`gate --latest`** (see §5) targets the newest cached run, so no run id is
-  threaded between steps. Exactly one of `--run-id` / `--latest` is accepted.
+- **`gate --latest`** (see §5) targets the newest run **in the store**, so no
+  run id is threaded between steps. Exactly one of `--run-id` / `--latest` is
+  accepted.
+- **The store is not optional.** `gate` exits `2` on the default in-memory
+  backend instead of falling back to the JSON cache, because the cache is a
+  file the same job can rewrite. `VALIDSIM_STORE=sqlite` is what makes the
+  verdict survive from `run` to `gate`.
 - **pip cache** is keyed on both `requirements.txt` and
   `requirements-dev.txt` (`cache-dependency-path`) since nightly installs run
   often and should be fast.
 - **JUnit evidence**: the MVP CLI has no native JUnit formatter, so the
   workflow wraps the newest cached scorecard (`.validsim/scorecards.json`) into
   a single JUnit XML testcase with an inline stdlib-only Python script, then
-  uploads it (plus the raw JSON cache) via `actions/upload-artifact@v4`. Both
-  the wrap and upload steps are `if: always()`, so evidence is retained even
-  when the gate returns `BLOCK`.
+  uploads it (plus the sqlite store the gate decided from, and the raw JSON
+  cache) via `actions/upload-artifact@v4`. Both the wrap and upload steps are
+  `if: always()`, so evidence is retained even when the gate returns `BLOCK`.
 - **Same-job rule still applies**: `run → gate → upload` stay in one job
-  because the cache lives on the runner (§4).
+  because both the store file and the cache live on the runner (§4).
 
 > [!note] Why the sweep skips `pip install .`
 > The sweep runs `python -m validsim.cli` straight from the checkout after
@@ -293,7 +329,8 @@ Key points to mirror if you adapt it:
 |---|---|
 | `No python interpreter found` | Add `actions/setup-python@v5` before the action (composite actions can't install Python themselves). |
 | `Could not parse a run id` | CLI summary format drifted from §3 contract — update the parse step. |
-| gate exit `2` in scorecard step | Scorecard ran in a different job, or validate crashed before caching (see §4 same-job constraint). |
+| scorecard exit `2` in the scorecard step | Scorecard ran in a different job, or validate crashed before caching (see §4 same-job constraint). The step now fails the job rather than posting a notice. |
+| gate: `needs a durable store, but VALIDSIM_STORE='memory'` | Nothing set `VALIDSIM_STORE`. Use `actions/validate` (it exports sqlite) or set `VALIDSIM_STORE=sqlite` + `VALIDSIM_SQLITE_PATH` yourself, and run `validsim run` in the same job so the store exists. |
 | PR comment missing on `push` events | Expected — no PR exists. Check the job summary; use `pull_request` triggers for comments. |
 | `Resource not accessible by integration` on comment | Job lacks `pull-requests: write` permission. |
 | `report`/`gate --json` output not parsing | `--json` prints one JSON object on **stdout**; keep `2>&1` off the pipe so step logs don't mix in. The gate's exit code is unaffected by `--json` (§5). |

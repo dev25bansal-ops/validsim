@@ -68,7 +68,13 @@ class TestCleanOutput:
         scenarios = gen.generate("pick-place", 3)
 
         assert len(scenarios) == 3
-        assert [s.id for s in scenarios] == ["llm-0", "llm-1", "llm-2"]
+        # Ids are task-scoped so batches for different tasks cannot collide
+        # in an id-keyed store (fallback ids are `adv-<task_id>-<i>` too).
+        assert [s.id for s in scenarios] == [
+            "llm-pick-place-0",
+            "llm-pick-place-1",
+            "llm-pick-place-2",
+        ]
         assert all(s.category == "lighting_change" for s in scenarios)
         assert all(s.params == {"lux": 100} for s in scenarios)
         assert gen.fallback_used is False
@@ -143,7 +149,7 @@ class TestInvalidCategories:
 
         assert len(scenarios) == 6
         assert all(s.category in ADVERSARIAL_CATEGORIES for s in scenarios)
-        assert scenarios[0].id == "llm-0"
+        assert scenarios[0].id == "llm-t-0"
         assert scenarios[0].name == "keep me"
         # The remaining five were topped up deterministically from the fallback.
         assert [s.id for s in scenarios[1:]] == [f"adv-t-{i:04d}" for i in range(5)]
@@ -154,7 +160,12 @@ class TestInvalidCategories:
         gen = LLMScenarioGenerator(FakeProvider([clean_json(9)]))
         scenarios = gen.generate("t", 4)
         assert len(scenarios) == 4
-        assert [s.id for s in scenarios] == ["llm-0", "llm-1", "llm-2", "llm-3"]
+        assert [s.id for s in scenarios] == [
+            "llm-t-0",
+            "llm-t-1",
+            "llm-t-2",
+            "llm-t-3",
+        ]
 
 
 class TestFallbackBehaviour:
@@ -170,7 +181,9 @@ class TestFallbackBehaviour:
 
     def test_provider_exception_retries_then_falls_back(self) -> None:
         provider = FakeProvider([ScenarioProviderError("boom")])
-        gen = LLMScenarioGenerator(provider, max_retries=2)
+        # backoff_base_s=0.0 keeps the retry loop instantaneous; the delay
+        # policy itself is covered in tests/test_scenarios_agent.py.
+        gen = LLMScenarioGenerator(provider, max_retries=2, backoff_base_s=0.0)
         scenarios = gen.generate("t", 3)
 
         assert len(scenarios) == 3
@@ -180,7 +193,7 @@ class TestFallbackBehaviour:
 
     def test_transient_failure_recovers_on_retry(self) -> None:
         provider = FakeProvider([ScenarioProviderError("flaky"), clean_json(2)])
-        gen = LLMScenarioGenerator(provider, max_retries=1)
+        gen = LLMScenarioGenerator(provider, max_retries=1, backoff_base_s=0.0)
         scenarios = gen.generate("t", 2)
 
         assert len(scenarios) == 2
@@ -306,19 +319,88 @@ class TestOpenAICompatibleProvider:
         with pytest.raises(ScenarioProviderError, match="HTTP 500"):
             provider.complete("hi")
 
+    def test_client_is_closed_by_close_and_context_manager(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reused client has an explicit, idempotent release path."""
+        closed: list[bool] = []
+
+        class FakeClient:
+            def __init__(self, **kwargs: Any) -> None:
+                return None
+
+            def post(self, url: str, json: Any = None, headers: Any = None) -> Any:
+                raise AssertionError("unreachable")
+
+            def close(self) -> None:
+                closed.append(True)
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", FakeClient)
+        provider = OpenAICompatibleProvider(api_key="sk-abc")
+        provider.close()
+        provider.close()  # idempotent
+        assert closed == [True, True]
+
+        closed.clear()
+        with OpenAICompatibleProvider(api_key="sk-abc") as ctx:
+            assert isinstance(ctx, OpenAICompatibleProvider)
+        assert closed == [True]
+
 
 class TestFactory:
     def test_returns_rule_based_without_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("VALIDSIM_LLM_ENABLED", raising=False)
         monkeypatch.delenv("VALIDSIM_LLM_API_KEY", raising=False)
         gen = create_scenario_generator()
         assert isinstance(gen, ScenarioGenerator)
         assert not isinstance(gen, LLMScenarioGenerator)
 
-    def test_returns_llm_generator_with_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_api_key_alone_does_not_enable_the_llm_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A credential must not silently change the behaviour of a run."""
+        monkeypatch.delenv("VALIDSIM_LLM_ENABLED", raising=False)
+        monkeypatch.setenv("VALIDSIM_LLM_API_KEY", "sk-presence-check")
+        gen = create_scenario_generator()
+        assert isinstance(gen, ScenarioGenerator)
+        assert not isinstance(gen, LLMScenarioGenerator)
+
+    def test_returns_llm_generator_when_explicitly_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_LLM_ENABLED", "1")
         monkeypatch.setenv("VALIDSIM_LLM_API_KEY", "sk-presence-check")
         gen = create_scenario_generator()
         assert isinstance(gen, LLMScenarioGenerator)
         assert isinstance(gen.provider, OpenAICompatibleProvider)
+
+    def test_enabled_without_key_degrades_to_rule_based(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A misconfigured optional feature must not break a run."""
+        monkeypatch.setenv("VALIDSIM_LLM_ENABLED", "1")
+        monkeypatch.delenv("VALIDSIM_LLM_API_KEY", raising=False)
+        gen = create_scenario_generator()
+        assert isinstance(gen, ScenarioGenerator)
+        assert not isinstance(gen, LLMScenarioGenerator)
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "maybe"])
+    def test_non_truthy_opt_in_values_stay_off(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_LLM_ENABLED", value)
+        monkeypatch.setenv("VALIDSIM_LLM_API_KEY", "sk-test")
+        assert llm_mod.llm_enabled() is False
+        assert not isinstance(create_scenario_generator(), LLMScenarioGenerator)
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "Yes", "on"])
+    def test_truthy_opt_in_values_turn_it_on(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_LLM_ENABLED", value)
+        monkeypatch.setenv("VALIDSIM_LLM_API_KEY", "sk-test")
+        assert llm_mod.llm_enabled() is True
+        assert isinstance(create_scenario_generator(), LLMScenarioGenerator)
 
 
 class TestParseHelper:

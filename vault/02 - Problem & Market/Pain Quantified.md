@@ -10,6 +10,9 @@ area: "02 - Problem & Market"
 
 # 📉 Pain, Quantified
 
+> [!warning] Verify before external use — 2026-09-21
+> Dollar, downtime, insurance and deal-loss figures are sourced/estimated inputs, not ValidSim-observed outcomes. Confirm source dates and customer applicability before quoting.
+
 The [[Problem Statement]] is only real if the pain has a price tag. It does — every line below is a discovery-call talking point and a slide in the pitch deck ([[Key Figures]]).
 
 ## 2.3 The pain, quantified

@@ -7,7 +7,10 @@ created: 2026-09-18
 area: "02 - Problem & Market"
 ---
 
-# 📐 Market Sizing — TAM / SAM / SOM
+# 📐 Market Sizing (TAM SAM SOM)
+
+> [!warning] Verify before external use — 2026-09-21
+> TAM/SAM/SOM and figures sourced through [[Key Figures]] / [[Sources]] are analytical estimates, not revenue. Re-check source currency and assumptions with a market expert before investor use.
 
 ## 3.1 Total Addressable Market (TAM)
 

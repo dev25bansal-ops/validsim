@@ -1,0 +1,129 @@
+---
+/**
+ * Base layout. Owns <head>, the font loading strategy, the skip link, and the
+ * JSON-LD graph.
+ *
+ * Font loading: Space Grotesk is the display face, JetBrains Mono for data
+ * only. Loaded with font-display: swap plus a metric-matched local fallback so
+ * the swap does not reflow the page. This is the single deliberate external
+ * request — distinctive typography is the highest-leverage defence against a
+ * generic, AI-generated look, and the alternatives (Inter/Roboto/system-ui) are
+ * exactly the invisible defaults to avoid.
+ */
+import '../styles/global.css';
+import { site, faq } from '../data/content';
+
+interface Props {
+  title: string;
+  description: string;
+  /** Extra JSON-LD nodes to merge into the @graph. */
+  schema?: Record<string, unknown>[];
+  /** Hide the masthead/footer on a page that supplies its own chrome. */
+  bare?: boolean;
+}
+
+const { title, description, schema = [], bare = false } = Astro.props;
+
+/* The FAQPage graph is DERIVED from `faq`, the same array Faq.astro renders.
+ * It used to be a hand-maintained copy of the questions and answers, which is
+ * the one thing structured data must never be: a second place to forget to
+ * update. It had already drifted once — a published question was missing from
+ * the graph entirely — and a schema.org FAQPage that advertises a subset is a
+ * manual-action risk, because the page still shows all five answers while the
+ * structured data claims four. Deriving it makes that class of drift
+ * impossible rather than merely fixed once. */
+const faqSchema = {
+  '@type': 'FAQPage',
+  mainEntity: faq.map((entry) => ({
+    '@type': 'Question',
+    name: entry.q,
+    acceptedAnswer: { '@type': 'Answer', text: entry.a },
+  })),
+};
+
+const graph = [
+  {
+    '@type': 'Organization',
+    '@id': `${site.domain}/#org`,
+    name: site.name,
+    url: `${site.domain}/`,
+    email: site.email,
+    description: 'Continuous validation, regression testing, and safety scoring for robot foundation models.',
+    sameAs: [site.github],
+  },
+  {
+    '@type': 'SoftwareApplication',
+    name: site.name,
+    applicationCategory: 'DeveloperApplication',
+    operatingSystem: 'Linux, macOS, Windows',
+    description:
+      'Runs a robot model checkpoint through thousands of simulated episodes under domain randomization and adversarial scenarios, then returns a scorecard that gates deployment.',
+    offers: [
+      { '@type': 'Offer', name: 'Developer', price: '0', priceCurrency: 'USD' },
+      { '@type': 'Offer', name: 'Team', price: '2000', priceCurrency: 'USD' },
+      { '@type': 'Offer', name: 'Pro', price: '8000', priceCurrency: 'USD' },
+    ],
+  },
+  faqSchema,
+  ...schema,
+];
+
+const jsonld = JSON.stringify({ '@context': 'https://schema.org', '@graph': graph });
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={Astro.url.pathname === '/' ? `${site.domain}/` : Astro.url.href} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={`${site.domain}${Astro.url.pathname}`} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='9.5' y='9.5' width='21' height='14.5' rx='3' fill='none' stroke='%23F0A92E' stroke-width='3'/%3E%3Ccircle cx='16' cy='16.8' r='2.1' fill='%23E8EEF9'/%3E%3Ccircle cx='24' cy='16.8' r='2.1' fill='%23E8EEF9'/%3E%3C/svg%3E"
+    />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      crossorigin
+      href="https://fonts.gstatic.com/s/spacegrotesk/v16/V8mQoQDjQSkFtoMM3T6r8E7mF71Q-gOoraIAEj7oUXskPMBBSSJLm2E.woff2"
+    />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
+
+    <!-- Metric-matched fallback so the webfont swap does not reflow the page. -->
+    <style is:inline>
+      @font-face {
+        font-family: 'Space Grotesk Fallback';
+        src: local('Arial');
+        size-adjust: 100%;
+        ascent-override: 92%;
+        descent-override: 24%;
+        line-gap-override: 0%;
+      }
+      html { background: oklch(0.12 0.008 90); }
+    </style>
+
+    <script type="application/ld+json" set:html={jsonld} is:inline />
+  </head>
+
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <slot name="chrome" />
+    <slot />
+  </body>
+</html>

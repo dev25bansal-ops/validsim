@@ -12,6 +12,9 @@ area: "03 - Product"
 
 What the MVP does **NOT** do (yet). This list is a scope-defense document: when a design partner, advisor, or founder wants to "just quickly add" one of these during the sprint, cite this note and log the request in the [[Decision Log]].
 
+> [!important] Blueprint status — 2026-09-21
+> This is intended scope, not a verified product inventory. The current repository has a static FastAPI dashboard and shared API key; Auth0/Clerk, Stripe, HIL, Cosmos, and enterprise fleet/compliance features are not implemented.
+
 ## 7.2 The nine exclusions
 
 | ❌ Excluded from MVP | Why excluded | When it returns |
@@ -24,7 +27,7 @@ What the MVP does **NOT** do (yet). This list is a scope-defense document: when 
 | **Billing / multi-tenant SaaS** | Stripe integration distracts from demo; design partners are contracted manually | Pre-launch for Team tier [[Go-to-Market]] Phase 2 |
 | **ROS 2 bridge** | Same rationale as HIL — deferred with it | Year 2 roadmap [[90-Day Roadmap]] |
 | **NVIDIA Cosmos integration** | Photorealistic visual randomization is a v2; classical domain randomization (6+ axes) suffices [[8-Week Sprint Plan]] W2 | Year 2, once Inception early-SDK access lands [[NVIDIA Inception]] |
-| **Enterprise SSO / RBAC** | Auth0 multi-tenant is on the stack but out of MVP scope; demo uses single project | Enterprise sales motion [[Go-to-Market]] Phase 3 |
+| **Enterprise SSO / RBAC** | Auth0/Clerk is target infrastructure, not an implemented current stack component; the prototype uses a shared API key | Enterprise sales motion [[Go-to-Market]] Phase 3 |
 
 ## The meta-rule
 

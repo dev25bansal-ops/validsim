@@ -12,14 +12,17 @@ area: "04 - Engineering"
 
 Findings and fixes from the security audit of the ValidSim MVP stack (API surface, webhooks, deployment compose). Context: [[Solution Architecture]] · endpoint surface: [[API Design]] · execution entry points: [[CLI Design]] · threat framing: [[Risk Register]].
 
+> [!important] Implementation boundary — 2026-09-21
+> Auth and HMAC signing are implemented in the source, but auth is opt-in, `/api/v1/health` is public, bare `/metrics` is intentionally unauthenticated, and the live process-local rate limiter is disabled by default. HMAC signing belongs to the webhook dispatcher library; `POST /api/v1/webhooks` is still planned, so no public webhook-registration surface ships today.
+
 ## 1. API key auth — enforced via `VALIDSIM_API_KEY` ✅
 
 Implemented in `validsim/api/main.py` (`create_app`, dependency `require_api_key`):
 
-- When `VALIDSIM_API_KEY` is set at app-build time, **every `/api/v1` route** requires an `X-API-Key` header matching it.
+- When `VALIDSIM_API_KEY` is set at app-build time, `/api/v1` routes require an `X-API-Key` header matching it, except the public `/api/v1/health` probe; bare `/metrics` is also intentionally public.
 - Comparison is **constant time** (`secrets.compare_digest`) — no timing oracle on the key.
 - Missing, empty, and wrong values all raise a **uniform 401** ("Missing or invalid API key") with `WWW-Authenticate: ApiKey` — the response does not reveal whether the key exists.
-- When the env var is unset, auth is disabled entirely; this is deliberate to keep local development and the test suite open, and is safe only because the deployment convention is *always set the key outside dev*.
+- When the env var is unset, auth is disabled entirely; this is deliberate for local development. `VALIDSIM_ENV=production|prod` refuses to start without a configured key.
 
 Verified by `tests/test_api_auth.py`.
 
@@ -40,14 +43,14 @@ Implemented in `validsim/notify/dispatcher.py`:
 
 - Hooks registered with a `secret` get an **`X-ValidSim-Signature`** header on live sends: hex **HMAC-SHA256** of the exact JSON body, keyed by the secret (`_sign_body`).
 - Receivers verify by recomputing the HMAC over the raw request body and comparing (ideally constant-time) — protects against forged scorecards and replayed/tampered payloads on the wire.
-- Applies to both `json` and `slack` payload formats; dry-run sends (default) carry no network I/O and thus no signature.
+- Applies to both `json` and `slack` payload formats; dry-run sends (default) carry no network I/O and thus no signature. The public webhook configuration endpoint is not implemented.
 
-## 4. Compose credentials — password now required ⚠️ (fix in progress)
+## 4. Compose credentials — password now required ✅
 
 The stack ([[Solution Architecture]] L1/L5 services) must not ship a working default password. Target state:
 
 - `POSTGRES_PASSWORD` is **required** — the API's `VALIDSIM_PG_URL` and the postgres service both read it from the environment / `.env`; no committed default.
-- Redis stays dev-local only (ports bound to `127.0.0.1`, no persistence-critical data).
+- Redis stays loopback-published for local debugging; Compose persists its volume, but the job queue is not a compliance system of record.
 
 > [!success] Resolved (2026-09-20)
 > The former `${POSTGRES_PASSWORD:-validsim_dev_only}` dev fallback has been removed from every service in `docker-compose.yml`; the stack now uses `${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}`, so `docker compose up` fails fast when the password is unset instead of silently starting with a known one. The api service was also corrected to set `VALIDSIM_STORE` + `VALIDSIM_PG_URL` (it previously set an unused `VALIDSIM_DATABASE_URL`, so Postgres was never actually wired).
@@ -72,7 +75,7 @@ postgresql://validsim:<pw>@db.example.com:5432/validsim?sslmode=require
 
 ## Verification status
 
-- Fix 1–3 verified against source (`validsim/api/main.py`, `validsim/notify/dispatcher.py`) and their test files (`tests/test_api_auth.py`, `tests/test_notify_enhancements.py`). No tests were run for this note.
-- Item 4 is recorded from the audit intent; the compose file currently still carries the dev fallback (see warning above).
+- Fixes 1–4 were checked against the current source/config during the 2026-09-21 catalog pass; no tests were run for this note.
+- The public webhook-registration route, distributed limiter, and Auth0/Clerk remain roadmap work; do not read the dispatcher implementation as proof of a public integration endpoint.
 
 Links: [[Solution Architecture]] · [[API Design]] · [[CLI Design]] · [[Risk Register]] · [[Home]]

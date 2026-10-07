@@ -11,6 +11,9 @@ area: "04 - Engineering"
 
 Cloud-native platform between model training and real-world deployment. Five layers, top to bottom, plus a cross-cutting observability layer. Every request surface — the synchronous API, the CLI, and the async job worker — converges on a single shared engine pipeline (`run_and_score`); the async job queue (Redis/memory) is an additive path feeding that same pipeline. Component-level specs: [[Module Specs]]; runtime sequence: [[Data Flow]]; technology choices: [[Tech Stack]].
 
+> [!important] Blueprint status — 2026-09-21
+> The diagram and five-layer table are target architecture. The shipped runtime is FastAPI/Typer + one shared engine, memory/Redis jobs, SQLite/PostgreSQL, static HTML/JS, Docker Compose, local Actions and optional HTTP Isaac worker. Kubernetes/Argo, RabbitMQ, gRPC, Next.js/React, immutable audit and fleet integration are not implemented in this repository.
+
 ## 4.2 High-level system architecture
 
 ```
@@ -30,7 +33,9 @@ Cloud-native platform between model training and real-world deployment. Five lay
 │                  L2 · SIMULATION EXECUTION ENGINE                   │
 │  • NVIDIA Isaac Sim / Isaac Lab (GPU-parallel episodes)             │
 │  • Domain Randomization Module                                      │
-│  • LLM-Generated Adversarial Scenarios (GPT-4 / Cosmos)             │
+│  • Adversarial Scenarios — 12 categories                            │
+│    (shipped: deterministic rule-based generator;                    │
+│     LLM generation is target state, not wired into a run)           │
 │  • Physics Fidelity Layer (PhysX 5)                                 │
 │  • Multi-embodiment support (GR00T, pi0, custom VLAs)               │
 │  • Parallel episode runner (1,000–100,000 episodes per validation)  │
@@ -39,7 +44,7 @@ Cloud-native platform between model training and real-world deployment. Five lay
 ┌─────────────────────────────────────────────────────────────────────┐
 │                  L3 · EVALUATION & SCORING ENGINE                   │
 │  • Success Rate Calculator (per task, per scenario)                 │
-│  • Failure Taxonomy Classifier (LLM + rule-based)                   │
+│  • Failure Taxonomy Classifier (rule-based; LLM is target)          │
 │  • Regression Delta Engine (compare vs. previous checkpoint)        │
 │  • Safety Score Module (collision, force limits, human proximity)   │
 │  • Statistical Significance Testing (confidence intervals)          │
@@ -47,9 +52,11 @@ Cloud-native platform between model training and real-world deployment. Five lay
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                  L4 · REPORTING & DASHBOARD LAYER                   │
-│  • Web Dashboard (React / Next.js)     • Scorecard Generator (PDF)  │
-│  • Regression Timeline                 • Alerting & Webhooks        │
+│  • Web Dashboard (static SPA; Next.js is target)                    │
+│  • Scorecard Generator (PDF)           • Alerting & Webhooks        │
 │  • Programmatic API                    • Audit Trail (immutable)    │
+│         (webhook dispatcher + SMTP notifier exist as libraries,    │
+│          but nothing in the run path dispatches a scorecard)        │
 └──────────────────────────────┬──────────────────────────────────────┘
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -89,7 +96,7 @@ Not a sixth tier but middleware wrapped around L1, always on:
 | Prometheus metrics | `validsim_runs_total`, `validsim_approvals_total`, `validsim_blocks_total`, `validsim_composite_score`, `validsim_build_info`, `validsim_http_requests_total{class=…}` | `/metrics` (unauthenticated scrape) + `/api/v1/metrics` (auth-gated) |
 | Health probe | `status`, `version`, auth/CORS/rate-limit config, live `store_backend` / `job_queue_backend` labels | `/api/v1/health` |
 
-Run/approval/block gauges are derived from the injected store at scrape time (one cheap `history()` pass), so a scrape adds no extra I/O. Stack-level tooling: Grafana + Prometheus, ELK ([[Tech Stack]]).
+Run/approval/block gauges are derived from the injected store at scrape time (one cheap `history()` pass), so a scrape adds no extra I/O. Current repository tooling is a Prometheus text endpoint plus structured logs; Grafana and ELK are target-state integrations ([[Tech Stack]]).
 
 ## Store: pruning & date-range queries
 
@@ -102,12 +109,12 @@ The validation store (`ValidationStore` and its SQLite/Postgres backends) expose
 
 | Decision | Why | Consequence |
 |---|---|---|
-| **Isaac Sim/Lab as the sim substrate** | Open-source, PhysX 5, GPU-parallel; NVIDIA courting ecosystem ([[Why Now (2026)]] Force 4) | Platform risk → move fast, own workflow ([[Risk Register]] #2) |
-| **Queue + K8s + Argo DAGs** | Validation runs are bursty, GPU-bound, embarrassingly parallel | Cost control via batch scheduling ([[Risk Register]] #6) |
-| **LLM in the loop for scenarios** | 12-category adversarial taxonomy generated, not hand-written ([[Module Specs]] M3) | Novelty + data flywheel ([[Moat]]) |
+| **Isaac Sim/Lab as the target sim substrate** | Mock backend ships now; planned GPU worker speaks HTTP. Open-source, PhysX 5, GPU-parallel; NVIDIA courting ecosystem ([[Why Now (2026)]] Force 4) | Platform risk → validate the worker before claiming NVIDIA-native throughput ([[Risk Register]] #2) |
+| **Queue today; K8s/Argo later** | Current memory/Redis FIFO is adequate for the local MVP; validation is bursty, GPU-bound and embarrassingly parallel | No scheduler/autoscaling today; batch cost control remains a later decision ([[Risk Register]] #6) |
+| **Deterministic 12-category scenario taxonomy today; LLM in the loop as the differentiator** | The taxonomy is generated from a seeded rule-based generator, not hand-written per run ([[Module Specs]] M3) | Reproducible today; the LLM path is a **target** — `engine/pipeline.py:131` never constructs the LLM generator, so do not present LLM scenario generation as a shipped capability ([[Moat]]) |
 | **CI-native entry points (Actions/CLI/API)** | Developer-native principle ([[Product Principles]] #6) | Free/Dev tier funnel → [[Go-to-Market]] Phase 2 |
 | **Deployment gate as a layer, not a feature** | The scorecard is a decision ([[Product Principles]] #4) | Sticky workflow → NRR >120% ([[Unit Economics]]) |
-| **Immutable audit trail** | Insurers/regulators are Tier-4 buyers ([[Buyer Tiers]]) | Compliance moat ([[Compliance]]) |
+| **Immutable audit trail (target)** | Insurers/regulators are Tier-4 buyers ([[Buyer Tiers]]) | Current history is not hash-chained and `DELETE` is supported; compliance retention remains a product/build decision ([[Compliance]]) |
 | **Single shared engine pipeline (`run_and_score`)** | API, CLI and worker must emit identical scorecards; duplication caused drift | One place to change evaluation/scoring; entry surfaces stay thin |
 | **Async queue as an additive path, not a rewrite** | Long runs shouldn't hold the socket ([[Async Job Queue]]) | Sync `POST /validations` keeps working; `202` + poll/SSE for batch & GPU |
 | **Observability as middleware, not a service** | A 2-founder team can't run a metrics backend ([[Strategic Advantages]]) | Request-id, structured logs and Prometheus free from day one; scrape is store-derived |
@@ -115,10 +122,10 @@ The validation store (`ValidationStore` and its SQLite/Postgres backends) expose
 
 ## Scale envelope
 
-- Episodes per validation: **1,000–100,000** (MVP: 1,000–5,000, [[MVP Scope]])
-- GPU spread: **8–64 GPUs** per run; min **10GB VRAM** per Isaac Gym instance
+- Target episodes per validation: **1,000–100,000** (planned MVP benchmark: 1,000–5,000, [[MVP Scope]])
+- Target GPU spread: **8–64 GPUs** per run; assumed min **10GB VRAM** per Isaac Gym instance; unmeasured today
 - Adversarial scenarios injected: **50–100 per run**
-- Latency budget: 5,000 episodes < 30 min; scorecard +5 min ([[MVP Success Metrics]])
+- Latency budget: 5,000 episodes < 30 min; scorecard +5 min — **targets, not measurements**; requires GPU/Isaac, and the shipped engine is a serial CPU mock ([[MVP Success Metrics]])
 - Async job queue depth cap: **1,000 jobs** by default (`VALIDSIM_JOB_QUEUE_MAX_DEPTH`); a full queue returns `503` back-pressure rather than growing without limit
 
 Links: [[Module Specs]] · [[Data Flow]] · [[Async Job Queue]] · [[Job Queue Worker]] · [[Tech Stack]] · [[API Design]] · [[Home]]

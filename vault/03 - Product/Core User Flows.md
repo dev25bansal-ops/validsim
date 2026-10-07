@@ -12,6 +12,9 @@ area: "03 - Product"
 
 Three flows map the three buying roles ([[User Personas]]) onto the platform. Flows 1b, 4 and 5 sit on top of them: the async job queue, the founder's nightly adversarial sweep, and run deletion. Each flow is an acceptance test for the [[8-Week Sprint Plan]] and a scene in the YC demo video ([[YC Countdown]]).
 
+> [!important] Blueprint status — 2026-09-21
+> The current REST/CLI surface has no fleet deployment-gate endpoint or immutable audit log. CI gating ships through `validsim gate` and the local composite Actions; validation history is persisted, but runs can be deleted. Dashboard/notification views below mix shipped MVP behavior with target-state screens.
+
 ## Flow 1 — Submit & Validate *(ML Engineer)* 🥇
 
 1. Push model checkpoint to registry
@@ -47,7 +50,7 @@ CLI equivalent: `validsim job enqueue -c <ckpt> -t <task> -e 5000 -a 100`, then 
 4. Click **"Approve Deployment"** → fleet update begins
 5. Or click **"Block"** → developer notified with failure details
 
-Mechanics: `POST /api/v1/deployment-gate` returns JSON `{approve/block + reasoning}`; CLI equivalent `validsim gate --run-id abc123 --threshold 85` ([[API Design]], [[CLI Design]]). Every decision lands in the immutable audit trail ([[Data Flow]] step 6).
+Mechanics (current CLI): `validsim gate --run-id vrun-1a2b3c4d --threshold 85` reads the stored verdict and exits `0` for `APPROVE` or non-zero for `BLOCK`; the planned `POST /api/v1/deployment-gate` and immutable decision log do not exist ([[API Design]], [[CLI Design]], [[Data Flow]]).
 
 ## Flow 3 — Compliance Report *(Compliance Officer / Insurer)* 📋
 
@@ -64,7 +67,7 @@ Mechanics: `POST /api/v1/deployment-gate` returns JSON `{approve/block + reasoni
 
 1. `examples/nightly-adversarial-sweep.yml` fires at **03:00 UTC** (`cron: "0 3 * * *"`) — plus `workflow_dispatch` for an on-demand sweep before a release cut
 2. `python -m validsim.cli run --episodes 2000 --adversarial 200 --checkpoint nightly-checkpoint` — the deep pass: **2,000 + 200** vs. the **1,000 + 50** the PR workflow keeps for fast feedback ([[GitHub Actions Integration]])
-3. `python -m validsim.cli gate --latest` exits **1 on BLOCK** (composite < threshold), so the job — and anything wired behind it with `needs:` — fails on a bad nightly score
+3. `python -m validsim.cli gate --latest` exits **1 on BLOCK** (stored verdict not `APPROVE`, or composite below the threshold), so the job — and anything wired behind it with `needs:` — fails on a bad nightly score. The job exports `VALIDSIM_STORE=sqlite` because the gate decides from the durable store, never the JSON cache
 4. Scorecard JSON + JUnit XML are uploaded as artifacts (`retention-days: 30`) under `if: always()`, so evidence survives a block
 
 Same MVP mode as the PR workflow: the CLI drives the local mock pipeline inside the founder's own job — no SaaS backend, no API key. Schedule triggers only fire from the default branch; dispatch works from any branch. This is the "we run our own product nightly" proof point for [[YC Countdown]] and the repro-before-a-customer-sees-it claim in [[Engineering Momentum Log]].
@@ -76,8 +79,8 @@ Same MVP mode as the PR workflow: the CLI drives the local mock pipeline inside 
 3. Removal is remove-and-report in a single step under the store lock: no check-then-delete race, and idempotent (a second delete of the same id is a `404`)
 4. Identical on the memory, SQLite and Postgres stores; the run drops out of history, trends and `/models` on the next read
 
-> [!warning] API-only today
-> There is no `validsim delete` command and no trash-can button in the [[Scorecard UX]] history table yet — pruning is a `curl` (or an SDK call) away.
+> [!warning] Current deletion surface
+> `validsim delete --run-id vrun-<8 hex>` and `validsim delete --latest` are implemented; there is no trash-can button in the [[Scorecard UX]] history table yet. Pruning is available through the CLI or `DELETE /api/v1/validations/{run_id}`.
 
 ## Dashboard surfaces *(what the operator actually sees)* 🎛️
 
@@ -97,7 +100,7 @@ Trends answer the CTO's question (*"is it getting worse?"* — [[User Personas]]
 | Flow | Sprint weeks | Key endpoints | Persona |
 |---|---|---|---|
 | 1 Submit & Validate | W2, W3, W6, W8 | `POST /validations`, `GET /validations/{id}` | ML Engineer |
-| 2 Deployment Gate | W5, W6, W7 | `POST /deployment-gate`, `POST /validations/{id}/compare` | Fleet Operator |
+| 2 Deployment Gate | W5, W6, W7 | Shipped CLI: `validsim gate`; planned `POST /deployment-gate` · shipped `POST /validations/{id}/compare` | Fleet Operator |
 | 3 Compliance Report | Post-MVP (W8 PDF only) | `GET /validations/{id}/scorecard` | Compliance Officer |
 | 1b Async Submit & Poll | W6 · Iter-6 | `POST /jobs`, `GET /jobs/{id}` (`/status`, `/events`) | ML Engineer |
 | 4 Nightly Sweep | CI from W2 · Iter-6 | CLI `run` + `gate --latest` (no API) | Founder |

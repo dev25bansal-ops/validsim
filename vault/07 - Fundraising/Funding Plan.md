@@ -11,6 +11,9 @@ area: "07 - Fundraising"
 
 §12.3. Four rounds, each tied to a milestone in [[90-Day Roadmap]] / [[KPIs]] — capital arrives *after* evidence, not instead of it.
 
+> [!warning] Verify before external send — 2026-09-21
+> Round terms, timing, burn and Inception-credit coverage are planning assumptions. YC/NVIDIA outcomes, incorporation, traction and benchmark evidence are not verified here. Update this plan before relying on “Inception still active,” credit-funded runway, or milestone language.
+
 ## The ladder
 
 | Round | Timing | Amount | Use |
@@ -24,11 +27,11 @@ area: "07 - Fundraising"
 
 ### YC W27 — the anchor
 - Terms are standard and non-negotiable; the real value is the network + demo-day machine ([[YC Application]])
-- Funded runway overlaps Year-1 burn of **$200K–$350K**, with up to **$350K** compute covered by Inception credits ([[Financial Projections]], [[NVIDIA Inception]])
-- **If rejected (~98% base rate):** reapply S27 with more traction; Inception still active; pre-seed timing unchanged ([[Risk Register]] #7)
+- Planned runway overlaps Year-1 burn of **$200K–$350K** only if applicable Inception credits are actually granted and usable ([[Financial Projections]], [[NVIDIA Inception]])
+- **If rejected:** reapply with more traction; do not assume Inception remains active unless its actual status is confirmed. Pre-seed timing remains a founder decision.
 
 ### Pre-Seed (Q2–Q3 2027) — evidence-sellers
-Raise on: 25+ conversations, 2–3 LOIs, working MVP, public benchmark, Inception membership ([[YC Countdown]] checklist doubles as the pre-seed data room outline). Use of funds maps to [[Hiring Plan]] hires #1–4 (Simulation Eng, Frontend, Dev Advocate, ML Eng — $120K–$200K bands).
+Raise only once the following have dated artifacts: 25+ conversations, 2–3 LOIs, a working MVP demo, a public benchmark, and verified Inception membership if claimed ([[YC Countdown]] checklist is not itself evidence).
 
 ### Seed (Q1–Q2 2028) — the repeatability bet
 Trigger metrics: 30–50 paying customers, $1.4M–$2.4M ARR trajectory, NRR >120% ([[Financial Projections]], [[Unit Economics]]). Funds enterprise sales hire #5 + SRE #6 and Phase-3 GTM ([[Go-to-Market]]).
@@ -39,7 +42,7 @@ Trigger: 100–200 customers, $6M–$12M ARR, insurer-adopted scorecard standard
 ## Sequencing constraints
 
 > [!important] Order matters more than speed
-> 1. **Incorporate → Inception → YC** in weeks 1–10 — Inception approval strengthens the YC app, and YC brand strengthens the pre-seed round ([[NVIDIA Inception]] signal row)
+> 1. **Incorporate → apply to Inception → YC** in weeks 1–10. Inception acceptance may strengthen the YC app, but only after verified acceptance.
 > 2. **Don't raise pre-seed before LOIs** — the doc's closing warning: an idea "never confronted with a real customer conversation" is the most common rejection cause ([[Home]] closing note)
 > 3. **YC batch (Jan 2027) precedes pre-seed** — batch fundraising dynamics are the pre-seed catalyst, hence Q2–Q3 2027 timing
 

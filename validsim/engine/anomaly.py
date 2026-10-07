@@ -55,7 +55,36 @@ _SEED = 42
 #: A z-score at or above ``z_threshold * _CRITICAL_MULTIPLIER`` is "critical".
 _CRITICAL_MULTIPLIER = 2.0
 #: Numerical floor below which sigma is treated as degenerate.
+#:
+#: NOTE (pre-existing, deliberately unchanged): this is an *absolute* floor
+#: compared against a *rate-space* sigma. Sigma here is
+#: ``sqrt(spread^2 + se^2 + p(1-p)/n)`` where ``p`` is a failure rate, so for a
+#: very rare failure mode the binomial floor ``sqrt(p/n)`` drops below 1e-12
+#: once ``p <~ 1e-6``, and the mode is skipped as "degenerate" even when the
+#: z-score is enormous. Measured: a 1e-12 baseline rate spiking to 5e-10 yields
+#: z = 499 yet reports nothing, while the same relative spike at a 1e-9 baseline
+#: rate reports z = 1.6e7. Raising the floor, or making it relative to ``p``,
+#: is a numerical-policy change rather than a correctness fix, so it is left
+#: alone here and recorded instead. It is unreachable for realistic ValidSim
+#: runs (an episode total of 1e6+ with a failure rate under 1e-6).
 _EPS = 1e-12
+#: z-score reported when the baseline has no variance but the current run does.
+#: The true deviation is unbounded, so this is a display sentinel rather than a
+#: computed value. It must stay finite -- ``math.inf`` serialises as a bare
+#: ``Infinity`` token, which is not valid JSON and would corrupt every scorecard
+#: export, so an unbounded z is never reported as infinity.
+_UNBOUNDED_Z = 1e6
+#: Largest denominator used in float division.
+#:
+#: ``float / int`` in CPython converts the int to a float first, which raises
+#: ``OverflowError`` for a value beyond ``float`` range even though the
+#: *quotient* would be a perfectly ordinary number (it underflows to ``0.0``).
+#: Python ints are unbounded, so a single corrupt ``total_episodes`` of, say,
+#: ``10 ** 400`` is otherwise enough to abort the whole report. Any
+#: denominator this large contributes a binomial variance of exactly ``0.0``
+#: to any double-precision sigma, so short-circuiting is exact, not an
+#: approximation.
+_MAX_SAFE_DENOMINATOR = 10 ** 300
 
 
 @dataclass(frozen=True)
@@ -98,11 +127,16 @@ def _total(run: dict[str, Any]) -> int:
 
 
 def _taxonomy(run: dict[str, Any]) -> dict[str, int]:
-    """Return a run's failure-mode taxonomy as a plain ``str -> int`` dict."""
+    """Return a run's failure-mode taxonomy as a plain ``str -> int`` dict.
+
+    Counts go through :func:`validsim.engine._coerce.as_int` so a malformed
+    value (``None``, ``"abc"``, a float) degrades to ``0`` instead of raising --
+    the same tolerant contract every other reader in this module honours.
+    """
     tax = run.get("failure_taxonomy") or {}
     if not isinstance(tax, dict):
         return {}
-    return {str(k): int(v) for k, v in tax.items()}
+    return {str(k): as_int(v, default=0) for k, v in tax.items()}
 
 
 def _bootstrap_se(values: Sequence[float]) -> float:
@@ -176,9 +210,45 @@ def detect_anomalies(
         expected = statistics.fmean(rates)
         spread = statistics.pstdev(rates)
         se_mean = _bootstrap_se(rates)
-        binomial_var = expected * (1.0 - expected) / current_total
+        # ``expected`` is a rate derived from ``count / total_episodes``. If a
+        # record is internally inconsistent (a failure-mode count exceeding the
+        # run's own episode total -- possible with a truncated/merged history or
+        # a hand-written record) the rate exceeds 1.0, ``expected * (1-expected)``
+        # goes negative, and ``math.sqrt`` raises ValueError straight out of the
+        # detector. The binomial term is a variance, so it is clamped at 0: an
+        # impossible record must not crash the report, it must just carry no
+        # extra sampling uncertainty.
+        #
+        # The division is guarded independently of the clamp above. Python
+        # ints are arbitrary precision, so an absurd ``total_episodes`` parses
+        # perfectly through ``as_int`` and then raises ``OverflowError`` on
+        # ``float / huge_int`` -- a second, independent way for one corrupt
+        # record to destroy the report. Python's own float semantics would
+        # underflow this to 0.0, so short-circuiting the enormous denominator
+        # reproduces that result without relying on it.
+        binomial_var = (
+            0.0
+            if current_total > _MAX_SAFE_DENOMINATOR
+            else max(0.0, expected * (1.0 - expected)) / current_total
+        )
         sigma = math.sqrt(spread * spread + se_mean * se_mean + binomial_var)
         if sigma <= _EPS:
+            # A flat baseline leaves z undefined, not absent. A brand-new
+            # failure mode has the least history of any mode, so it lands
+            # here with every baseline rate at zero -- and skipping it is
+            # exactly backwards, because the first ever appearance of a
+            # failure mode is the loudest signal this detector can emit.
+            if observed > expected:
+                anomalies.append(
+                    Anomaly(
+                        run_id=_run_id(current, len(history) - 1),
+                        failure_mode=mode,
+                        observed=round(observed, 6),
+                        expected=round(expected, 6),
+                        z_score=_UNBOUNDED_Z,
+                        severity=_classify(_UNBOUNDED_Z, z_threshold),
+                    )
+                )
             continue
 
         z_score = (observed - expected) / sigma

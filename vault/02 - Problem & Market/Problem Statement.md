@@ -9,6 +9,9 @@ area: "02 - Problem & Market"
 
 # 🩸 Problem Statement
 
+> [!warning] Verify before external use — 2026-09-21
+> Statements such as “no productized pipeline,” “every lab,” and the three-zero framing are market hypotheses, not facts established by this repository. Validate with current discovery interviews and sourced competitive research.
+
 ## The core problem
 
 > [!important]

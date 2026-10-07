@@ -11,6 +11,9 @@ area: "03 - Product"
 
 Five personas, one buying committee. The **ML Engineer** is the wedge user (first to feel pain, first to try a CLI); the others determine whether a free trial becomes a [[Pricing Tiers|Pro or Enterprise contract]].
 
+> [!important] Blueprint status — 2026-09-21
+> These are target personas and workflows, not observed customer segments. The current product exposes CLI/API, a static dashboard, reports, jobs, and local Actions; fleet deployment, compliance packages, and immutable audit trails are planned.
+
 ## 5.1 Persona table
 
 | Persona | Role | Pain | Goal | Frequency |
@@ -35,7 +38,7 @@ Five personas, one buying committee. The **ML Engineer** is the wedge user (firs
 
 ### Fleet Operator — the gatekeeper
 - Manages 50–500 robots; "testing on 1 robot ≠ testing on 1,000."
-- Surface: Approve/Block deployment gate with threshold, e.g. `validsim gate --run-id abc123 --threshold 85` ([[Core User Flows]] Flow 2, [[CLI Design]]).
+- Surface: Approve/Block deployment gate with threshold, e.g. `validsim gate --run-id vrun-1a2b3c4d --threshold 85` ([[Core User Flows]] Flow 2, [[CLI Design]]).
 
 ### CTO / VP Eng — the economic buyer
 - Weekly regression-timeline review; wants trend, not tickets ([[Scorecard UX]]).
@@ -43,7 +46,7 @@ Five personas, one buying committee. The **ML Engineer** is the wedge user (firs
 
 ### Compliance Officer — the external forcing function
 - At customer or insurer (Munich Re, Swiss Re, UL, TÜV — [[Buyer Tiers]] Tier 4).
-- Consumes immutable audit trail + hash-chained logs ([[Module Specs]] Module 5).
+- Planned compliance persona: consumes a future immutable, hash-chained log; the current product exposes validation history and deletion, not an audit chain ([[Module Specs]] Module 5).
 
 ## Design implications
 

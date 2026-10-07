@@ -13,6 +13,17 @@ Python 3 uses absolute imports, ``import logging`` *within* this file still
 resolves to the standard library, and other modules that want the stdlib get it
 unchanged; only ``from validsim import logging`` / ``validsim.logging`` reach
 this module.
+
+Redaction
+---------
+:class:`JsonLogFormatter` applies a **redaction layer** to every structured
+field before serialising it: a field whose name :func:`is_sensitive_key`
+recognises has its value replaced with :data:`REDACTED`, recursively through
+nested containers. Without it, ``extra={"api_key": key}`` wrote the credential
+to stdout and every downstream aggregator with no error and no visible
+mistake — the log line *was* the leak. The matching rules and their two
+deliberate non-goals (no prose scanning, no permissive substring matching) are
+documented on the class and on :data:`SENSITIVE_KEY_NAMES`.
 """
 
 from __future__ import annotations
@@ -26,10 +37,13 @@ from typing import Any, TextIO
 
 __all__ = [
     "JsonLogFormatter",
-    "configure_logging",
-    "get_logger",
     "LOGGER_NAME",
     "LOG_LEVEL_ENV",
+    "REDACTED",
+    "SENSITIVE_KEY_NAMES",
+    "configure_logging",
+    "get_logger",
+    "is_sensitive_key",
 ]
 
 #: Name of the package root logger every ValidSim logger descends from.
@@ -55,6 +69,137 @@ _RESERVED_ATTRS = frozenset(
         name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None
     ).__dict__.keys()
 ) | {"asctime", "message", "taskName"}
+
+#: Placeholder substituted for any value whose field name is known-sensitive.
+REDACTED = "***REDACTED***"
+
+#: Canonical names of fields whose value must never be written to a log.
+#: Matched against a *normalised* key (see :func:`is_sensitive_key`), so
+#: ``api_key``, ``API-KEY`` and ``apiKey`` all resolve to one entry here.
+#:
+#: The set is an explicit allow-list of *names*, not a substring rule. A
+#: substring match on "auth" would eat ``auth_enabled`` — a boolean this
+#: codebase logs on purpose — and would mask every field that merely mentions a
+#: sensitive word, destroying the diagnostics the log exists to provide. The
+#: trade is deliberate: an unlisted derived spelling (``csrftoken``) leaks,
+#: while a listed word never eats an innocent field.
+#:
+#: ``credentials`` and ``cookie`` are included because a header/connection bag
+#: is a secret container by nature — you cannot redact a bag field-by-field
+#: and still have called it redacted.
+SENSITIVE_KEY_NAMES: frozenset[str] = frozenset(
+    {
+        "apikey",
+        "authorization",
+        "cookie",
+        "credential",
+        "credentials",
+        "passwd",
+        "password",
+        "privatekey",
+        "secret",
+        "secretkey",
+        "setcookie",
+        "token",
+    }
+)
+
+#: Suffixes that mark a (possibly namespaced) field as a credential. A field
+#: whose normalised name ends with one of these is sensitive, so
+#: ``VALIDSIM_API_KEY`` and ``smtp_password`` are caught without listing every
+#: possible namespace prefix.
+#:
+#: Credential-bearing ``*key`` names are listed **compound**
+#: (``accesskey``, ``privatekey``, …) rather than as a bare ``key``: a bare
+#: ``key`` suffix would mask ``monkey``, ``keyboard`` and ``hockey``, and a
+#: logger that eats three innocent fields per day gets turned off entirely.
+_SENSITIVE_SUFFIXES: tuple[str, ...] = (
+    "apikey",
+    "accesskey",
+    "credential",
+    "credentials",
+    "encryptionkey",
+    "passwd",
+    "password",
+    "privatekey",
+    "secret",
+    "secretkey",
+    "signingkey",
+    "sshkey",
+    "token",
+)
+
+#: Guards the cycle-walk: deep in a pathological structure we stop masking
+#: rather than recurse without bound. Real ``extra`` payloads are a handful of
+#: levels deep, so this is a safety valve, not a working limit.
+_MAX_REDACT_DEPTH = 12
+
+
+def _normalise_key(key: str) -> str:
+    """Reduce a field name to its comparison form.
+
+    Lower-cases and deletes every character that is not ``a-z0-9``, so
+    ``X-Api_Key``, ``x.api.key`` and ``API KEY`` all collapse to ``xapikey``.
+    Substring-ish shapes (``api_key``, ``apikey``) are handled by the caller
+    through a small alias table rather than by guessing a word boundary.
+    """
+    return "".join(char for char in str(key).lower() if char.isalnum())
+
+
+def is_sensitive_key(key: str) -> bool:
+    """Return whether a structured log field named *key* must be redacted.
+
+    Args:
+        key: The field name as it would appear in the emitted JSON object.
+
+    Returns:
+        ``True`` when the name is a known credential field.
+
+    The rule is two-part and both parts are necessary:
+
+    * an **exact** match on :data:`SENSITIVE_KEY_NAMES` (``authorization``,
+      ``cookie``, ``set-cookie``, ``credentials``), and
+    * a **suffix** match on :data:`_SENSITIVE_SUFFIXES`, so a namespaced field
+      like ``VALIDSIM_API_KEY`` or ``smtp_password`` is caught.
+
+    A bare ``key`` is deliberately *not* a suffix: ``monkey``, ``keyboard``
+    and ``hockey`` all end in it, so the credential-bearing ``*key`` names are
+    listed compound (``accesskey``, ``privatekey``) instead.
+    """
+    normalised = _normalise_key(key)
+    if not normalised:
+        return False
+    if normalised in SENSITIVE_KEY_NAMES:
+        return True
+    return any(normalised.endswith(suffix) for suffix in _SENSITIVE_SUFFIXES)
+
+
+def redact_value(value: Any, *, _depth: int = 0) -> Any:
+    """Return *value* with every known-sensitive field name replaced.
+
+    Walks dicts, lists and tuples recursively, so a credential nested one level
+    down (``{"auth": {"api_key": ...}}``) is masked too. Non-container values are
+    returned unchanged; a scalar cannot carry a *field name*, so there is
+    nothing to match on.
+
+    A self-referential structure is replaced wholesale rather than followed
+    forever: ``record.__dict__`` is caller-controlled, and the formatter's
+    contract is to emit a line, not to raise or hang.
+    """
+    if _depth >= _MAX_REDACT_DEPTH:
+        return REDACTED
+    if isinstance(value, dict):
+        result: dict[Any, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, str) and is_sensitive_key(key):
+                result[key] = REDACTED
+            else:
+                result[key] = redact_value(item, _depth=_depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        rendered = [redact_value(item, _depth=_depth + 1) for item in value]
+        return type(value)(rendered) if isinstance(value, tuple) else rendered
+    return value
 
 
 def _resolve_level(level: int | str | None) -> int:
@@ -83,10 +228,27 @@ class JsonLogFormatter(logging.Formatter):
     ``logger`` and ``message``; any structured fields a caller passed through
     ``extra={...}`` are merged in. Exceptions are formatted into an
     ``exc_info`` string so a traceback stays on one JSON line.
+
+    **Redaction.** Before serialisation, every structured field whose name
+    :func:`is_sensitive_key` recognises has its value replaced with
+    :data:`REDACTED`, recursively through dicts, lists and tuples. The stdlib's
+    ``extra=`` argument is precisely the mechanism by which credentials
+    *accidentally* reach a log — ``logger.info("auth", extra={"api_key": k})``
+    needs no mistake anywhere, it just attaches a field the operator will
+    later want, and the credential goes to stdout and every aggregator
+    downstream. Without this layer the log line is the leak.
+
+    Two deliberate boundaries:
+
+    * The free-text ``message`` is **not** scanned. Pattern-matching prose
+      produces false positives on ordinary English and gives no real guarantee;
+      the reliable signal is a structured field *name*.
+    * Only *known* names are masked. See :data:`SENSITIVE_KEY_NAMES` for why a
+      permissive substring rule was rejected instead of shipped.
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        """Serialise ``record`` to a one-line JSON string."""
+        """Serialise ``record`` to a one-line JSON string, redacting secrets."""
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(
                 record.created, tz=timezone.utc
@@ -98,7 +260,10 @@ class JsonLogFormatter(logging.Formatter):
         for key, value in record.__dict__.items():
             if key in _RESERVED_ATTRS or key.startswith("_"):
                 continue
-            payload[key] = value
+            if isinstance(key, str) and is_sensitive_key(key):
+                payload[key] = REDACTED
+                continue
+            payload[key] = redact_value(value)
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         elif record.exc_text:

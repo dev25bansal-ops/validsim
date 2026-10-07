@@ -9,6 +9,9 @@ area: "02 - Problem & Market"
 
 # 📈 Demand Signals
 
+> [!warning] Verify before external use — 2026-09-21
+> Funding, customer and market signals are time-sensitive research inputs. Confirm dates/sources and distinguish market evidence from ValidSim customer proof.
+
 Observable market evidence that the [[Problem Statement]] is being paid for *right now* — not a future thesis. Use these five signals whenever an investor says "but does anyone care?"
 
 ## The five signals

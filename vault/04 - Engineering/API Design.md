@@ -9,7 +9,10 @@ area: "04 - Engineering"
 
 # 🔌 API Design
 
-REST API surface (v1). FastAPI 0.110+, async, OpenAPI spec auto-generated, rate-limited ([[Module Specs]] M1, [[Tech Stack]]). Docs ship at `docs.validsim.com` (sprint W6 deliverable).
+REST API surface (v1). FastAPI 0.110+, async, OpenAPI spec auto-generated; the current API has an opt-in process-local limiter for selected write routes ([[Module Specs]] M1, [[Tech Stack]]). Docs ship at `docs.validsim.com` (sprint W6 deliverable).
+
+> [!important] Blueprint status — 2026-09-21
+> The current REST surface exposes validation CRUD/reporting, jobs, models, regressions, health and metrics. `POST /webhooks`, `GET /audit-log`, and `POST /deployment-gate` remain planned endpoints; `/validations/{id}/episodes` and the lifecycle/webhook examples below are also target state. Source of truth: [[API & CLI]].
 
 ## 4.5 Key endpoints
 
@@ -17,16 +20,16 @@ REST API surface (v1). FastAPI 0.110+, async, OpenAPI spec auto-generated, rate-
 |---|---|---|
 | `POST` | `/api/v1/validations` | Submit a new validation run |
 | `GET` | `/api/v1/validations/{id}` | Get validation status/results |
-| `GET` | `/api/v1/validations/{id}/scorecard` | Download scorecard (PDF/JSON) |
-| `GET` | `/api/v1/validations/{id}/episodes` | List episode recordings |
+| `GET` | `/api/v1/validations/{id}/scorecard` | Full scorecard JSON; `.pdf` / `.md` / `.html` renderers are separate endpoints |
+| `GET` | `/api/v1/validations/{id}/episodes` | **Planned** — list episode recordings; not registered today |
 | `GET` | `/api/v1/validations/{id}/failures` | Get failure taxonomy |
 | `POST` | `/api/v1/validations/{id}/compare` | Compare with another validation |
 | `GET` | `/api/v1/models` | List registered model checkpoints |
 | `GET` | `/api/v1/models/{id}/history` | Validation history for a model |
 | `GET` | `/api/v1/regressions` | Regression timeline |
-| `POST` | `/api/v1/webhooks` | Configure notification webhooks |
-| `GET` | `/api/v1/audit-log` | Immutable audit trail |
-| `POST` | `/api/v1/deployment-gate` | Deployment approval/rejection |
+| `POST` | `/api/v1/webhooks` | **Planned** — configure notification webhooks |
+| `GET` | `/api/v1/audit-log` | **Planned** — immutable audit trail |
+| `POST` | `/api/v1/deployment-gate` | **Planned** — deployment approval/rejection |
 
 ## Request shape — `POST /api/v1/validations`
 
@@ -42,7 +45,7 @@ REST API surface (v1). FastAPI 0.110+, async, OpenAPI spec auto-generated, rate-
 
 ## Response lifecycle
 
-`queued → running → evaluating → reported → gate:{APPROVE|BLOCK}` — status polled via `GET /validations/{id}` or pushed via webhook (`Slack, email, GitHub PR comment`, [[Data Flow]] step 5).
+Target lifecycle: `queued → running → evaluating → reported → gate:{APPROVE|BLOCK}`. Current synchronous `POST /api/v1/validations` returns the completed scorecard; the async route exposes `queued → running → done|failed` jobs. A generic webhook push route is planned ([[Data Flow]] step 5).
 
 ## Endpoint → module → flow mapping
 
@@ -50,9 +53,10 @@ REST API surface (v1). FastAPI 0.110+, async, OpenAPI spec auto-generated, rate-
 |---|---|---|
 | `/validations*` | M1 Ingestion + M2 Simulation | Flow 1 Submit & Validate |
 | `/compare`, `/regressions` | M4 Evaluation (regression delta) | Flow 1 step 7, CTO weekly review |
-| `/scorecard`, `/episodes`, `/failures` | M5 Reporting | Flows 1–3 |
-| `/deployment-gate` | M5 + L5 Fleet Gate | Flow 2 Deployment Gate |
-| `/audit-log` | M5 immutable log | Flow 3 Compliance |
+| `/scorecard`, `/failures` | M5 Reporting | Flows 1–3 |
+| `/episodes` (planned) | M5 Reporting | Flow 1 episode review |
+| `/deployment-gate` (planned) | M5 + L5 Fleet Gate | Flow 2 Deployment Gate |
+| `/audit-log` (planned) | M5 immutable log | Flow 3 Compliance |
 
 ## Async job endpoints — `/api/v1/jobs`
 
@@ -121,9 +125,9 @@ Deployment hardening is env-driven and read once at app-build time ([[Security H
 ## API design principles
 
 > [!tip]
-> 1. **Runs are resources, jobs are side effects** — everything keys off `validation_id`; comparability and history fall out naturally.
-> 2. **Gate is a first-class verb** — `POST /deployment-gate` returns `{approve/block + reasoning}` as machine-readable JSON so CI can fail the build ([[Product Principles]] #4).
-> 3. **gRPC internally, REST externally** — high-throughput inter-service calls use Protocol Buffers; the public surface stays OpenAPI-friendly for CLI + Actions plugin ([[CLI Design]], [[GitHub Actions Integration]]).
+> 1. **Runs are resources, jobs are side effects** — the current run id (`vrun-<8 hex>`) is also the async job id; comparability and history fall out naturally.
+> 2. **Gate is first-class in the CLI** — `validsim gate` turns the stored `APPROVE|BLOCK` verdict into an exit code; the JSON `POST /deployment-gate` verb remains planned ([[Product Principles]] #4).
+> 3. **REST is the current contract** — gRPC/Protocol Buffers are target-state internal RPC, not an implemented dependency ([[CLI Design]], [[GitHub Actions Integration]]).
 > 4. **Versioned from day one** (`/api/v1`) — fleet operators pin integrations per-robot; breaking changes are a billing event ([[Business Model]] API/integration licensing).
 
 ## Auth & tenancy (MVP vs later)

@@ -11,12 +11,15 @@ area: "06 - Business"
 
 §12. Funding-round sequencing lives in [[Funding Plan]]; per-customer math in [[Unit Economics]].
 
+> [!warning] Verify before external send — 2026-09-21
+> This is a scenario model, not booked cash or committed credits. Inception acceptance/credit values, incorporation, YC admission, LOIs and fundraising outcomes are unverified. Model runway with zero credits unless an award letter says otherwise.
+
 ## 12.1 Year 1 — Pre-Revenue → Early Revenue
 
 | Item | Amount |
 |---|---|
-| NVIDIA Inception DGX credits | **$100K (free)** |
-| AWS/Nebius cloud credits | **$100K–$150K (free via Inception)** |
+| NVIDIA Inception DGX credits | **$0 booked; up to $100K modeled if accepted** |
+| AWS/Nebius cloud credits | **$0 booked; up to $100K–$150K modeled if awarded** |
 | YC investment (if accepted) | **$500K ($125K + $375K)** |
 | Compute costs (beyond credits) | $20K–$50K |
 | Cloud infrastructure | $5K–$10K/month |
@@ -25,7 +28,7 @@ area: "06 - Business"
 | **Total Year 1 burn** | **~$200K–$350K** |
 
 > [!important] The credits arbitrage
-> Up to **$350K** of compute value ($100K DGX + $100K AWS + $150K Nebius, [[NVIDIA Inception]]) against **$200K–$350K** total cash burn means Year 1 is effectively *compute-funded*. This is why the NVIDIA Inception fit scored **10/10** in [[Strategic Advantages]] and why the Inception application is a Week 1–2 task in the [[90-Day Roadmap]].
+> Up to **$350K** of potential compute value is modeled against **$200K–$350K** cash burn, but no credits are verified as granted. Treat the base runway as fully cash-funded; a successful application can reduce compute cost, not retroactively prove funding.
 
 ## 12.2 Revenue projections
 
@@ -55,10 +58,10 @@ area: "06 - Business"
 ```
 Cash in (Y1): YC $500K + (pre-seed $1M–$2M in Q2–Q3 2027)
 Cash out (Y1): $200K–$350K burn
-⇒ YC + credits fund through MVP; pre-seed funds hires 1–4 and the compliance tier
+⇒ Base plan requires YC/pre-seed cash to fund the MVP; any later credit award is upside. Pre-seed funds hires 1–4 and the compliance tier.
 ```
 
 > [!warning] Sensitivity
-> If YC rejects (Risk #7, ~98% probability, [[Risk Register]]), Year 1 loses $500K of cash and the S27 re-application cycle begins — mitigations: Inception credits still active, pre-seed timing unchanged, LOI traction still valid.
+> If YC rejects, the $500K does not arrive. Re-plan burn and fundraising; do not assume Inception credits or LOI traction remain available without re-verification.
 
 Links: [[Funding Plan]] · [[Unit Economics]] · [[KPIs]] · [[Investor Narrative]] · [[Home]]

@@ -1,0 +1,128 @@
+sssssssssssssssssssssssssssssssssssssssssssss........................... [  2%]
+...........................................s............................ [  5%]
+........................................................................ [  7%]
+.......................................................................s [ 10%]
+sss..................................................................... [ 12%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 25%]
+........................................................................ [ 27%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+.............................................................x.......... [ 37%]
+........................................................................ [ 40%]
+.....................................................FF.F........F...... [ 43%]
+........................................................................ [ 45%]
+.................................................................x...... [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+.........................................x...................xx......... [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 63%]
+............FFF......................................................... [ 65%]
+........................................................................ [ 68%]
+...............................................................FFF.F.... [ 70%]
+........................................................................ [ 73%]
+...........................xxxxxxxxxxxx................................. [ 75%]
+........................................................................ [ 78%]
+...sxxxxxxxxx........................................................... [ 81%]
+........................................................................ [ 83%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+..............................................................ssss...... [ 91%]
+........................................................................ [ 93%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+...................................                                      [100%]
+================================== FAILURES ===================================
+___________ TestRetryPolicy.test_dead_letter_is_reported_not_silent ___________
+tests\test_jobs_worker.py:379: in test_dead_letter_is_reported_not_silent
+    assert spec.run_id in messages, "the dead-lettered job id was never reported"
+E   AssertionError: the dead-lettered job id was never reported
+E   assert 'vrun-signal01' in ''
+E    +  where 'vrun-signal01' = JobSpec(run_id='vrun-signal01', checkpoint_id='ckpt-1', task_id='pick-place', episodes=3, adversarial=0, threshold=None, baseline_run_id=None).run_id
+---------------------------- Captured stdout call -----------------------------
+{"timestamp": "2026-09-26T21:36:43.345+00:00", "level": "WARNING", "logger": "validsim.jobs.queue", "message": "job vrun-signal01 dead-lettered: attempt-budget-exhausted (attempts=2, reclaims=0)", "validsim_job_dead_lettered": true, "validsim_job_id": "vrun-signal01", "validsim_job_reason": "attempt-budget-exhausted", "validsim_job_attempts": 2, "validsim_job_reclaims": 0}
+____ TestRetryPolicy.test_dead_letter_signal_is_emitted_by_the_reaper_too _____
+tests\test_jobs_worker.py:412: in test_dead_letter_signal_is_emitted_by_the_reaper_too
+    assert job_id in messages
+E   AssertionError: assert 'vrun-reapsig1' in ''
+---------------------------- Captured stdout call -----------------------------
+{"timestamp": "2026-09-26T21:36:43.402+00:00", "level": "WARNING", "logger": "validsim.jobs.queue", "message": "job vrun-reapsig1 dead-lettered: retry-budget-exhausted (attempts=3, reclaims=3)", "validsim_job_dead_lettered": true, "validsim_job_id": "vrun-reapsig1", "validsim_job_reason": "retry-budget-exhausted", "validsim_job_attempts": 3, "validsim_job_reclaims": 3}
+______ TestRetryPolicy.test_a_success_after_retries_is_reported_normally ______
+tests\test_jobs_worker.py:441: in test_a_success_after_retries_is_reported_normally
+    assert outcome is not None and outcome.status is JobStatus.DONE
+E   assert (None is not None)
+---------------------------- Captured stdout call -----------------------------
+{"timestamp": "2026-09-26T21:36:43.453+00:00", "level": "INFO", "logger": "validsim.jobs.worker", "message": "job vrun-recover attempt 1/5 failed (transient); retrying in 5.0s", "validsim_job_id": "vrun-recover", "validsim_job_attempts": 1, "validsim_job_retry_delay_s": 5.0}
+_ TestSpecGateReachesTheScorecard.test_sync_and_async_agree_for_the_same_checkpoint _
+tests\test_jobs_worker.py:646: in test_sync_and_async_agree_for_the_same_checkpoint
+    TaskConfig(
+E   pydantic_core._pydantic_core.ValidationError: 2 validation errors for TaskConfig
+E   robot
+E     Field required [type=missing, input_value={'task_id': 'pick-place',... 'adversarial_count': 3}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+E   environment
+E     Field required [type=missing, input_value={'task_id': 'pick-place',... 'adversarial_count': 3}, input_type=dict]
+E       For further information visit https://errors.pydantic.dev/2.13/v/missing
+_ TestDurationRelativeChangeFromZero.test_any_slowdown_from_a_zero_baseline_is_flagged[1e-09] _
+tests\test_regression.py:104: in test_any_slowdown_from_a_zero_baseline_is_flagged
+    assert item.severity in {"warning", "critical"}
+E   AssertionError: assert 'info' in {'critical', 'warning'}
+E    +  where 'info' = RegressionItem(metric='mean_duration_s', before=0.0, after=1e-09, delta=1e-09, p_value=None, significant=False, severity='info').severity
+_ TestDurationRelativeChangeFromZero.test_any_slowdown_from_a_zero_baseline_is_flagged[0.5] _
+tests\test_regression.py:104: in test_any_slowdown_from_a_zero_baseline_is_flagged
+    assert item.severity in {"warning", "critical"}
+E   AssertionError: assert 'info' in {'critical', 'warning'}
+E    +  where 'info' = RegressionItem(metric='mean_duration_s', before=0.0, after=0.5, delta=0.5, p_value=None, significant=False, severity='info').severity
+_ TestDurationRelativeChangeFromZero.test_any_slowdown_from_a_zero_baseline_is_flagged[1.0] _
+tests\test_regression.py:104: in test_any_slowdown_from_a_zero_baseline_is_flagged
+    assert item.severity in {"warning", "critical"}
+E   AssertionError: assert 'info' in {'critical', 'warning'}
+E    +  where 'info' = RegressionItem(metric='mean_duration_s', before=0.0, after=1.0, delta=1.0, p_value=None, significant=False, severity='info').severity
+_ TestSeededDeterminism.test_checkpoint_id_is_one_of_the_five_documented_inputs _
+tests\test_sim_contract_audit_agent.py:300: in test_checkpoint_id_is_one_of_the_five_documented_inputs
+    offsets = {mock.success_probability("full", None, f"ckpt-{i}") for i in range(200)}
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: MockIsaacBackend.success_probability() takes from 2 to 3 positional arguments but 4 were given
+_ TestSeededDeterminism.test_checkpoint_id_is_one_of_the_five_documented_inputs_but_only_shifts_the_probability _
+tests\test_sim_contract_audit_agent.py:316: in test_checkpoint_id_is_one_of_the_five_documented_inputs_but_only_shifts_the_probability
+    round(mock.success_probability("full", None, f"ckpt-{i}"), 10) for i in range(500)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: MockIsaacBackend.success_probability() takes from 2 to 3 positional arguments but 4 were given
+_ TestSeededDeterminism.test_same_seed_different_checkpoint_usually_yields_a_different_episode _
+tests\test_sim_contract_audit_agent.py:347: in test_same_seed_different_checkpoint_usually_yields_a_different_episode
+    assert differing / total > 0.01, (
+E   AssertionError: checkpoint_id has essentially no per-seed effect; the tiers may be dead code
+E   assert (0 / 800) > 0.01
+_________ TestSeededDeterminism.test_scenario_difficulty_is_an_input __________
+tests\test_sim_contract_audit_agent.py:385: in test_scenario_difficulty_is_an_input
+    easy = mock.success_probability("full", _scenario(sid="a", difficulty=0.0), "ckpt-v41")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   TypeError: MockIsaacBackend.success_probability() takes from 2 to 3 positional arguments but 4 were given
+============================== warnings summary ===============================
+C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:24
+  C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:24: DeprecationWarning: 'click.utils.get_binary_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_binary_stream as get_binary_stream
+
+C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:25
+  C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:25: DeprecationWarning: 'click.utils.get_text_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_text_stream as get_text_stream
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_jobs_worker.py::TestRetryPolicy::test_dead_letter_is_reported_not_silent
+FAILED tests/test_jobs_worker.py::TestRetryPolicy::test_dead_letter_signal_is_emitted_by_the_reaper_too
+FAILED tests/test_jobs_worker.py::TestRetryPolicy::test_a_success_after_retries_is_reported_normally
+FAILED tests/test_jobs_worker.py::TestSpecGateReachesTheScorecard::test_sync_and_async_agree_for_the_same_checkpoint
+FAILED tests/test_regression.py::TestDurationRelativeChangeFromZero::test_any_slowdown_from_a_zero_baseline_is_flagged[1e-09]
+FAILED tests/test_regression.py::TestDurationRelativeChangeFromZero::test_any_slowdown_from_a_zero_baseline_is_flagged[0.5]
+FAILED tests/test_regression.py::TestDurationRelativeChangeFromZero::test_any_slowdown_from_a_zero_baseline_is_flagged[1.0]
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_checkpoint_id_is_one_of_the_five_documented_inputs
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_checkpoint_id_is_one_of_the_five_documented_inputs_but_only_shifts_the_probability
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_same_seed_different_checkpoint_usually_yields_a_different_episode
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_scenario_difficulty_is_an_input

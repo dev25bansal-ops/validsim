@@ -364,12 +364,13 @@ html[data-theme="light"] .theme-icon--moon { display: none; }
   transition: opacity var(--t), transform var(--t), box-shadow var(--t);
   box-shadow: var(--shadow-md);
 }
-.btn-run:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-lg), 0 0 14px rgba(245, 158, 11, 0.35);
-}
-.btn-run:active:not(:disabled) { transform: translateY(0); }
-.btn-run:disabled { opacity: 0.6; cursor: progress; }
+/* The async buttons are never disabled (see the APG loading-button note in
+   app.js), so the busy state is expressed by the spinner, the label swap and a
+   slightly lowered emphasis — while remaining fully focusable and operable. */
+.btn-run:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg), 0 0 14px rgba(245, 158, 11, 0.35); }
+.btn-run:active { transform: translateY(0); }
+.btn-run[aria-busy="true"] { cursor: progress; }
+.btn-run[aria-busy="true"] .btn-label { opacity: 0.85; }
 .btn-spinner { display: none; }
 .btn-run.is-loading .btn-spinner { display: inline-block; animation: vs-spin 0.9s linear infinite; }
 .btn-run.is-loading .btn-icon { display: none; }
@@ -450,6 +451,96 @@ main {
   overflow-wrap: anywhere;
   text-align: right;
 }
+
+/* Block reasons -----------------------------------------------------------------
+   The engine emits `block_reasons` for each condition that failed the gate. A
+   BLOCK verdict without them is unactionable, so this rail sits directly above
+   the scorecard. Left border + tint carry the danger hue, but the heading
+   spells out "Blocked for N reasons" in words, so nothing here depends on
+   colour perception (WCAG 1.4.1). */
+.block-reasons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  border: 1px solid var(--bad-line);
+  border-left: 4px solid var(--bad);
+  border-radius: var(--radius-md);
+  background: var(--bad-bg);
+}
+.block-reasons-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-family: var(--font-code);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bad);
+  /* Deliberately NOT uppercased. `text-transform` rewrites the accessible
+     name in some screen readers, so an all-caps API can be announced as
+     letter-spelled capitals — and the engine's reasons are full sentences
+     rendered verbatim, so the panel keeps the same casing as the API, the
+     scorecard PDF and the Markdown export. */
+}
+/* The count word is the non-colour carrier of "this is a block". */
+.block-reasons-count::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-sm);
+  border-radius: 2px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+.block-reasons-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: 0;
+  padding-left: var(--space-lg);
+  color: var(--text-hi);
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+.block-reason { overflow-wrap: anywhere; }
+
+/* Auth gate + fatal panel --------------------------------------------------------
+   Shown instead of the dashboard when the deployment requires an X-API-Key, or
+   when the presentation module could not load. `code` is set in the monospace
+   face because these are literal header/field names, not prose. */
+.auth-panel .panel-head { margin-bottom: var(--space-md); }
+.auth-lead {
+  max-width: 68ch;
+  color: var(--text-mid);
+  font-size: 14.5px;
+  line-height: 1.6;
+  margin-bottom: var(--space-lg);
+}
+.auth-lead code, .field-hint code {
+  font-family: var(--font-code);
+  font-size: 13px;
+  padding: 1px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-hi);
+}
+.auth-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-md);
+}
+.auth-form .field { flex: 1 1 260px; max-width: 420px; }
+.auth-form .btn-run { flex: 0 0 auto; margin-top: 22px; }
+#auth-status { margin-top: var(--space-md); }
+
+.fatal-panel { border-color: var(--bad-line); border-left: 4px solid var(--bad); }
+.fatal-panel h2 { font-size: 18px; color: var(--text-hi); margin-bottom: var(--space-sm); }
+.fatal-detail { max-width: 72ch; color: var(--text-mid); line-height: 1.6; }
 
 /* Scorecard ------------------------------------------------------------------- */
 .scorecard-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-lg); }
@@ -539,6 +630,24 @@ main {
 }
 .metric-value.positive { color: var(--ok); }
 .metric-value.negative { color: var(--bad); }
+/* A value the API did not supply, or explicitly flagged as not measured. Kept
+   in the muted text token rather than the value token so it is visibly distinct
+   from a real measurement — and always paired with a word, never a blank. */
+.metric-value.is-unmeasured {
+  color: var(--text-dim);
+  font-size: 15px;
+  font-style: italic;
+}
+
+/* Adversarial segment: the engine gates it separately from the weighted
+   composite, so it gets a distinct surface rather than blending into the rest
+   of the metric grid. The label, not the tint, identifies the segment. */
+.metric-card--adversarial {
+  border-color: var(--info-line);
+  background:
+    linear-gradient(180deg, var(--tint-info-soft), transparent 70%),
+    var(--bg-raised);
+}
 
 /* Trends --------------------------------------------------------------------------- */
 .trends-grid {
@@ -729,7 +838,7 @@ main {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
   }
-  .metric-card:hover, .btn-run:hover:not(:disabled) { transform: none; }
+  .metric-card:hover, .btn-run:hover { transform: none; }
 }
 
 /* High-contrast user preference: lift the two lowest text tokens (AA → AAA).

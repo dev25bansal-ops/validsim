@@ -56,6 +56,10 @@ coverage push that closes the loop on the Docker stack.
   sends messages or a scorecard as multipart HTML + plain-text email, configured
   via `VALIDSIM_SMTP_HOST/PORT/USER/PASSWORD/FROM/TLS`. Dry-run by default (no
   socket I/O); live mode captures failures on `EmailDelivery` instead of raising.
+  **Library only — not wired into any entrypoint.** `EmailNotifier` (like
+  `WebhookDispatcher`) has no production caller: the API, CLI and job worker
+  never construct one, so a validation run sends no email and `VALIDSIM_SMTP_*`
+  has no effect until an owner wires dispatch into the run path.
 - **`.env.example`** — commented template of every supported variable (store, job
   queue, API hardening, backend, Isaac worker, LLM, SMTP), shared by the
   application and `docker-compose.yml`.
@@ -83,10 +87,11 @@ coverage push that closes the loop on the Docker stack.
 
 ### Fixed
 
-- **Postgres was never wired into the Docker stack** — the `api` service now sets
-  `VALIDSIM_STORE` (defaulting to `postgres`) and `VALIDSIM_PG_URL`, so
-  `docker compose up` persists runs to the `postgres` service instead of silently
-  falling back to the in-memory store.
+- **Postgres was never wired into the Docker stack** — the `api` service now
+  sets `VALIDSIM_STORE` to `postgres` as the Docker Compose fallback (outside
+  Compose, unset or blank `VALIDSIM_STORE` defaults to `memory`) and sets
+  `VALIDSIM_PG_URL`, so `docker compose up` persists runs to the `postgres`
+  service instead of silently falling back to the in-memory store.
 
 ## [0.2.0] - 2026-02-06
 
@@ -107,10 +112,14 @@ packaging and containerization.
   select the target environment (e.g. sim vs. real-hardware profile).
 - **Slack webhook integration** — webhook dispatcher can post scorecards to
   Slack via a dedicated Slack message formatter, secured with HMAC signature
-  verification and automatic retry on delivery failure.
+  verification and automatic retry on delivery failure. **Library only — not
+  wired into any entrypoint**: `WebhookDispatcher` has no production caller, so
+  no run sends a scorecard and there is no public webhook-registration route.
 - **LLM scenario category-coverage top-up** — the LLM adversarial scenario
   generator now detects missing adversarial categories and issues follow-up
-  generations until all categories are covered.
+  generations until all categories are covered. Applies to the LLM path only,
+  which no run takes; the shipped rule-based generator already guarantees full
+  category coverage by cycling categories by index.
 - **PostgreSQL store full-detail parity** — the Postgres store now returns the
   same full validation detail as the SQLite store, making `VALIDSIM_STORE=postgres`
   a drop-in replacement.
@@ -145,7 +154,9 @@ packaging and containerization.
   by FastAPI at `/`.
 - **LLM adversarial scenario generator** (`validsim/scenarios/llm_generator.py`)
   — OpenAI-compatible provider with strict schema validation and a
-  deterministic rule-based fallback.
+  deterministic rule-based fallback. **Library only — not wired into any run**:
+  `validsim/engine/pipeline.py` hardcodes the rule-based generator, so scenario
+  generation is deterministic on every shipped path.
 - **PostgreSQL store** (`validsim/store/postgres.py`) — JSONB + indexed
   columns, selected via `VALIDSIM_STORE=postgres`.
 - **Isaac worker adapter** — HTTP client (`validsim/sim/isaac_worker.py`) plus

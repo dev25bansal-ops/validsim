@@ -10,56 +10,15 @@ live server.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
 
-from validsim.engine.evaluation import EvaluationResult
-from validsim.engine.safety import SafetyResult
-from validsim.engine.scorecard import Scorecard
-from validsim.store.memory import StoredRun, ValidationStore
+from conftest import make_scorecard, make_stored_run
+from validsim.store.memory import ValidationStore
 from validsim.store.postgres import PostgresValidationStore
 from validsim.store.sqlite import SqliteValidationStore
-
-
-def _scorecard(run_id: str = "vrun-cafe1234", **overrides: object) -> Scorecard:
-    base: dict[str, object] = {
-        "run_id": run_id,
-        "checkpoint_id": "ckpt-1",
-        "task_id": "pick-place",
-        "composite_score": 90.0,
-        "success_rate": 0.9,
-        "safety_score": 80.0,
-        "robustness_score": 100.0,
-        "regression_delta": None,
-        "confidence_interval": None,
-        "deploy_decision": "APPROVE",
-        "threshold": 85.0,
-        "created_at": "2026-01-01T00:00:00+00:00",
-        "episode_count": 100,
-        "failure_taxonomy": {},
-    }
-    base.update(overrides)
-    return Scorecard(**base)  # type: ignore[arg-type]
-
-
-def _run(sc: Scorecard) -> StoredRun:
-    return StoredRun(
-        run_id=sc.run_id,
-        checkpoint_id=sc.checkpoint_id,
-        task_id=sc.task_id,
-        created_at=sc.created_at,
-        scorecard=sc,
-        evaluation=EvaluationResult(
-            total_episodes=sc.episode_count,
-            success_count=90,
-            success_rate=sc.success_rate,
-            failure_taxonomy=dict(sc.failure_taxonomy),
-        ),
-        safety=SafetyResult(0.0, 0.0, None, 0.0, sc.safety_score),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -73,27 +32,27 @@ class TestMemoryCount:
 
     def test_count_tracks_saves(self) -> None:
         store = ValidationStore()
-        store.save(_run(_scorecard("vrun-aaaaaaaa")))
-        store.save(_run(_scorecard("vrun-bbbbbbbb")))
+        store.save(make_stored_run(make_scorecard("vrun-aaaaaaaa")))
+        store.save(make_stored_run(make_scorecard("vrun-bbbbbbbb")))
         assert store.count() == 2
 
     def test_count_matches_len(self) -> None:
         store = ValidationStore()
         for suffix in ("aaaaaaaa", "bbbbbbbb", "cccccccc"):
-            store.save(_run(_scorecard(f"vrun-{suffix}")))
+            store.save(make_stored_run(make_scorecard(f"vrun-{suffix}")))
         assert store.count() == len(store) == 3
 
     def test_overwrite_does_not_increase_count(self) -> None:
         store = ValidationStore()
-        store.save(_run(_scorecard("vrun-aaaaaaaa")))
-        store.save(_run(_scorecard("vrun-aaaaaaaa", composite_score=10.0)))
+        store.save(make_stored_run(make_scorecard("vrun-aaaaaaaa")))
+        store.save(make_stored_run(make_scorecard("vrun-aaaaaaaa", composite_score=10.0)))
         assert store.count() == 1
 
     def test_count_after_delete(self) -> None:
         store = ValidationStore()
-        run = _run(_scorecard("vrun-aaaaaaaa"))
+        run = make_stored_run(make_scorecard("vrun-aaaaaaaa"))
         store.save(run)
-        store.save(_run(_scorecard("vrun-bbbbbbbb")))
+        store.save(make_stored_run(make_scorecard("vrun-bbbbbbbb")))
         store.delete(run.run_id)
         assert store.count() == 1
 
@@ -101,21 +60,6 @@ class TestMemoryCount:
 # ---------------------------------------------------------------------------
 # SQLite backend
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def make_store(tmp_path: Path) -> Iterator[Callable[[str], SqliteValidationStore]]:
-    """Factory opening named SQLite stores under ``tmp_path``; closes on exit."""
-    created: list[SqliteValidationStore] = []
-
-    def _make(name: str = "count.db") -> SqliteValidationStore:
-        store = SqliteValidationStore(tmp_path / name)
-        created.append(store)
-        return store
-
-    yield _make
-    for store in created:
-        store.close()
 
 
 class TestSqliteCount:
@@ -128,8 +72,8 @@ class TestSqliteCount:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        store.save(_run(_scorecard("vrun-aaaaaaaa")))
-        store.save(_run(_scorecard("vrun-bbbbbbbb")))
+        store.save(make_stored_run(make_scorecard("vrun-aaaaaaaa")))
+        store.save(make_stored_run(make_scorecard("vrun-bbbbbbbb")))
         assert store.count() == 2
         assert store.count() == len(store)
 
@@ -137,15 +81,15 @@ class TestSqliteCount:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        store.save(_run(_scorecard("vrun-aaaaaaaa")))
-        store.save(_run(_scorecard("vrun-aaaaaaaa", composite_score=10.0)))
+        store.save(make_stored_run(make_scorecard("vrun-aaaaaaaa")))
+        store.save(make_stored_run(make_scorecard("vrun-aaaaaaaa", composite_score=10.0)))
         assert store.count() == 1
 
     def test_count_persists_across_reopen(self, tmp_path: Path) -> None:
         path = tmp_path / "count_persist.db"
         first = SqliteValidationStore(path)
-        first.save(_run(_scorecard("vrun-aaaaaaaa")))
-        first.save(_run(_scorecard("vrun-bbbbbbbb")))
+        first.save(make_stored_run(make_scorecard("vrun-aaaaaaaa")))
+        first.save(make_stored_run(make_scorecard("vrun-bbbbbbbb")))
         assert first.count() == 2
         first.close()
         second = SqliteValidationStore(path)

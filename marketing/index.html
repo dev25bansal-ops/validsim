@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>ValidSim — CI for robot foundation models</title>
+<meta name="description" content="ValidSim runs a robot model checkpoint through thousands of simulated episodes under domain randomization and adversarial scenarios, then returns a scorecard you can gate a deploy on.">
+<link rel="canonical" href="https://validsim.com/">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="ValidSim — CI for robot foundation models">
+<meta property="og:description" content="Continuous validation, regression testing, and safety scoring for robot foundation models before they touch the real world.">
+<meta property="og:url" content="https://validsim.com/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ValidSim — CI for robot foundation models">
+<meta name="twitter:description" content="Continuous validation, regression testing, and safety scoring for robot foundation models.">
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect x='9.5' y='9.5' width='21' height='14.5' rx='4' fill='none' stroke='%23F0A92E' stroke-width='3'/%3E%3Ccircle cx='16' cy='16.8' r='2.1' fill='%23E8EEF9'/%3E%3Ccircle cx='24' cy='16.8' r='2.1' fill='%23E8EEF9'/%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preload" as="font" type="font/woff2" crossorigin
+      href="https://fonts.gstatic.com/s/spacegrotesk/v16/V8mQoQDjQSkFtoMM3T6r8E7mF71Q-gOoraIAEj7oUXskPMBBSSJLm2E.woff2">
+
+<!-- Structured data. SoftwareApplication + Organization, because the page makes
+     concrete product claims a search engine can read; FAQPage for the answers
+     below, which are the questions we actually get asked. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://validsim.com/#org",
+      "name": "ValidSim",
+      "url": "https://validsim.com/",
+      "email": "hello@validsim.com",
+      "description": "Continuous validation, regression testing, and safety scoring for robot foundation models.",
+      "sameAs": ["https://github.com/validsim"]
+    },
+    {
+      "@type": "SoftwareApplication",
+      "name": "ValidSim",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Linux, macOS, Windows",
+      "description": "Runs a robot model checkpoint through thousands of simulated episodes under domain randomization and adversarial scenarios, then returns a scorecard that gates deployment.",
+      "offers": [
+        { "@type": "Offer", "name": "Developer", "price": "0", "priceCurrency": "USD" },
+        { "@type": "Offer", "name": "Team", "price": "2000", "priceCurrency": "USD" },
+        { "@type": "Offer", "name": "Pro", "price": "8000", "priceCurrency": "USD" }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What does “not measured” mean on a scorecard?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "A component that could not be measured is excluded from the composite's denominator rather than being given a default score. Robustness shows \"not measured\" when a run used fewer than two randomization groups, and regression when no baseline was supplied. This is deliberate: an earlier version scored both at 100, which meant 30 of the 100 composite points were awarded whether or not anything had been measured."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does ValidSim run on real robots?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No, and that is the point. Ten thousand scenarios cannot be run on one physical robot, so validation happens in simulation before anything reaches a fleet. The current MVP ships a deterministic mock backend with an adapter for NVIDIA Isaac; the mock exists so the scoring contract is testable without GPU hardware."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do I need my own simulation environment?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "You point ValidSim at a model checkpoint and a task. It generates the domain randomization and the twelve adversarial scenario categories itself, so there is no scene to author. Integrating your own Isaac Lab environment is supported but not required."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How does it fit into CI?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "As a CLI or a GitHub Action. The Action posts the scorecard on the pull request and fails the check on a BLOCK verdict, so an unvalidated model update cannot merge by default."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is ValidSim in production anywhere?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. ValidSim is pre-traction with no customers yet. The system is real and tested, and we are publishing the numbers it actually produces, including the cases where it blocks a model. We would rather show you a working tool with an honest scorecard than a customer list we cannot substantiate."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+/* ==========================================================================
+   ValidSim — marketing site
+   --------------------------------------------------------------------------
+   DESIGN CONTEXT: .impeccable.md at the repo root. Read it first.
+
+   Aesthetic: precision instrument / spec sheet. Near-black chassis lit only by
+   its own readout. Verdict colours ARE the palette (green APPROVE, red BLOCK,
+   amber unmeasured) — the accent is the product's semantics, not decoration.
+
+   Stack: no framework, deliberately, and so no build step and no dependencies.
+   Nothing here routes, fetches or hydrates, so a bundler would add node_modules,
+   a build step and a deploy target to emit one static file. Instead this uses
+   the CSS that replaced the JS those frameworks ship: @layer, oklch, color-mix,
+   @container, :has, nesting, and animation-timeline (scroll reveals with zero
+   JavaScript, behind @supports).
+
+   The ONE external resource is the webfont pair below, loaded with
+   font-display: swap plus a metric-matched local fallback. Distinctive
+   typography is the single highest-leverage defence against looking
+   AI-generated, and Inter/Roboto/system-ui is precisely the "invisible default"
+   that gives that away.
+
+   Type: Space Grotesk — a technical grotesque with actual character. Not
+   Inter/Roboto/system-ui, which is the visual signature of AI-generated work.
+   JetBrains Mono is used for DATA ONLY (run ids, scores, figure numbers),
+   never as lazy "developer tool" decoration.
+   ========================================================================== */
+
+@layer reset, tokens, base, layout, components, utilities;
+
+/* Fallback metric overrides so the swap to the webfont does not reflow the
+   page. Values approximate Space Grotesk's x-height against the local Arial
+   fallback; refine with Fontaine if the flash ever becomes visible. */
+@font-face {
+  font-family: "Space Grotesk Fallback";
+  src: local("Arial");
+  size-adjust: 100%;
+  ascent-override: 92%;
+  descent-override: 24%;
+  line-gap-override: 0%;
+}
+
+@layer tokens {
+  :root {
+    /* Warm near-black, not blue-black. A blue-black chassis is the default
+       "dark mode" look; a slightly warm one reads as equipment. */
+    --chassis:    oklch(0.12 0.008 90);
+    --panel:      oklch(0.16 0.010 90);
+    --raised:     oklch(0.20 0.012 90);
+    --rule:       oklch(0.27 0.012 90);
+    --rule-faint: oklch(0.30 0.012 90 / 0.28);
+
+    --ink:        oklch(0.93 0.012 90);
+    --ink-mid:    oklch(0.73 0.014 90);
+    --ink-dim:    oklch(0.57 0.016 90);
+
+    /* Verdict colours. These are the product's own semantics, lifted from
+       validsim/engine — a gauge green, a block red, an unmeasured amber.
+       Amber carries the accent because it is the colour of an instrument
+       warning lamp, and because it is already the CTA colour in the
+       operator dashboard's brand palette. */
+    --approve:    oklch(0.78 0.150 160);
+    --block:      oklch(0.66 0.190 27);
+    --unmeasured: oklch(0.80 0.160 75);
+    --link:       oklch(0.72 0.120 240);
+
+    --font: "Space Grotesk", "Space Grotesk Fallback", ui-sans-serif, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Modular scale. The jump from --t-base to --t-readout is deliberate and
+       large: one dramatic focal point, everything else quiet. */
+    --t-xs:      0.75rem;
+    --t-sm:      0.875rem;
+    --t-base:    1.0625rem;
+    --t-lg:      clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+    --t-xl:      clamp(1.5rem, 1.15rem + 1.7vw, 2.375rem);
+    --t-hero:    clamp(2.25rem, 1.2rem + 4.6vw, 4.25rem);
+    --t-readout: clamp(4.5rem, 16vw, 12rem);
+
+    --shell:   78rem;
+    --gutter:  clamp(1.25rem, 4vw, 2.75rem);
+    --measure: 62ch;
+
+    /* Vertical rhythm: every block gap is a multiple of this. */
+    --rhythm: 1.5rem;
+  }
+}
+
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; }
+  * { margin: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { min-height: 100dvh; -webkit-font-smoothing: antialiased; }
+  img, picture, svg, video { display: block; max-width: 100%; }
+  h1, h2, h3, h4 { line-height: 1.1; font-weight: 500; text-wrap: balance; }
+  p { text-wrap: pretty; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--unmeasured); outline-offset: 3px; }
+}
+
+@layer base {
+  body {
+    background: var(--chassis);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: var(--t-base);
+    /* Light text on a dark ground needs more leading than usual — the
+       perceived weight is lighter, so it needs more air. */
+    line-height: 1.72;
+    font-kerning: normal;
+  }
+
+  /* Engineering-drawing grid. Fades out downward so it never competes with
+     content. This is the only background treatment; there is no ambient glow. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, var(--rule-faint) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--rule-faint) 1px, transparent 1px);
+    background-size: 4rem 4rem;
+    mask-image: linear-gradient(to bottom, black 0%, transparent 55%);
+  }
+
+  .wrap { width: 100%; max-width: var(--shell); margin-inline: auto; padding-inline: var(--gutter); }
+
+  .skip {
+    position: fixed; inset-block-start: 0; inset-inline-start: 0; z-index: 100;
+    padding: 0.75rem 1.25rem; background: var(--unmeasured); color: var(--chassis);
+    font-weight: 700; text-decoration: none; translate: 0 -150%;
+    transition: translate 0.15s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  .skip:focus-visible { translate: 0 0; }
+}
+
+@layer layout {
+  .band { padding-block: clamp(4.5rem, 10vw, 8rem); }
+  .band + .band { border-block-start: 1px solid var(--rule); }
+
+  .band-head { max-width: var(--measure); margin-block-end: clamp(2.5rem, 5vw, 4rem); }
+  .band-head p { margin-block-start: 1rem; color: var(--ink-mid); font-size: var(--t-lg); max-width: 58ch; }
+
+  /* Monospace is used here for a FIGURE NUMBER, which is data — not as
+     decoration. That distinction is the whole rule. */
+  .fig-label {
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--unmeasured);
+    margin-block-end: 1rem;
+  }
+}
+
+@layer components {
+
+  .masthead {
+    position: sticky; inset-block-start: 0; z-index: 50;
+    background: color-mix(in oklch, var(--chassis) 88%, transparent);
+    backdrop-filter: blur(12px);
+    border-block-end: 1px solid var(--rule);
+  }
+  .masthead .wrap { display: flex; align-items: center; gap: 1.75rem; min-block-size: 4rem; flex-wrap: wrap; }
+  .logo { display: flex; align-items: center; gap: 0.65rem; margin-inline-end: auto; text-decoration: none; }
+  .logo b { font-weight: 700; letter-spacing: -0.02em; }
+  .nav { display: flex; align-items: center; gap: 1.9rem; }
+  .nav a { color: var(--ink-mid); text-decoration: none; font-size: var(--t-sm); font-weight: 500; }
+  .nav a:hover { color: var(--ink); }
+  @media (width < 48rem) { .nav .opt { display: none; } .nav { gap: 1.2rem; } }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.65rem 1.15rem;
+    font-size: var(--t-sm); font-weight: 700; text-decoration: none;
+    border: 1px solid transparent; border-radius: 2px;
+    transition: background-color 0.18s cubic-bezier(0.25, 1, 0.5, 1),
+                color 0.18s cubic-bezier(0.25, 1, 0.5, 1),
+                border-color 0.18s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  .btn-primary { background: var(--unmeasured); color: var(--chassis); }
+  .btn-primary:hover { background: color-mix(in oklch, var(--unmeasured) 86%, white); }
+  .btn-primary:focus-visible { outline-color: var(--unmeasured); }
+  .btn-quiet { border-color: var(--rule); color: var(--ink-mid); }
+  .btn-quiet:hover { border-color: var(--ink-dim); color: var(--ink); background: color-mix(in oklch, var(--ink) 4%, transparent); }
+
+  /* ---- hero: asymmetric, 2fr 1fr. The right column is deliberately lighter
+         — it holds the honesty note, not another headline. ---- */
+  .hero { padding-block: clamp(3rem, 7vw, 5.5rem) 0; }
+  .hero-grid { display: grid; gap: clamp(2rem, 5vw, 4rem); align-items: start; }
+  @container (width > 56rem) { .hero-grid { grid-template-columns: 2fr 1fr; } }
+
+  .hero h1 {
+    font-size: var(--t-hero);
+    letter-spacing: -0.035em;
+    font-weight: 500;
+    max-width: 15ch;
+  }
+  .hero h1 em { font-style: normal; color: var(--unmeasured); }
+  .lede { margin-block-start: 1.75rem; font-size: var(--t-lg); color: var(--ink-mid); max-width: 52ch; }
+  .hero-actions { margin-block-start: 2.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+
+  .hero-aside { border-inline-start: 1px solid var(--rule); padding-inline-start: 1.5rem; }
+  .hero-aside p { font-size: var(--t-sm); color: var(--ink-dim); }
+  .hero-aside p + p { margin-block-start: 1rem; }
+  .hero-aside strong { color: var(--ink-mid); font-weight: 500; }
+
+  /* ---- THE FOCAL POINT.
+         A real validation result at display scale. This is the one dramatic
+         moment on the page; the 4rem→12rem jump is intentional. Tabular
+         figures keep the digits from shifting, and the verdict is a WORD as
+         well as a colour so it never depends on hue alone. ---- */
+  .readout {
+    margin-block: clamp(3rem, 6vw, 4.5rem) 0;
+    padding-block: clamp(2rem, 4vw, 3rem);
+    border-block: 1px solid var(--rule);
+    display: grid;
+    gap: clamp(1.5rem, 4vw, 3rem);
+    align-items: end;
+  }
+  @container (width > 52rem) { .readout { grid-template-columns: auto 1fr; } }
+
+  .readout-figure { display: flex; align-items: baseline; gap: clamp(1rem, 3vw, 2rem); flex-wrap: wrap; }
+  .readout-value {
+    font-family: var(--font);
+    font-size: var(--t-readout);
+    font-weight: 300;
+    line-height: 0.82;
+    letter-spacing: -0.055em;
+    font-variant-numeric: tabular-nums;
+    color: var(--block);
+  }
+  .readout-verdict {
+    font-family: var(--mono);
+    font-size: clamp(1rem, 0.85rem + 0.9vw, 1.5rem);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--block);
+    border: 2px solid currentColor;
+    padding: 0.2em 0.5em;
+    border-radius: 2px;
+  }
+  .readout dl { display: grid; gap: 0.65rem; font-size: var(--t-sm); }
+  .readout dl > div { display: flex; justify-content: space-between; gap: 1.5rem; border-block-end: 1px dotted var(--rule); padding-block-end: 0.65rem; }
+  .readout dt { color: var(--ink-dim); }
+  .readout dd { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .readout dd.v-block { color: var(--block); }
+  .readout dd.v-unmeasured { color: var(--unmeasured); }
+  .readout dd.v-approve { color: var(--approve); }
+  .readout figcaption { font-size: var(--t-xs); color: var(--ink-dim); margin-block-start: 1rem; }
+
+  /* ---- transcript: the evidence behind the number ---- */
+  .artifact { border: 1px solid var(--rule); border-radius: 3px; background: var(--panel); overflow: clip; }
+  .artifact-bar {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.7rem 1rem; border-block-end: 1px solid var(--rule); background: var(--raised);
+    font-family: var(--mono); font-size: var(--t-xs); color: var(--ink-dim);
+  }
+  .artifact-bar b { color: var(--ink-mid); font-weight: 500; margin-inline-end: auto; }
+  .artifact pre {
+    margin: 0; padding: 1.25rem;
+    font-family: var(--mono); font-size: 0.8125rem; line-height: 1.8;
+    color: var(--ink-mid); overflow-x: auto;
+  }
+  .v-ok { color: var(--approve); }
+  .v-block { color: var(--block); }
+  .v-unmeasured { color: var(--unmeasured); }
+  .v-key { color: var(--ink); }
+  .v-dim { color: var(--ink-dim); }
+
+  /* ---- pipeline: a spec-sheet table, not a card grid ---- */
+  .stages { border-block-start: 1px solid var(--rule); container-type: inline-size; }
+  .stage {
+    display: grid; gap: 0.35rem 2rem;
+    padding-block: 1.75rem; border-block-end: 1px solid var(--rule);
+  }
+  @container (width > 46rem) { .stage { grid-template-columns: 7rem 15rem 1fr; align-items: baseline; } }
+  .stage-no { font-family: var(--mono); font-size: var(--t-xs); color: var(--unmeasured); letter-spacing: 0.08em; }
+  .stage h3 { font-size: var(--t-lg); font-weight: 500; }
+  .stage p { color: var(--ink-mid); font-size: var(--t-sm); max-width: 52ch; }
+
+  /* ---- method: three items as a definition list, not three cards ---- */
+  .method { container-type: inline-size; display: grid; gap: 0; }
+  @container (width > 52rem) { .method { grid-template-columns: repeat(3, 1fr); } }
+  .method-item { padding: 2rem 1.75rem 2rem 0; border-block-start: 2px solid var(--approve); }
+  @container (width > 52rem) { .method-item + .method-item { padding-inline-start: 1.75rem; border-block-start: 2px solid var(--approve); } }
+  .method-item h3 { font-size: var(--t-base); font-weight: 700; margin-block-end: 0.75rem; }
+  .method-item p { font-size: var(--t-sm); color: var(--ink-mid); }
+  .method-item strong { color: var(--ink); font-weight: 700; }
+
+  /* ---- landscape table ---- */
+  .scroll-x { overflow-x: auto; border-block-start: 1px solid var(--rule); }
+  table { inline-size: 100%; border-collapse: collapse; font-size: var(--t-sm); min-inline-size: 36rem; }
+  th, td { padding: 1rem 1.25rem 1rem 0; text-align: start; border-block-end: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: var(--mono); font-size: var(--t-xs); font-weight: 500;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim);
+  }
+  tbody th { font-weight: 500; white-space: nowrap; padding-inline-end: 2rem; }
+  tbody td { color: var(--ink-mid); }
+  td:last-child, th:last-child { padding-inline-end: 0; }
+  .pill { font-family: var(--mono); font-size: var(--t-xs); white-space: nowrap; padding: 0.15rem 0.5rem; border-radius: 2px; }
+  .pill-us { color: var(--approve); background: color-mix(in oklch, var(--approve) 12%, transparent); }
+  .pill-them { color: var(--ink-dim); background: color-mix(in oklch, var(--ink-dim) 10%, transparent); }
+  .pill-part { color: var(--link); background: color-mix(in oklch, var(--link) 12%, transparent); }
+
+  /* ---- pricing: a row, not four boxes ---- */
+  .tiers { container-type: inline-size; display: grid; }
+  @container (width > 44rem) { .tiers { grid-template-columns: repeat(4, 1fr); } }
+  .tier { padding: 1.75rem 1.5rem 1.75rem 0; border-block-start: 1px solid var(--rule); }
+  @container (width > 44rem) { .tier + .tier { padding-inline-start: 1.5rem; } }
+  .tier .name { display: block; font-size: var(--t-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); margin-block-end: 0.75rem; }
+  .tier .price { display: block; font-size: var(--t-xl); font-weight: 300; letter-spacing: -0.03em; line-height: 1; }
+  .tier .price small { font-size: var(--t-sm); font-weight: 400; color: var(--ink-dim); letter-spacing: 0; }
+  .tier p { margin-block-start: 0.9rem; font-size: var(--t-sm); color: var(--ink-mid); }
+
+  /* ---- FAQ: native disclosure, no JS ---- */
+  .faq { border-block-start: 1px solid var(--rule); container-type: inline-size; }
+  .faq details { border-block-end: 1px solid var(--rule); }
+  .faq summary {
+    display: flex; align-items: baseline; gap: 1rem;
+    padding-block: 1.4rem; cursor: pointer;
+    font-size: var(--t-lg); font-weight: 500;
+    list-style: none;
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  /* The affordance is a rotating rule, drawn not iconographic. */
+  .faq summary::after {
+    content: ""; margin-inline-start: auto; flex: none;
+    inline-size: 1rem; block-size: 1rem;
+    border-inline-end: 2px solid var(--unmeasured);
+    border-block-end: 2px solid var(--unmeasured);
+    rotate: 45deg; translate: 0 -0.2rem;
+    transition: rotate 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  .faq details[open] summary::after { rotate: 225deg; translate: 0 0.2rem; }
+  .faq summary:hover { color: var(--unmeasured); }
+  .faq details p { padding-block-end: 1.5rem; color: var(--ink-mid); max-width: 62ch; }
+  .faq .q { color: var(--unmeasured); }
+
+  /* ---- close ---- */
+  .close { border-block-start: 2px solid var(--unmeasured); padding-block-start: clamp(2.5rem, 5vw, 4rem); }
+  .close h2 { font-size: var(--t-xl); max-width: 24ch; }
+  .close p { margin-block-start: 1.5rem; font-size: var(--t-lg); color: var(--ink-mid); max-width: 54ch; }
+  .close .hero-actions { margin-block-start: 2.5rem; }
+
+  .footer { border-block-start: 1px solid var(--rule); padding-block: 2rem 2.5rem; color: var(--ink-dim); font-size: var(--t-xs); }
+  .footer .wrap { display: flex; gap: 1.25rem; flex-wrap: wrap; align-items: center; }
+  .footer nav { display: flex; gap: 1.5rem; margin-inline-start: auto; flex-wrap: wrap; }
+  .footer a { color: var(--ink-mid); text-decoration: none; }
+  .footer a:hover { color: var(--ink); text-decoration: underline; }
+}
+
+@layer utilities {
+  /* Scroll-driven reveal: the modern replacement for an IntersectionObserver
+     library, and the reason this page ships no JavaScript. Guarded, because
+     an unsupported browser would otherwise apply the `from` keyframe forever
+     and leave the section invisible.
+
+     The GSAP skill's warning applies here and is worth stating: an element
+     animated to opacity 0 is still in the layout and still clickable, and a
+     print stylesheet never advances a scroll timeline. So the reveal is forced
+     visible for print and for forced-colors, where an opacity animation would
+     otherwise be meaningless or destructive. */
+  @supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+      .reveal {
+        animation: rise linear both;
+        animation-timeline: view();
+        animation-range: entry 0% entry 55%;
+      }
+      @keyframes rise {
+        from { opacity: 0; translate: 0 1.5rem; }
+        to   { opacity: 1; translate: 0 0; }
+      }
+    }
+  }
+
+  /* Never let an entrance animation hide content that cannot animate. */
+  @media print {
+    .reveal { animation: none !important; opacity: 1 !important; translate: none !important; }
+    body::before { display: none; }
+    .faq details { break-inside: avoid; }
+    .faq details p { display: block !important; }
+  }
+
+  @media (forced-colors: active) {
+    .reveal { animation: none !important; opacity: 1 !important; }
+  }
+}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="logo" href="#main">
+      <svg width="24" height="24" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+        <rect x="9.5" y="9.5" width="21" height="14.5" rx="3" fill="none" stroke="#F0A92E" stroke-width="2.6"/>
+        <circle cx="16" cy="16.8" r="2.1" fill="#E8EEF9"/>
+        <circle cx="24" cy="16.8" r="2.1" fill="#E8EEF9"/>
+        <line x1="20" y1="24" x2="20" y2="29.5" stroke="#F0A92E" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="7.5" y1="33" x2="32.5" y2="33" stroke="#8A6420" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="7.5" cy="33" r="2.8" fill="#1A1814" stroke="#F0A92E" stroke-width="2"/>
+        <circle cx="20" cy="33" r="2.8" fill="#1A1814" stroke="#F0A92E" stroke-width="2"/>
+        <circle cx="32.5" cy="33" r="3.2" fill="#E8EEF9"/>
+      </svg>
+      <b>ValidSim</b>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="#pipeline">Pipeline</a>
+      <a class="opt" href="#field">Field</a>
+      <a class="opt" href="#method">Method</a>
+      <a class="opt" href="#faq">FAQ</a>
+      <a class="btn btn-primary" href="#contact">Get started</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============================================================ hero -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-grid">
+        <div>
+          <h1>CI for robot <em>foundation models</em>.</h1>
+          <p class="lede">
+            Robot models now release on a weekly cadence borrowed from software.
+            Deployment gating still works like 2015: run it on a few real robots
+            and hope. ValidSim runs a checkpoint through thousands of simulated
+            episodes and returns a scorecard you can block a deploy on.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#contact">Get started</a>
+            <a class="btn btn-quiet" href="#pipeline">Read the spec</a>
+          </div>
+        </div>
+
+        <aside class="hero-aside">
+          <p><strong>Pre-traction.</strong> No customers yet. We are building this in public and talking to the teams who deploy robot models every day.</p>
+          <p>Every number on this page came out of running the tool. Where something is a target rather than a measurement, we say so.</p>
+        </aside>
+      </div>
+
+      <!-- THE FOCAL POINT. Real output from a real run, at display scale. -->
+      <figure class="readout" aria-labelledby="readout-cap">
+        <div class="readout-figure">
+          <span class="readout-value">72.7</span>
+          <span class="readout-verdict">BLOCK</span>
+        </div>
+        <div>
+          <dl>
+            <div><dt>Checkpoint</dt><dd>ckpt-gr00t-n1</dd></div>
+            <div><dt>Success rate</dt><dd class="v-block">0.690</dd></div>
+            <div><dt>Adversarial (n=50)</dt><dd class="v-block">0.340</dd></div>
+            <div><dt>Safety</dt><dd>77.7</dd></div>
+            <div><dt>Robustness</dt><dd class="v-unmeasured">not measured</dd></div>
+            <div><dt>Gate</dt><dd>85.0</dd></div>
+          </dl>
+          <figcaption id="readout-cap">
+            Composite score and verdict from one real run of
+            <code>validsim run --checkpoint ckpt-gr00t-n1 --episodes 1000 --adversarial 50</code>.
+            Blocked on the adversarial floor, not on the threshold alone.
+          </figcaption>
+        </div>
+      </figure>
+
+      <div class="artifact">
+        <div class="artifact-bar"><b>terminal</b> validsim 0.2.0</div>
+<pre><span class="v-dim">$</span> validsim run --checkpoint <span class="v-key">ckpt-gr00t-n1</span> --episodes <span class="v-key">1000</span> --adversarial <span class="v-key">50</span>
+
+<span class="v-dim">ValidSim validation complete</span>
+  <span class="v-dim">Run ID:       </span><span class="v-key">vrun-ed0c150a</span>
+  <span class="v-dim">Task:         </span><span class="v-key">pick-place (1000 nominal + 50 adversarial)</span>
+  <span class="v-dim">Success rate: </span><span class="v-block">69.0%</span>
+  <span class="v-dim">Adversarial:  </span><span class="v-block">34.0%</span> <span class="v-dim">(50 episodes)</span>
+  <span class="v-dim">Safety score: </span><span class="v-key">77.7</span>
+  <span class="v-dim">Robustness:   </span><span class="v-unmeasured">0.0</span> <span class="v-dim">- not measured (1 randomization group)</span>
+  <span class="v-dim">Composite:    </span><span class="v-block">72.7</span> <span class="v-dim">(threshold 85.0)</span>
+  <span class="v-dim">Decision:     </span><span class="v-block">BLOCK</span>
+    <span class="v-block">-</span> adversarial success rate 34.0% is significantly below
+      the 60% floor (17/50 adversarial episodes passed)
+    <span class="v-block">-</span> composite 72.71 is below the configured threshold 85.00
+  <span class="v-dim">Top failures: </span> emergency_stop=58, timeout=47, collision=47</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================= pipeline -->
+  <section class="band" id="pipeline">
+    <div class="wrap">
+      <div class="band-head reveal">
+        <p class="fig-label">Fig 0.1 — the pipeline</p>
+        <h2>Four stages, wired into CI</h2>
+        <p>A CLI and a GitHub Action. If your team can run a test, it can run a validation.</p>
+      </div>
+
+      <div class="stages reveal">
+        <article class="stage">
+          <p class="stage-no">FIG 0.1.1</p>
+          <h3>Point at a checkpoint</h3>
+          <p>A model artifact and a task. No pipeline to redesign, no data to migrate.</p>
+        </article>
+        <article class="stage">
+          <p class="stage-no">FIG 0.1.2</p>
+          <h3>Run the episodes</h3>
+          <p>Domain randomization across lighting, friction, mass and sensor conditions, plus adversarial scenarios in twelve categories.</p>
+        </article>
+        <article class="stage">
+          <p class="stage-no">FIG 0.1.3</p>
+          <h3>Read the scorecard</h3>
+          <p>Success with a bootstrap confidence interval, safety violations, robustness, and regression against your last shipped checkpoint.</p>
+        </article>
+        <article class="stage">
+          <p class="stage-no">FIG 0.1.4</p>
+          <h3>Gate the deploy</h3>
+          <p>The Action fails the pull request on BLOCK — and a component that could not be measured says so instead of scoring full marks.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ field -->
+  <section class="band" id="field">
+    <div class="wrap">
+      <div class="band-head reveal">
+        <p class="fig-label">Fig 0.2 — the field</p>
+        <h2>Most robot tooling sits after deployment</h2>
+        <p>
+          We are aimed at the gap before it. This is our read of the landscape as
+          of September 2026, including the parts that are threats to us.
+        </p>
+      </div>
+
+      <div class="scroll-x reveal">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Player</th>
+              <th scope="col">What they actually do</th>
+              <th scope="col">Relation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Formant, Viam</th><td>Fleet monitoring, teleoperation, fleet management</td><td><span class="pill pill-them">post-deploy</span></td></tr>
+            <tr><th scope="row">NVIDIA Isaac Sim</th><td>The simulation substrate itself</td><td><span class="pill pill-them">platform</span></td></tr>
+            <tr><th scope="row">W&amp;B, MLflow</th><td>Experiment tracking for ML</td><td><span class="pill pill-them">no physics</span></td></tr>
+            <tr><th scope="row">UL, T&Uuml;V</th><td>Physical certification, over months</td><td><span class="pill pill-part">partner</span></td></tr>
+            <tr><th scope="row">In-house lab tools</th><td>Bespoke validation built by the big labs</td><td><span class="pill pill-us">real threat</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================== method -->
+  <section class="band" id="method">
+    <div class="wrap">
+      <div class="band-head reveal">
+        <p class="fig-label">Fig 0.3 — the method</p>
+        <h2>The gate we run on ourselves</h2>
+        <p>
+          We have no customers to show you. The only thing left is how we work, so
+          here is a real example rather than a slogan.
+        </p>
+      </div>
+
+      <div class="method reveal">
+        <article class="method-item">
+          <h3>We found our own gate was wrong</h3>
+          <p>
+            Auditing the scoring engine, we found it would return
+            <strong>APPROVE</strong> for a run in which
+            <strong>every single simulation episode had failed</strong>. Thirty of
+            the hundred composite points were being granted unconditionally.
+          </p>
+        </article>
+        <article class="method-item">
+          <h3>We fixed it instead of shipping it</h3>
+          <p>
+            An unmeasured component now abstains from the score rather than
+            contributing fabricated credit. That run scores <strong>42.86</strong>
+            and blocks at any threshold. A flawless run still scores
+            <strong>100</strong>.
+          </p>
+        </article>
+        <article class="method-item">
+          <h3>We only quote measured numbers</h3>
+          <p>
+            Every figure here came from running the tool. Where something is a
+            target rather than a measurement — our pricing, our customer list — we
+            label it as one.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================== pricing -->
+  <section class="band" id="pricing">
+    <div class="wrap">
+      <div class="band-head reveal">
+        <p class="fig-label">Fig 0.4 — pricing</p>
+        <h2>Priced below what validation costs to build</h2>
+        <p>
+          A lab that builds this in-house spends roughly $200K–$500K and six months.
+          These numbers are a hypothesis until real customers disagree with them.
+        </p>
+      </div>
+
+      <div class="tiers reveal">
+        <div class="tier">
+          <span class="name">Developer</span>
+          <span class="price">$0<small> / mo</small></span>
+          <p>Researchers and open source. 10 runs a month.</p>
+        </div>
+        <div class="tier">
+          <span class="name">Team</span>
+          <span class="price">$2k<small> / mo</small></span>
+          <p>Small labs, 2–10 engineers. Dashboard, Actions, support.</p>
+        </div>
+        <div class="tier">
+          <span class="name">Pro</span>
+          <span class="price">$8k<small> / mo</small></span>
+          <p>Mid-size. Adversarial suites, regression timelines.</p>
+        </div>
+        <div class="tier">
+          <span class="name">Enterprise</span>
+          <span class="price">Custom</span>
+          <p>Fleet operators. Compliance reporting, HIL, SSO, SLA.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================== faq -->
+  <section class="band" id="faq">
+    <div class="wrap">
+      <div class="band-head reveal">
+        <p class="fig-label">Fig 0.5 — direct answers</p>
+        <h2>The questions we actually get asked</h2>
+        <p>
+          Answered here rather than on a call, including the one that would be
+          embarrassing to get wrong.
+        </p>
+      </div>
+
+      <!-- <details>/<summary> is native disclosure: no JS, keyboard-operable,
+           and the answer is in the DOM for search engines regardless of state. -->
+      <div class="faq reveal">
+        <details>
+          <summary>What does <span class="q">&ldquo;not measured&rdquo;</span> mean on a scorecard?</summary>
+          <p>
+            A component that could not be measured is excluded from the
+            composite&rsquo;s denominator rather than given a default score.
+            Robustness reads <em>not measured</em> when a run used fewer than two
+            randomization groups; regression does the same when no baseline was
+            supplied. This is deliberate. An earlier version scored both at 100,
+            which meant 30 of the 100 composite points were awarded whether or not
+            anything had actually been measured &mdash; and a run in which every
+            episode failed could reach
+            <span class="v-unmeasured">APPROVE</span>.
+          </p>
+        </details>
+
+        <details>
+          <summary>Does ValidSim run on real robots?</summary>
+          <p>
+            No, and that is the point. Ten thousand scenarios cannot be run on
+            one physical robot, so validation happens in simulation before
+            anything reaches a fleet. The MVP ships a deterministic mock backend
+            with an adapter for NVIDIA Isaac; the mock exists so the scoring
+            contract is testable without GPU hardware.
+          </p>
+        </details>
+
+        <details>
+          <summary>Do I have to author my own simulation environment?</summary>
+          <p>
+            No. You point ValidSim at a model checkpoint and a task. It generates
+            the domain randomization and the twelve adversarial scenario
+            categories itself, so there is no scene to build. Pointing it at your
+            own Isaac Lab environment is supported, just not required.
+          </p>
+        </details>
+
+        <details>
+          <summary>How does it fit into an existing pipeline?</summary>
+          <p>
+            As a CLI or a GitHub Action. The Action posts the scorecard on the
+            pull request and fails the check on a
+            <span class="v-block">BLOCK</span> verdict, so an unvalidated model
+            update cannot merge by default.
+          </p>
+        </details>
+
+        <details>
+          <summary>Is this in production anywhere?</summary>
+          <p>
+            No. ValidSim is pre-traction with no customers. The system is real and
+            tested, and we publish the numbers it actually produces &mdash;
+            including the runs where it blocks a model. We would rather show you a
+            working tool with an honest scorecard than a customer list we cannot
+            substantiate.
+          </p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ close -->
+  <section class="band" id="contact">
+    <div class="wrap">
+      <div class="close reveal">
+        <h2>We want the teams deploying robot models today</h2>
+        <p>
+          Not investors and not pilots — actual conversations. If you ship a robot
+          model and have no way to regression-test it before a fleet, tell us how
+          you handle that today. We will show you the tool and be honest about what
+          it cannot do yet.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="mailto:hello@validsim.com">hello@validsim.com</a>
+          <a class="btn btn-quiet" href="https://github.com/validsim" rel="noopener">View the code</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>&copy; 2026 ValidSim. Pre-seed, pre-traction.</p>
+    <nav aria-label="Footer">
+      <a href="https://github.com/validsim" rel="noopener">GitHub</a>
+      <a href="#pricing">Pricing</a>
+      <a href="mailto:hello@validsim.com">Contact</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

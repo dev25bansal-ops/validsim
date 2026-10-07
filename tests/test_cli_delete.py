@@ -93,3 +93,72 @@ class TestDelete:
 
         assert shared_store.get(second) is None
         assert shared_store.get(first) is not None
+
+
+class TestDeleteLatestAgainstTheDurableStore:
+    """RED regression: ``delete --latest`` must read the STORE, not the cache.
+
+    ``delete`` resolves its target through ``_resolve_run_id`` (the local JSON
+    cache), while ``gate`` uses ``_resolve_stored_run_id`` (the store, with a
+    durable-backend check). The two resolvers share a signature and a docstring
+    contract, so the seam is invisible at the call site.
+
+    Consequence: against a durable store (``VALIDSIM_STORE=sqlite|postgres``)
+    the cache is a local convenience with no reason to be in sync, so
+    ``--latest`` fails whenever it is absent or stale -- even though the store
+    holds a perfectly well-defined newest run. ``delete --run-id`` is NOT
+    affected (the id is passed straight through), which is why this hides in
+    normal use.
+
+    Both tests encode the DESIRED behaviour, so they land red today and turn
+    green when ``delete`` is routed through the store resolver. They cannot be
+    satisfied by relaxing an expectation.
+    """
+
+    def test_latest_works_against_a_durable_store_with_no_cache(
+        self,
+        shared_store: ValidationStore,
+        cache_file: Path,
+    ) -> None:
+        run_id = _run_and_extract_id("ckpt-durable")
+        assert shared_store.get(run_id) is not None
+
+        # The cache is a local file; a durable-store deployment has no reason
+        # to keep it. Remove it and confirm the store is still authoritative.
+        cache_file.unlink()
+        assert not cache_file.exists()
+
+        result = _invoke("delete", "--latest")
+
+        # EXPECTED: exit 0, the stored run removed.
+        # ACTUAL:   exit 2, "no cached runs (run `validsim run` first)".
+        assert result.exit_code == 0, result.output
+        assert run_id in result.output  # type: ignore[attr-defined]
+        assert shared_store.get(run_id) is None
+
+    def test_latest_prefers_the_store_over_an_unrelated_cache_entry(
+        self,
+        shared_store: ValidationStore,
+        cache_file: Path,
+    ) -> None:
+        first = _run_and_extract_id("ckpt-store-1")
+        second = _run_and_extract_id("ckpt-store-2")
+        assert first != second
+
+        # Rewrite the cache so its newest entry is a run the store has never
+        # heard of -- the divergence a stale local cache produces in practice.
+        cache_file.write_text(
+            '{"vrun-cccccccc": {"run_id": "vrun-cccccccc", '
+            '"created_at": "2099-01-01T00:00:00+00:00"}}',
+            encoding="utf-8",
+        )
+
+        result = _invoke("delete", "--latest")
+
+        # EXPECTED: deletes the store's newest run (the second one).
+        # ACTUAL:   resolves the cache's vrun-cccccccc, exits 2, and BOTH
+        #           stored runs survive.
+        assert result.exit_code == 0, result.output
+        assert second in result.output  # type: ignore[attr-defined]
+        assert shared_store.get(second) is None
+        assert shared_store.get(first) is not None

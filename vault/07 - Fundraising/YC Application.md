@@ -9,7 +9,10 @@ area: "07 - Fundraising"
 
 # 🎓 Y Combinator W27 Application
 
-§13.1 + §14.2. Deal terms: **$500K = $125K for 7% + $375K uncapped MFN**. Acceptance **~1–2%** from 30,000+ applications per batch; **~50% of accepted companies applied more than once**.
+§13.1 + §14.2. Planning assumptions for terms/timing: **$500K = $125K for 7% + $375K uncapped MFN**. Acceptance **~1–2%** from 30,000+ applications per batch; **~50% of accepted companies applied more than once**.
+
+> [!warning] Verify before external send — 2026-09-21
+> This is a planning draft, not evidence of traction or acceptance. No repository artifact verifies the 25+ conversations, LOIs/pilots, demo video, 4× A100 benchmark, incorporation/website, or accelerator/program status claimed here. Keep those items unchecked until a dated artifact exists; the current simulation backend is the deterministic mock described in [[YC Application Answers]].
 
 ## Program facts
 
@@ -24,11 +27,11 @@ area: "07 - Fundraising"
 
 ## The 10-second pitch (verbatim)
 
-> "We're building **GitHub Actions for robots**. Robot foundation model companies ship policy updates weekly but validate them with hand-built test scenes and judgment calls. We built a CI/CD pipeline that runs thousands of parallel simulation episodes, catches regressions, and generates a safety scorecard — so teams can deploy with statistical confidence instead of prayer."
+> "We're building **GitHub Actions for robots**. Robot foundation model companies ship policy updates weekly but validate them with hand-built scenes and judgment calls. Our current prototype runs deterministic mock episodes, detects regressions, and produces a CI-gate scorecard; real Isaac/GPU execution is the next build milestone."
 
 ## The unique insight (verbatim)
 
-> "Robot validation is fundamentally different from software testing because **the cost of a bad deploy is physical** — a dropped part, a damaged product line, an injured coworker. This means validation must be **massively parallel** (you can't test 10,000 scenarios on one physical robot), **physics-accurate** (a game engine isn't enough), and produce **audit-ready evidence** (insurers and regulators will demand it). Nobody has productized this layer."
+> "Robot validation is different because **the cost of a bad deploy is physical**. The long-term product must run many parallel, physics-accurate scenarios and retain audit-ready evidence. Our current prototype proves the scorecard/regression/gate workflow; parallel Isaac execution and immutable evidence remain milestones."
 
 Backed by: [[Problem Statement]], [[Why Now (2026)]].
 
@@ -36,8 +39,8 @@ Backed by: [[Problem Statement]], [[Why Now (2026)]].
 
 - **Lead with the problem:** "Robots ship code updates but have no CI/CD"
 - **Show the MVP demo video** — 1 minute, both founders on camera
-- **Traction:** 25+ discovery conversations, 2–3 LOIs, working demo
-- **Narrative:** "GitHub Actions for robots" — instantly understandable
+- **Traction:** targets are 25+ discovery conversations, 2–3 LOIs and a working demo; all require verification artifacts
+- **Narrative:** "GitHub Actions for robots" — an analogy/target positioning, not proof of a new or empty market category
 - **Submit in Week 10 (NOT deadline day)** — earlier applications get earlier interview slots
 
 > [!warning] Week-10 reality check
@@ -45,21 +48,21 @@ Backed by: [[Problem Statement]], [[Why Now (2026)]].
 
 ## Traction targets before applying (all four, per [[YC Countdown]])
 
-- ✅ **25 discovery conversations** with named companies (Tier-1 labs, [[Buyer Tiers]])
-- ✅ **2–3 written LOIs or paid pilots** (success criteria attached, [[Go-to-Market]] Phase 1)
-- ✅ **Working demo video** of the MVP (script = the three flows in [[Core User Flows]])
-- ✅ **One metric measured and repeatable** (e.g. 5,000 episodes < 30 min on 4× A100, [[MVP Success Metrics]])
+- [ ] **25 discovery conversations** with named companies (Tier-1 labs, [[Buyer Tiers]]) — verify with dated call notes
+- [ ] **2–3 written LOIs or paid pilots** (success criteria attached, [[Go-to-Market]] Phase 1) — attach agreements
+- [ ] **Working demo video** of the MVP (script = the three flows in [[Core User Flows]]) — record against a checked-in build
+- [ ] **One metric measured and repeatable** (e.g. 5,000 episodes < 30 min on 4× A100, [[MVP Success Metrics]]) — attach benchmark output
 
 ## Demo video storyboard (60 seconds)
 
 | Sec | Shot | Proof |
 |---|---|---|
 | 0–8 | Founder 1: problem + buyer monologue ("3 test scenes and a prayer") | [[Problem Statement]] |
-| 8–15 | `git push` → GitHub Action fires | [[GitHub Actions Integration]] |
-| 15–30 | Time-lapse: 5,000 episodes, 100 adversarial scenarios | [[Data Flow]] |
-| 30–45 | Scorecard: 87.3, 2 regressions, one episode replay of the failure | [[Scorecard UX]] |
+| 8–15 | `git push` → local composite Action fires | [[GitHub Actions Integration]] |
+| 15–30 | Time-lapse of the actual checked-in run (state mock vs. real Isaac clearly) | [[Data Flow]] |
+| 30–45 | Actual scorecard and measured regression result; no invented episode replay | [[Scorecard UX]] |
 | 45–55 | Gate: BLOCK on regressed checkpoint → build goes red | [[Product Principles]] #4 |
-| 55–60 | Founders + one-liner + traction numbers | [[Unit Economics]] |
+| 55–60 | Founders + one-liner + **verified** traction numbers | [[Unit Economics]] |
 
 ## Interview prep (Weeks 10–12)
 

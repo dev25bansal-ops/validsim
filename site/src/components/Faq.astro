@@ -1,0 +1,80 @@
+---
+/**
+ * FAQ using native <details>/<summary> — no JavaScript, keyboard-operable, and
+ * the answers stay in the DOM for search engines regardless of open state.
+ *
+ * The "Is this in production anywhere?" entry exists to state the weakness
+ * before a reviewer finds it. Do not soften it.
+ */
+import { faq } from '../data/content';
+---
+
+<section class="band" id="faq">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <p class="fig-label">Fig 0.7 — direct answers</p>
+      <h2>The questions we actually get asked</h2>
+      <p>Answered here rather than on a call, including the one that would be embarrassing to get wrong.</p>
+    </div>
+
+    <div class="faq reveal">
+      {
+        faq.map((item) => (
+          <details>
+            <summary>{item.q}</summary>
+            <p>{item.a}</p>
+          </details>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .faq {
+    border-block-start: 1px solid var(--rule);
+  }
+  details {
+    border-block-end: 1px solid var(--rule);
+  }
+  summary {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    padding-block: 1.4rem;
+    cursor: pointer;
+    font-size: var(--t-lg);
+    font-weight: 500;
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  /* The affordance is a rotating rule — drawn, not iconographic. */
+  summary::after {
+    content: '';
+    margin-inline-start: auto;
+    flex: none;
+    inline-size: 1rem;
+    block-size: 1rem;
+    border-inline-end: 2px solid var(--unmeasured);
+    border-block-end: 2px solid var(--unmeasured);
+    rotate: 45deg;
+    translate: 0 -0.2rem;
+    transition:
+      rotate 0.2s cubic-bezier(0.25, 1, 0.5, 1),
+      translate 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  details[open] summary::after {
+    rotate: 225deg;
+    translate: 0 0.2rem;
+  }
+  summary:hover {
+    color: var(--unmeasured);
+  }
+  details p {
+    padding-block-end: 1.5rem;
+    color: var(--ink-mid);
+    max-width: 62ch;
+  }
+</style>

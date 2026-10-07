@@ -117,8 +117,13 @@ def run_and_score(
             monkeypatching reason.
 
     Returns:
-        The persisted :class:`StoredRun` (the exact object handed to
-        :meth:`ValidationStore.save`, which every backend returns unchanged).
+        The persisted :class:`StoredRun`. When the run id was free, this is the
+        object just built. When it was already taken -- which happens whenever
+        a caller reuses a run id it does not own, e.g. a worker retrying with
+        its own ``spec.run_id`` -- the store is append-only and keeps the
+        original record, so that stored record is returned instead. Either way
+        the returned run is the one the store holds, never a verdict it never
+        accepted.
 
     Raises:
         BaselineNotFoundError: ``baseline_run_id`` was given but is not present
@@ -130,6 +135,11 @@ def run_and_score(
     seed = stable_seed(checkpoint_id, task.task_id)
     scenarios = ScenarioGenerator(seed=seed).generate(task.task_id, task.adversarial_count)
     resolved_backend = backend if backend is not None else create_backend()
+    # Bind the checkpoint onto the task the backends receive. It arrives as its
+    # own argument here (the run is about a checkpoint, the task describes the
+    # work), but a backend only ever sees the task, so without this binding the
+    # artifact under test never reaches the simulation at all.
+    task = task.model_copy(update={"checkpoint_id": checkpoint_id})
     episodes = run_validation(task, resolved_backend, scenarios, seed=seed)
 
     evaluation = evaluate(episodes)
@@ -152,17 +162,30 @@ def run_and_score(
         regression=regression,
         threshold=threshold,
     )
-    return store.save(
-        StoredRun(
-            run_id=run_id,
-            checkpoint_id=checkpoint_id,
-            task_id=task.task_id,
-            created_at=scorecard.created_at,
-            scorecard=scorecard,
-            evaluation=evaluation,
-            safety=safety,
-            episodes=episodes,
-            baseline_run_id=baseline_run_id,
-            regression=regression,
-        )
+    candidate = StoredRun(
+        run_id=run_id,
+        checkpoint_id=checkpoint_id,
+        task_id=task.task_id,
+        created_at=scorecard.created_at,
+        scorecard=scorecard,
+        evaluation=evaluation,
+        safety=safety,
+        episodes=episodes,
+        baseline_run_id=baseline_run_id,
+        regression=regression,
     )
+    # The store is append-only (see ValidationStore's contract): the first
+    # write for a run_id is the record and a later write of the same id is
+    # rejected. The worker passes its own spec.run_id, so a retry -- or a
+    # crashed run re-executed -- can land on an id that is already taken. The
+    # store keeps the original verdict, so returning the freshly built run
+    # would hand the caller a scorecard the record never accepted (and, for a
+    # worker retry, silently contradict what `gate` later reads). Re-read the
+    # stored record instead: the answer to "what is the verdict for this id?"
+    # is then always the one on the record.
+    if not store.save_exists(candidate):
+        stored = store.get(run_id)
+        if stored is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"run {run_id} vanished from the store mid-save")
+        return stored
+    return candidate

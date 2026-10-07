@@ -131,18 +131,20 @@ runs:
             fh.write("\n".join(lines) + "\n")
         PYX
         else
-          # No cached run (e.g. validation crashed before writing the
-          # scorecard). Still emit a useful comment instead of failing.
+          # No cached run: the validation produced no verdict at all. This is a
+          # failed check, not a notice — exiting 0 here used to hand the PR a
+          # green ValidSim gate backed by nothing.
           {
-            echo "## 🤖 ValidSim Scorecard — \`${VS_RUN_ID}\`"
-            echo ""
-            echo "**❌ No scorecard available.** The validation run produced no cached results."
-            echo ""
-            echo '```'
-            cat "${JSON}.err" 2>/dev/null || true
-            echo '```'
-          } > "$MD"
-          echo "::warning::validsim scorecard --run-id '$VS_RUN_ID' failed; posted a fallback notice instead."
+            echo "::error::no scorecard cached for run '$VS_RUN_ID'; the validate step produced no verdict.";
+            echo "## 🤖 ValidSim Scorecard — \`${VS_RUN_ID}\`";
+            echo "";
+            echo "**❌ No scorecard available.** The validation run produced no cached results, so this check failed.";
+            echo "";
+            echo '```';
+            cat "${JSON}.err" 2>/dev/null || true;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
         fi
 
         cat "$MD" >> "$GITHUB_STEP_SUMMARY"

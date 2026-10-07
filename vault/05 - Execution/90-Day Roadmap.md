@@ -11,6 +11,9 @@ area: "05 - Execution"
 
 Four phases, twelve weeks, one outcome: a YC W27 application backed by evidence, not adjectives ([[YC Countdown]]).
 
+> [!important] Roadmap status — 2026-09-21
+> All rows are intended exit criteria, not completed outcomes. Incorporation, website, discovery calls, LOIs, benchmark, external-user run, public artifact, YC submission and Inception acceptance/credits require dated evidence before being described as complete.
+
 ## Phase table
 
 | Phase | Weeks | Actions | Exit Criteria | Failure Mode |
@@ -18,7 +21,7 @@ Four phases, twelve weeks, one outcome: a YC W27 application backed by evidence,
 | **1 · Decide & Embed** | 1–2 | 25 discovery calls. Incorporate Delaware C-Corp. Website live. Apply NVIDIA Inception. | One-page problem brief with named targets and quoted pain. Inception application submitted. | *Polishing decks instead of booking calls.* |
 | **2 · Build the Wedge** | 3–6 | Ship 8-week MVP. 10 discovery calls/week. Weekly internal demo. | Demo-able system producing a real scorecard for **≥1 external user**. | *Scope creep beyond the single wedge task* ([[MVP Non-Goals]]). |
 | **3 · Land Design Partners** | 7–9 | Convert 2–3 warmest conversations to signed LOIs or paid pilots. Iterate weekly. Start YC app draft. | Written commitments with company names. One metric measured on partner usage. | *Free pilots with no committed success criteria.* |
-| **4 · Apply & Signal** | 10–12 | Record 1-min founder video. Submit YC app Week 10. Publish benchmark or open-source tool. Rehearse interviews 2×/week. | Application submitted. Interview prep running. Inception credits in hand. | *Submitting at 7:59pm on Nov 2 with unedited video.* |
+| **4 · Apply & Signal** | 10–12 | Record 1-min founder video. Submit YC app Week 10. Publish benchmark or open-source tool. Rehearse interviews 2×/week. | **Targets:** application submitted; interview prep running; Inception credits received and usable (not merely applied for). | *Submitting at 7:59pm on Nov 2 with unedited video.* |
 
 > [!note] Week-10 vs. Nov-2 tension
 > The roadmap's "submit Week 10" assumes an early-September start. From the Sep 18 vault start, compress: submit by **Oct 26–30** with a Week-6/7 demo state. Full analysis + options: [[YC Countdown]].

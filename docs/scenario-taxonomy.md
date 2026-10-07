@@ -278,6 +278,14 @@ Guarantees:
 
 ## 7. The LLM path — `LLMScenarioGenerator`
 
+> [!warning] Implemented, tested, and not used by any run
+> Everything in this section describes a real, tested class — and a path no
+> shipped execution takes. `run_and_score` hardcodes the rule-based generator
+> (§7.5), so **adversarial scenarios in production are deterministic**, which is
+> also why they are reproducible from `(checkpoint_id, task_id)`. Read this
+> section as the contract for the opt-in surface, not as a description of
+> current behaviour.
+
 `LLMScenarioGenerator` is a **drop-in replacement** for the rule-based
 generator: `generate(task_id, n)` accepts the same arguments and returns the
 same `list[AdversarialScenario]`. It asks a provider to invent `n` scenarios,
@@ -362,16 +370,32 @@ many fallback scenarios were used.
 
 ### 7.5 Factory & environment
 
+> [!warning] This factory has no production caller
+> The only production code that builds scenarios is
+> `validsim.engine.pipeline.run_and_score`, which hardcodes
+> `ScenarioGenerator(seed=seed).generate(...)` at
+> `validsim/engine/pipeline.py:131`. **No shipped run consults the environment
+> variables below** — the API, the CLI and the job worker all generate
+> deterministically. `create_scenario_generator()` is a working, tested opt-in
+> surface kept for a future change, not a live feature. Use
+> `current_scenario_backend()` to see what the environment *would* select, and
+> read this table as the contract the factory implements rather than as current
+> runtime behaviour.
+
 `create_scenario_generator(seed=42)` picks the backend with no code change:
 
 | Condition | Returned generator |
 |---|---|
-| `VALIDSIM_LLM_API_KEY` set | `LLMScenarioGenerator(OpenAICompatibleProvider(), fallback=ScenarioGenerator(seed))` |
-| otherwise (default) | `ScenarioGenerator(seed)` — rule-based, no network I/O |
+| `VALIDSIM_LLM_ENABLED` explicitly truthy **and** `VALIDSIM_LLM_API_KEY` non-empty | `LLMScenarioGenerator(OpenAICompatibleProvider(), fallback=ScenarioGenerator(seed))` |
+| opt-in on but key missing, or opt-in off/absent (default) | `ScenarioGenerator(seed)` — rule-based, no network I/O |
+
+The two-argument opt-in is deliberate: a bare API key no longer silently
+changes the behaviour of a validation run. An explicit switch is required.
 
 | Env var | Purpose | Default |
 |---|---|---|
-| `VALIDSIM_LLM_API_KEY` | Bearer token; also the switch that enables the LLM path. | unset → rule-based |
+| `VALIDSIM_LLM_ENABLED` | The opt-in switch. Only an explicit truthy value (`1`/`true`/`yes`/`on`) enables the LLM path. | unset → rule-based |
+| `VALIDSIM_LLM_API_KEY` | Bearer token; required *and* sufficient once the opt-in is on (base URL and model fall back to OpenAI-compatible defaults). | unset → rule-based |
 | `VALIDSIM_LLM_BASE_URL` | API root for the OpenAI-compatible endpoint. | `https://api.openai.com/v1` |
 | `VALIDSIM_LLM_MODEL` | Chat model name. | `gpt-4o-mini` |
 

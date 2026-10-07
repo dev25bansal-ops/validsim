@@ -59,7 +59,7 @@ one id.
 ## 2. Job lifecycle
 
 A job is a frozen `JobRecord` (see
-[`validsim/jobs/models.py`](../validsim/jobs/models.py)) that moves through four
+[`validsim/jobs/models.py`](../validsim/jobs/models.py)) that moves through five
 states. Transitions never mutate in place — each produces a new record via
 `dataclasses.replace`.
 
@@ -81,7 +81,13 @@ enqueue()          run_once() claims        pipeline succeeds
 | `queued` | `enqueue()` adds the job | `created_at` | — |
 | `running` | a worker claims it (`run_once`) | `started_at` (first time only) | — |
 | `done` | the pipeline returns a `StoredRun` | `finished_at` | `result` = persisted run id |
-| `failed` | the backend/engine raises | `finished_at` | `error` = exception message |
+| `failed` | the backend/engine raises, and the attempt budget is spent | `finished_at` | `error` = exception message |
+| `dead` | dead-lettered: the retry or reclaim budget ran out before it ever completed | `finished_at` | `error` = why it was abandoned |
+
+`failed` and `dead` are kept apart deliberately. `failed` ran and reported an
+error; `dead` never got to report anything — its worker died, or its payload
+was unreadable. Folding them together would hide exactly the poison-job case an
+operator needs to see, and would make the retry budget invisible in job history.
 
 `started_at` is written the **first** time a job becomes `running` and is never
 overwritten; `finished_at` is written on **any** terminal state. Because each
@@ -106,7 +112,7 @@ scope when `VALIDSIM_RATE_LIMIT` is enabled.
 | Method | Path | Purpose | Errors |
 |---|---|---|---|
 | `POST` | `/api/v1/jobs` | Enqueue a job; returns id + initial status (`202`) | `422` bad body |
-| `GET` | `/api/v1/jobs` | List all jobs in FIFO (insertion) order | — |
+| `GET` | `/api/v1/jobs` | List all jobs in FIFO order; `limit` and/or `offset` activates a newest-first pagination envelope | `422` pagination values out of range |
 | `GET` | `/api/v1/jobs/{job_id}` | Full record for one job | `400` malformed id, `404` unknown |
 | `GET` | `/api/v1/jobs/{job_id}/status` | Compact `{job_id, status, updated_at}` | `400`, `404` |
 | `GET` | `/api/v1/jobs/{job_id}/events` | Server-Sent Events status stream | `400`, `404` (before opening) |
@@ -153,28 +159,46 @@ The `run_id` is generated server-side; the caller never supplies it.
 
 ### 3.3 `GET /api/v1/jobs` and `GET /api/v1/jobs/{job_id}`
 
-Both return the full `JobRecord.to_dict()` shape (the list endpoint returns a
-bare array, oldest-first / FIFO — note this is **not** paginated, unlike
-`/validations`):
+With neither `limit` nor `offset`, the list endpoint returns a bare array of
+full `JobRecord.to_dict()` values in FIFO insertion order. Supplying either
+pagination parameter switches it to `{total, limit, offset, items}`; `items`
+holds the same record shape in **newest-first** order. `limit` is 1–500
+(default `100` when only `offset` is supplied), `offset` is ≥0 (default `0` when
+only `limit` is supplied), and out-of-range values return `422`. `total` counts
+all queued jobs independently of the page. An offset beyond the total is valid
+and returns an empty `items` list.
 
 ```json
 {
-  "job_id": "vrun-1a2b3c4d",
-  "status": "done",
-  "spec": {
-    "run_id": "vrun-1a2b3c4d",
-    "checkpoint_id": "checkpoint-abc123",
-    "task_id": "pick-and-place",
-    "episodes": 1000,
-    "adversarial": 10
-  },
-  "created_at": "2026-03-20T12:00:00+00:00",
-  "started_at": "2026-03-20T12:00:05+00:00",
-  "finished_at": "2026-03-20T12:04:11+00:00",
-  "error": null,
-  "result": "vrun-1a2b3c4d"
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "items": [
+    {
+      "job_id": "vrun-1a2b3c4d",
+      "status": "done",
+      "spec": {
+        "run_id": "vrun-1a2b3c4d",
+        "checkpoint_id": "checkpoint-abc123",
+        "task_id": "pick-and-place",
+        "episodes": 1000,
+        "adversarial": 10
+      },
+      "created_at": "2026-03-20T12:00:00+00:00",
+      "started_at": "2026-03-20T12:00:05+00:00",
+      "finished_at": "2026-03-20T12:04:11+00:00",
+      "error": null,
+      "result": "vrun-1a2b3c4d"
+    }
+  ]
 }
 ```
+
+`GET /api/v1/jobs/{job_id}` returns one full job record in the same shape as an
+entry in `items[]` (or in the parameterless bare array). `status` ∈
+`queued | running | done | failed | dead`; `started_at` is stamped the first time a
+worker claims the job, `finished_at` on any terminal state; `error` is populated
+only when `failed`, and `result` only when `done`.
 
 ### 3.4 `GET /api/v1/jobs/{job_id}/status`
 
@@ -261,6 +285,13 @@ validsim worker --poll-seconds 1.0
 Both backends expose an identical interface (`enqueue` / `get` / `list` /
 `update_status` / `__len__` / `close`), so callers are backend-agnostic.
 `create_job_queue()` picks one from the environment.
+
+One difference is worth knowing before you write a caller: on the Redis backend
+an *unfenced* `update_status` can raise `QueueContentionError` if another process
+out-paced every compare-and-set attempt. The memory backend holds one process's
+lock for the whole transition, so it has no such failure mode. Both backends
+leave the record untouched in that case — the transition is refused, never
+partially applied.
 
 ### 5.1 `JobQueue` (memory, default)
 
@@ -355,6 +386,10 @@ vars documented in [docs/runbook.md](runbook.md) §2.
 | `VALIDSIM_JOB_QUEUE` | `memory` | Queue backend: `memory` \| `redis` (case-insensitive; anything else falls back to memory). |
 | `VALIDSIM_REDIS_URL` | *(none)* | Redis URL for the `redis` backend (e.g. `redis://localhost:6379/0`). Required when `VALIDSIM_JOB_QUEUE=redis`; missing URL + installed driver fails fast with `ValueError`. |
 | `VALIDSIM_JOB_QUEUE_MAX_DEPTH` | `1000` | Maximum jobs the queue holds before `enqueue` raises `QueueFullError`. Must be a positive integer; malformed value raises `ValueError`. |
+| `VALIDSIM_JOB_LEASE_SECONDS` | `3600` | How long a worker's claim stays valid before `reap_expired()` may hand the job to another worker. This is the dead-worker timeout; a slow-but-alive worker renews at one third of it. Must be a positive integer. |
+| `VALIDSIM_JOB_MAX_ATTEMPTS` | `3` | Attempts allowed before a raising job becomes `failed` instead of being requeued. Must be a positive integer. |
+| `VALIDSIM_JOB_RETRY_BACKOFF_SECONDS` | `5.0` | First retry delay, doubling per attempt and capped at 300s. Without it a persistently failing backend hot-spins and burns the whole budget in milliseconds. Accepts a float. |
+| `VALIDSIM_JOB_MAX_RECLAIMS` | `3` | Abandoned claims tolerated before a job is dead-lettered as `dead`. Counts reclaims, not failures. Must be a positive integer. |
 
 ```bash
 # Single-process / local: default memory backend, nothing to set
@@ -397,7 +432,9 @@ Key points:
 * **Same wiring as the API.** The `api` service sets `VALIDSIM_JOB_QUEUE=redis`
   and `VALIDSIM_REDIS_URL=redis://redis:6379/0`, so a job enqueued through
   `POST /api/v1/jobs` is claimed by this worker and its result lands in the same
-  system-of-record (Postgres by default).
+  system-of-record (Postgres in this Compose stack, where Compose supplies
+  `postgres` when `VALIDSIM_STORE` is unset or blank; outside Compose, it
+  defaults to `memory`).
 * **`healthcheck.disable`.** The base image's `HEALTHCHECK` probes the HTTP API
   on `:8000`, which the worker never serves — disabling it stops Compose from
   reporting the worker unhealthy.
@@ -422,10 +459,16 @@ Key points:
 `JobWorker` is deliberately dependency-light and deterministic. Given a queue, a
 store, and a backend:
 
-* `run_once()` claims the **oldest `queued` job** (the first `queued` record in
-  `list()`, i.e. FIFO), marks it `running`, executes the pipeline, then marks it
-  `done` (with `result` = run id) or `failed` (with `error` = exception message).
-  Returns `None` when nothing is queued. A single bad job **does not** kill the
+* `run_once()` calls `queue.claim_next()`, which hands back one claimable job
+  and stamps it with a lease deadline **and a fresh `lease_epoch`** — a fencing
+  token. Work still inside its retry backoff is skipped, not blocked on, and a
+  job whose attempt or reclaim budget is spent is dead-lettered rather than
+  handed out again. The job is marked `running`, the pipeline executes, then the
+  outcome is written **fenced on that epoch** (`_finish(..., lease_epoch=...)`),
+  so a worker that stalled past its lease cannot overwrite the run of whichever
+  worker now owns the job. Returns `None` when nothing is claimable. A failure
+  with attempts left requeues the job with a backoff instead of failing it.
+  A single bad job **does not** kill the
   worker — the exception is caught and recorded on that job only.
 * `run_forever(poll_seconds=1.0)` loops `run_once()`, idling up to `poll_seconds`
   when the queue is empty but waking immediately if `stop()` is called — so

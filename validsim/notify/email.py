@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import smtplib
+import ssl
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from email.message import Message
@@ -303,7 +304,18 @@ class EmailNotifier:
             message = _build_message(settings.from_addr, to, subject, body_html, body_text)
             with smtplib.SMTP(settings.host, settings.port, timeout=_TIMEOUT_S) as smtp:
                 if settings.use_tls:
-                    smtp.starttls()
+                    # An explicit SSL context is required: smtplib.starttls() with no
+                    # arguments does NOT verify certificates or hostnames, which makes
+                    # the STARTTLS channel trivially MITM-able. Certifi (a transitive
+                    # dependency of httpx, already a hard requirement) supplies the
+                    # system CA bundle; fall back to the stdlib default if unavailable.
+                    try:
+                        import certifi
+
+                        context = ssl.create_default_context(cafile=certifi.where())
+                    except ImportError:  # pragma: no cover - certifi ships with httpx
+                        context = ssl.create_default_context()
+                    smtp.starttls(context=context)
                 if settings.username is not None:
                     smtp.login(settings.username, settings.password or "")
                 smtp.sendmail(settings.from_addr, list(to), message.as_string())

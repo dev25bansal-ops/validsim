@@ -1,8 +1,10 @@
 """Tests for env-driven, in-memory rate limiting of write routes.
 
-``VALIDSIM_RATE_LIMIT`` (requests per window, default ``0`` = disabled) and
+``VALIDSIM_RATE_LIMIT`` (requests per window, default ``60``) and
 ``VALIDSIM_RATE_WINDOW_SECONDS`` (default ``60``) are read once at
-:func:`create_app` time. When enabled, only the write/sensitive routes
+:func:`create_app` time. Protection ships on: an absent, unparsable, or
+negative limit falls back to the default rather than to disabled, and only an
+explicit ``0`` turns it off. When enabled, only the write/sensitive routes
 (``POST /api/v1/validations`` and ``POST .../compare``) are limited, keyed by
 either the ``X-API-Key`` header or the client IP; exceeding the budget returns
 ``429`` with a ``Retry-After`` header. When disabled, behavior is unchanged.
@@ -17,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from validsim.api.main import (
     API_KEY_HEADER,
+    DEFAULT_RATE_LIMIT,
     RATE_LIMIT_ENV,
     RATE_WINDOW_ENV,
     create_app,
@@ -60,11 +63,22 @@ def _client() -> TestClient:
 
 
 class TestRateLimitDisabled:
-    def test_default_env_allows_unlimited_writes(self, clean_env: None) -> None:
-        """No ``VALIDSIM_RATE_LIMIT`` -> writes are unlimited (current behavior)."""
+    def test_default_env_enables_rate_limiting(self, clean_env: None) -> None:
+        """No ``VALIDSIM_RATE_LIMIT`` must still ship protected, not wide open."""
+        response = _client().get("/api/v1/health")
+        assert response.status_code == 200, response.text
+        config = response.json()["rate_limit"]
+        assert config is not None
+        assert config["requests"] == DEFAULT_RATE_LIMIT
+        assert config["window_seconds"] > 0
+
+    def test_default_actually_throttles_excess_writes(self, clean_env: None) -> None:
+        """The default is reported AND enforced, not cosmetic."""
+        os.environ[RATE_LIMIT_ENV] = "2"
         client = _client()
-        for _ in range(5):
-            assert client.post("/api/v1/validations", json=_request_body()).status_code == 201
+        assert client.post("/api/v1/validations", json=_request_body()).status_code == 201
+        assert client.post("/api/v1/validations", json=_request_body()).status_code == 201
+        assert client.post("/api/v1/validations", json=_request_body()).status_code == 429
 
     def test_explicit_zero_disables(self, clean_env: None) -> None:
         """``VALIDSIM_RATE_LIMIT=0`` is the documented disable sentinel."""
@@ -73,16 +87,18 @@ class TestRateLimitDisabled:
         for _ in range(3):
             assert client.post("/api/v1/validations", json=_request_body()).status_code == 201
 
-    def test_bad_limit_value_disables_gracefully(self, clean_env: None) -> None:
-        """Unparsable config degrades to disabled rather than crashing the app."""
+    def test_bad_limit_value_falls_back_to_protection(self, clean_env: None) -> None:
+        """Unparsable config degrades to the default, never to unprotected."""
         os.environ[RATE_LIMIT_ENV] = "not-a-number"
-        client = _client()
-        assert client.post("/api/v1/validations", json=_request_body()).status_code == 201
+        response = _client().get("/api/v1/health")
+        assert response.status_code == 200, response.text
+        assert response.json()["rate_limit"]["requests"] == DEFAULT_RATE_LIMIT
 
-    def test_negative_limit_disables(self, clean_env: None) -> None:
+    def test_negative_limit_falls_back_to_protection(self, clean_env: None) -> None:
         os.environ[RATE_LIMIT_ENV] = "-5"
-        client = _client()
-        assert client.post("/api/v1/validations", json=_request_body()).status_code == 201
+        response = _client().get("/api/v1/health")
+        assert response.status_code == 200, response.text
+        assert response.json()["rate_limit"]["requests"] == DEFAULT_RATE_LIMIT
 
 
 class TestRateLimitEnabled:

@@ -10,18 +10,21 @@ area: "07 - Fundraising"
 
 # ✍️ YC Application Answers (Drafted)
 
-Paste-ready answers for the W27 form, in founder voice (**we/our**). YC fields are short — **use the Short version**; the Expanded version is interview prep and long-form backup. All numbers trace to [[Key Figures]]; replace every `[...]` before submitting.
+Draft answers for the W27 form, in founder voice (**we/our**). YC fields are short — use the Short version only after verification; Expanded answers are interview prep. All numbers trace to [[Key Figures]]; replace every placeholder before submitting.
+
+> [!warning] Verify before external send — 2026-09-21
+> The current code implements a deterministic mock plus an optional HTTP Isaac worker client, not the real GPU workload described below. Test counts, discovery/LOI/company names, benchmark timings, incorporation, website, Inception status, published Actions, and all placeholders remain unverified unless a dated artifact is attached. Do not treat the answer blocks as paste-ready without that verification.
 
 > [!warning] Placeholder discipline
-> Every `[X]` is a **measured** number, not an estimate. If it is not in [[Build Status]], a `Discovery Call` note, or a signed LOI, it does not go in the application. Overclaiming the sim backend is the fastest way to lose a technical partner — we state plainly that the Isaac Lab port is in flight.
+> Placeholders are **not** measurements. A number belongs in the application only when [[Build Status]] or a dated external artifact supports it. The Isaac Lab port is planned, not “in flight” unless a tracked, active deployment proves that.
 
 ## Q1 · What does your company do?
 
-**Short (paste-ready)**
-> We're building **GitHub Actions for robots** — continuous validation, regression testing, and safety scoring for robot foundation models before they touch the real world. A team pushes a model checkpoint; we run thousands of parallel physics-accurate simulation episodes and return a safety-and-success scorecard that **approves or blocks the deploy**.
+**Short (draft; verify before submission)**
+> We're building **GitHub Actions for robots** — continuous validation, regression testing, and safety scoring for robot foundation models before they touch the real world. The current prototype accepts a checkpoint, runs deterministic mock episodes, and returns a scorecard whose `APPROVE`/`BLOCK` verdict fails CI through `validsim gate`. Real Isaac/GPU execution is the next milestone.
 
 **Expanded**
-> Robot foundation model companies ship policy updates weekly, but they validate them with hand-built test scenes, small teleop trials, and a senior engineer's judgment call. We productized the missing layer between "checkpoint" and "fleet": submit via CLI or GitHub Action, get 1,000–100,000 parallel sim episodes, a regression diff against the previous checkpoint with 95% confidence intervals, a 0–100 composite safety score, and a deployment gate that can fail the build. Pure software, NVIDIA-native, no hardware.
+> Robot foundation model companies ship policy updates weekly, but they validate them with hand-built test scenes and judgment calls. Our current prototype covers the missing layer from checkpoint to scorecard: CLI/API, deterministic mock simulation, regression statistics, a 0–100 composite score, and an APPROVE/BLOCK CI gate. Real Isaac/GPU execution, published hosted Actions, and immutable compliance trails are the next milestones, not current claims.
 
 ## Q2 · How did you get an idea for this?
 
@@ -29,77 +32,77 @@ Paste-ready answers for the W27 form, in founder voice (**we/our**). YC fields a
 > We both come from AI/ML and kept watching robot labs raise enormous rounds — Physical Intelligence at **$5.6B**, Skild AI at **$14–15B** — while the validation step underneath those updates was still spreadsheets and "looks good, ship it." Software had exactly this problem in 2010, before CI/CD. We think robots are at that inflection, and the first major deployment failure will make the layer mandatory.
 
 **Expanded**
-> Two converging observations. (1) The cadence changed: VLA models like pi0 and GR00T N1 are fine-tuned per-customer and per-task, so validation frequency now scales with *model update* frequency, not hardware refresh cycles — that is what makes it a CI/CD problem rather than a certification problem. (2) The infrastructure changed: Isaac Sim is now open-source and Isaac Lab gives GPU-parallel environments, so the substrate is free while the productized layer above it is empty. We wrote the 19-section blueprint, scored seven frontier bets against it (**8.7/10** for this one, highest of seven), then started building and calling labs the same week.
+> Two converging observations. (1) VLA model updates make validation frequency scale with model cadence, not hardware refresh cycles — a CI/CD problem. (2) Isaac Sim/Lab lowers the substrate barrier, but the productized validation workflow is still incomplete. We wrote and internally scored the blueprint; the 8.7/10 and “calling labs the same week” are internal/historical claims that require their source notes before external use.
 
 ## Q3 · What, if anything, have you done so far?
 
 **Short**
-> Working code and a running pipeline, not slides: the ValidSim platform scaffold (FastAPI API, Typer CLI, config models, episode runner, adversarial scenario generator, evaluation/safety/regression/scorecard engines) with a **126-test pytest suite green on continuous CI** — GitHub Actions on every push/PR, a nightly deep-validation suite, and an hourly build agent that republishes status into our operating vault. Two shippable GitHub Actions (deploy gate + scorecard) and a Dockerized control plane exist today. Live: **[X]** discovery conversations logged, **[X]** LOIs, **[X]** episodes/run, **[X]** min wall-clock for 5,000 episodes on 4× A100.
+> Working code, not slides: the ValidSim scaffold (FastAPI API, Typer CLI, config models, episode runner, scenario/evaluation/safety/regression/scorecard engines) with the latest verified suite status in [[Build Status]]. GitHub Actions runs on push/PR; no hourly build agent is verified. Two **local** composite Actions and a Dockerized control plane exist; the published `validsim/*@v1` actions do not. Real Isaac/GPU execution and every traction/benchmark placeholder still require dated evidence.
 
 **Expanded (be honest about the gap)**
-> - **Built:** end-to-end MVP pipeline — submit checkpoint → simulate → adversarial scenarios → evaluate → regression diff vs. baseline (bootstrap CI) → composite scorecard (40% success / 30% safety / 20% robustness / 10% regression) → APPROVE/BLOCK.
-> - **Verified:** 126 tests passing, latest run in [[Build Status]] (auto-generated, not hand-edited).
-> - **Honest limitation:** the simulation backend is currently a deterministic **mock** Isaac interface. Porting to Isaac Sim 4.x / Isaac Lab on real A100s is the next milestone and is the reason we want DGX credits ([[NVIDIA Inception]]).
-> - **Operating system:** a **55-note** Obsidian vault linking strategy → product → engineering → GTM → fundraising, with a single source-of-truth figures table and CI-published build status. Written in the first week of execution — our answer to "how fast do you move."
-> - **Traction:** **[X]/25** discovery calls, **[X]/2–3** LOIs, demo video **[recorded / scheduled week of [date]]**, submission target week of **Oct 26, 2026** ([[YC Countdown]]).
+> - **Built:** an end-to-end deterministic mock pipeline — submit → mock simulation/scenarios → evaluate → baseline regression/CI → composite scorecard → stored APPROVE/BLOCK. Real Isaac execution remains the next milestone.
+> - **Verified:** Use the latest generated row in [[Build Status]]; do not quote a historical test count from this draft.
+> - **Honest limitation:** the simulation backend is currently deterministic mock; an HTTP Isaac worker adapter exists, but no real worker image/deployment is in this repository. Porting to Isaac Sim/Lab on real A100s is planned, not shipped.
+> - **Operating system:** an Obsidian vault linking strategy → product → engineering → GTM → fundraising, with a figures table and generated build status. Do not claim the note count without a current count.
+> - **Traction:** **[VERIFY]/25 discovery calls**, **[VERIFY]/2–3 LOIs**, demo video **[VERIFY recorded / scheduled]**, and a confirmed submission target ([[YC Countdown]]).
 
 ## Q4 · How much revenue / how many hard commitments?
 
 **Short**
-> Pre-revenue by design. Hard commitments: **[X]** written LOIs from **[Company A / Company B / Company C]** with named success criteria, **[X]** paid pilot(s) at **$[X]**, and **[X]** design partners on free runs (≤50/month) converting to the **$2,000/mo** Team tier at pilot end. **[X]** conversations logged toward the 25 target.
+> Pre-revenue by design. **Verify before submission:** hard commitments must be listed as **[VERIFY] written LOIs from [NAMED COMPANIES]** with success criteria, **[VERIFY] paid pilot(s) at [AMOUNT]**, **[VERIFY] design partners**, and **[VERIFY] conversations**. If none is evidenced, say “pre-revenue, seeking first design partners”; do not fill these placeholders.
 
 **Expanded**
-> We are deliberately not on paid contracts yet — two founders shipping an 8-week MVP cannot also run procurement. What we are collecting instead is commitment that costs the customer something: written LOIs naming the company, the buyer, and the success criteria that trigger purchase (a free pilot with no success criteria is not a commitment). Pipeline: **[X]** companies at LOI stage, **[X]** at demo stage, **[X]** at first-call stage. First revenue is projected at Month 6 (**2 paying customers, $10K ARR**, [[KPIs]]), with blended ARPU **$3,000/mo** and LTV **$72,000** at 24-month retention ([[Unit Economics]]).
+> We are pre-revenue. **Verify** the company/buyer/success criteria for any LOI or pilot; do not treat a checklist as evidence. Month-6 ARR, ARPU and LTV are planning assumptions from [[KPIs]] / [[Unit Economics]], not achieved results.
 
 ## Q5 · Why will this win? What's the unique insight?
 
 **Short**
-> **The cost of a bad deploy is physical.** A dropped part is **$50K**, line downtime is **$10K–$100K/hr**, and an injured coworker is a liability event — you cannot roll back a robot. So validation must be **massively parallel** (you cannot run 10,000 scenarios on one physical robot), **physics-accurate** (a game engine isn't enough), and **audit-ready** (insurers and regulators will demand the evidence). Nobody has productized that combination.
+> **The cost of a bad deploy is physical.** We target parallel, physics-accurate, audit-ready validation, but the current mock does not establish physics fidelity and the audit trail is not implemented. Our shipped differentiator today is the scorecard/regression/gate workflow; the remaining capabilities are roadmap.
 
 **Expanded**
 > Three consequences follow, and each is a moat:
 > 1. **Parallel → GPU economics.** Fleet-scale testing only exists in simulation, which makes this a compute-orchestration business with a real cost structure and a data flywheel — every run improves our failure taxonomy and scenario quality.
-> 2. **Physics → substrate choice.** PhysX 5 contact/force fidelity is why we built NVIDIA-native instead of on a game engine, and why "isn't this just Isaac Sim?" is the wrong objection: Isaac ships the platform, not the scorecard, the gate, or the audit trail.
-> 3. **Audit → the terminal moat.** Once insurers (Munich Re, Swiss Re) and certifiers (UL, TÜV) adopt our scorecard format, it is the de-facto standard — "Very High" durability, and the one thing a fast-follower cannot buy ([[Moat]]).
-> The wedge is narrow on purpose: one VLA stack, one benchmark task (tabletop bin picking, Franka Panda), 1,000–5,000 episodes, 100 adversarial scenarios from a 12-category taxonomy, scorecard in under 30 minutes. A real scorecard for one external engineer beats a broad platform of slides.
+> 2. **Physics → substrate choice.** PhysX-based fidelity is the reason to target Isaac for real GPU runs; the current mock does not establish that fidelity. Isaac is not a deployment gate, and our immutable audit/compliance trail is still roadmap work.
+> 3. **Audit → the intended terminal moat.** Insurer/certifier adoption is a long-term hypothesis, not present evidence; the current product has no immutable audit trail.
+> The wedge is narrow on purpose: one VLA stack, one benchmark task (tabletop bin picking, Franka Panda), 1,000–5,000 episodes, 100 scenarios from a 12-category taxonomy, and a scorecard in under 30 minutes are targets. No external-engineer scorecard or benchmark is verified in the repository.
 
 ## Q6 · Why are you the right team?
 
 **Short**
-> Two AI/ML founders whose skills are exactly the product's two halves: **Founder 1 [name]** on simulation and evaluation (PyTorch, Isaac Sim/Lab, RL/IL, VLA models, domain randomization) and **Founder 2 [name]** on the platform (Kubernetes, FastAPI, Next.js, GitHub Actions, cloud infra). The role split mirrors the five-layer architecture, so every sprint week has exactly one owner per workstream — which is how a two-person team got a 97-test CI-green scaffold and a full blueprint in week one.
+> Two AI/ML founders whose skills are exactly the product's two halves: **Founder 1 [name]** on simulation and evaluation (PyTorch, Isaac Sim/Lab, RL/IL, VLA models, domain randomization) and **Founder 2 [name]** on the platform (FastAPI/Typer, static dashboard, GitHub Actions, Docker Compose, cloud infra; Kubernetes/Next.js are target skills). The role split mirrors the target architecture; do not use a historical test count as evidence without re-checking [[Build Status]].
 
 **Expanded**
-> - **Feasibility 8/10 for two people:** pure software, no hardware/manufacturing/supply chain; the stack is a shopping list of open-source NVIDIA components, not an R&D program.
-> - **Speed claims calibrated to this team:** 8-week MVP, weekly demo, **10 discovery calls/week** in Phase 1 ([[Go-to-Market]]).
-> - **We ship in public:** open-source CLI + GitHub Actions plugin and published benchmark results on GR00T/pi0/OpenVLA are Phase-2 marketing *and* YC evidence.
-> - **Gaps we name:** no dedicated frontend hire (Founder 2 scaffolds the dashboard), no enterprise sales experience (developer-led motion first), no academic robotics credibility (advisory seat targeted at a CMU/MIT/Stanford professor and an ex-NVIDIA Isaac engineer post-funding) ([[Founding Team]], [[Hiring Plan]]).
-> - **We are not precious about the answer:** ~50% of accepted companies applied more than once, and ~1–2% get in. If we're rejected we reapply to S27 with more LOIs, Inception still active, pre-seed timing unchanged.
+> - **Feasibility 8/10** is an internal planning score, not investor evidence.
+> - **Speed claims** (8-week MVP, weekly demos, discovery calls) are targets until dated artifacts exist.
+> - **Open-source CLI/Actions and published benchmarks** are Phase-2 plans; the current package is proprietary and the Actions are local.
+> - **Founder names, biographies, academic credibility and advisory status must be verified before submission** ([[Founding Team]], [[Hiring Plan]]).
+> - If rejected, reapply with evidence; do not state that Inception remains active without confirmation.
 
 ## Q7 · Technical moat & traction plan (long-form / interview)
 
-**Moat stack** ([[Moat]]) — first-mover (**12–18 months**, decaying) buys time to build integration depth and NVIDIA lock-in, which buy run volume for the data flywheel, which produces the benchmark corpus that makes the scorecard the format insurers trust.
+**Target moat stack** ([[Moat]]): the 12–18 month first-mover window, NVIDIA ecosystem, data flywheel, compliance standard and integrations are hypotheses. The current repository proves the scoring/gate workflow only; Isaac depth, published integrations, public benchmarks and insurer adoption remain targets.
 
 | Moat | Our mechanism | Durability |
 |---|---|---|
 | First-mover | First productized sim-based CI/CD for robots | 12–18 months |
-| NVIDIA ecosystem | Native Isaac Sim/Lab, PhysX 5, Omniverse, Cosmos, DGX Cloud | High |
-| Data flywheel | Every run labels failures → better taxonomy → better scenarios | Compounding |
-| Compliance standard | ISO 10218/13482-aligned scorecard schema from day one | **Very High** |
-| Integration depth | GitHub Actions, ROS 2 HIL, Omniverse connector, model registry | Medium-High |
-| Network effects | More teams → more failure data → better detection | Compounding |
+| NVIDIA ecosystem | Planned real Isaac/Lab + PhysX workload; current mock only | Unverified |
+| Data flywheel | Structured failure taxonomy exists; multi-customer compounding is unproven | Hypothesis |
+| Compliance standard | ISO-aligned schema/evidence target; no insurer adoption verified | Hypothesis |
+| Integration depth | Local GitHub Actions ship; hosted action, ROS 2 HIL, Omniverse/registry are planned | Mixed |
+| Network effects | No verified multi-team data network | Hypothesis |
 
 **Traction plan to submission (week of Oct 26)** — the four evidence pieces a W27 reviewer weighs ([[YC Countdown]]):
 
 | Evidence | Target | Owner | Status |
 |---|---|---|---|
-| Discovery conversations | **25** named Tier-1 labs | Both | **[X]/25** |
-| LOIs / paid pilots | **2–3** written, with success criteria | Founder 1 | **[X]/3** |
-| Demo video | 1 min, both founders on camera, end-to-end run | Both | **[X]** |
-| Repeatable metric | 5,000 episodes < 30 min on 4× A100 | Founder 2 | **[X]** |
-| Public artifact | benchmark results or open-source CLI | Both | **[X]** |
-| Entity + website | Delaware C-Corp, validsim.com live | Founder 2 | **[X]** |
-| Inception | application submitted (signals technical validation) | Founder 2 | **[X]** |
+| Discovery conversations | **25** named Tier-1 labs | Both | **[verify]/25** |
+| LOIs / paid pilots | **2–3** written, with success criteria | Founder 1 | **[verify]/3** |
+| Demo video | 1 min, both founders on camera, end-to-end run | Both | **[verify]** |
+| Repeatable metric | 5,000 episodes < 30 min on 4× A100 | Founder 2 | **[verify]** |
+| Public artifact | benchmark results or open-source CLI | Both | **[verify]** |
+| Entity + website | Delaware C-Corp, validsim.com live | Founder 2 | **[verify]** |
+| Inception | application submitted (signals technical validation) | Founder 2 | **[verify]** |
 
-**The two hard questions we will be asked, with answers ready:** *"NVIDIA will build this"* → they ship the substrate, not the workflow; our Inception relationship and ecosystem positioning are the hedge, and the compliance standard is the part they cannot fast-follow without regulator patience ([[Risk Register]] #2). *"Labs will build in-house"* → priced against the **$200K–$500K** (2–4 engineers × 6 months) they spend today, and cross-lab benchmarks are structurally impossible for any single lab's internal tool ([[Competitive Landscape]]).
+**The two hard questions:** NVIDIA may build parts of the workflow, so differentiation must come from verified integration and evidence. Labs may build internally; the **$200K–$500K** build estimate and cross-lab advantage are planning assumptions, not observed customer validation ([[Risk Register]], [[Competitive Landscape]]).
 
 Links: [[YC Application]] · [[YC Countdown]] · [[NVIDIA Inception Application]] · [[Pitch Deck Outline]] · [[Investor Narrative]] · [[Home]]

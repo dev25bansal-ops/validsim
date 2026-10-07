@@ -1,0 +1,5 @@
+.                                                                        [100%]
+========================== benchmark regression gate ==========================
+REGRESSION run_and_score_episodes1000: 900.0ms vs baseline 186.0ms (+714.0ms, +384%)
+REGRESSION bootstrap_ci_n1000_resamples500: 400.0ms vs baseline 169.5ms (+230.5ms, +136%)
+all benchmarks within tolerance

@@ -98,8 +98,11 @@ class TestLiveMode:
             def __exit__(self, *exc: object) -> bool:
                 return False
 
-            def starttls(self) -> None:
+            def starttls(self, context: object = None) -> None:
+                # Mirrors smtplib.SMTP.starttls(context=None): ValidSim now passes an
+                # explicit SSL context so certificates are actually verified.
                 self.tls_started = True
+                self.tls_context = context
 
             def login(self, user: str, password: str) -> None:
                 self.login_args = (user, password)
@@ -131,6 +134,14 @@ class TestLiveMode:
         assert smtp.host == "mail.example.com"
         assert smtp.port == 587  # default VALIDSIM_SMTP_PORT
         assert smtp.tls_started is True
+        # Regression guard: starttls() must be handed an explicit SSL context.
+        # smtplib.starttls() with no argument performs NO certificate or hostname
+        # verification, which made the SMTP channel MITM-able.
+        import ssl as _ssl
+
+        assert isinstance(smtp.tls_context, _ssl.SSLContext)
+        assert smtp.tls_context.verify_mode == _ssl.CERT_REQUIRED
+        assert smtp.tls_context.check_hostname is True
         assert smtp.login_args == ("alice", "s3cr3t")
 
         from_addr, to_addrs, raw_msg = smtp.sent[0]

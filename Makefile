@@ -18,10 +18,10 @@ install: ## Install runtime deps (requirements.txt) + dev/test tooling (requirem
 	$(PIP) install -r requirements.txt
 	$(PIP) install -r requirements-dev.txt
 
-test: ## Run the full pytest suite (same command as CI)
+test: ## Run the full pytest suite (NO coverage gate -- see `cov` for the CI-equivalent run)
 	$(PYTHON) -m pytest tests/ -v
 
-cov: ## Run pytest with coverage and enforce the 90% floor (same as CI)
+cov: ## Run pytest with coverage and enforce the 90% floor (the CI-equivalent run)
 	$(PYTHON) -m pytest tests/ --cov=validsim --cov-report=term-missing --cov-fail-under=90
 
 lint: ## Lint the package and tests with ruff (same command as CI)
@@ -45,8 +45,22 @@ worker: ## Run the job worker against the configured queue (Ctrl-C to stop)
 jobs: ## List queued validation jobs from the configured job queue
 	$(PYTHON) -m validsim.cli jobs
 
+# --- smoke ------------------------------------------------------------------
+# `gate` decides from the DURABLE store and deliberately refuses the default
+# in-memory backend (validsim/cli.py::_require_durable_store), so this target
+# must select one. Without it the chain died at step 2 with exit code 2
+# ("gate needs a durable store") on any clean machine — a documented target
+# that could not pass. SQLite is the default here: it needs no server, so the
+# smoke path works on a fresh clone, and the DB is a throwaway artifact.
+#
+# Override the whole store configuration without editing this file, e.g.
+#   make smoke VALIDSIM_STORE=postgres VALIDSIM_PG_URL=postgresql://...
+SMOKE_STORE        ?= sqlite
+SMOKE_SQLITE_PATH  ?= .validsim/smoke.db
+SMOKE_CACHE_FILE   ?= .validsim/smoke-scorecards.json
+
 smoke: ## End-to-end CLI smoke: small validation -> gate -> report (chained)
-	$(PYTHON) -m validsim.cli run --episodes 20 --threshold 50 && $(PYTHON) -m validsim.cli gate --latest && $(PYTHON) -m validsim.cli report --latest
+	VALIDSIM_STORE=$(SMOKE_STORE) VALIDSIM_SQLITE_PATH=$(SMOKE_SQLITE_PATH) VALIDSIM_CACHE_FILE=$(SMOKE_CACHE_FILE) $(PYTHON) -m validsim.cli run --episodes 20 --threshold 50 && VALIDSIM_STORE=$(SMOKE_STORE) VALIDSIM_SQLITE_PATH=$(SMOKE_SQLITE_PATH) VALIDSIM_CACHE_FILE=$(SMOKE_CACHE_FILE) $(PYTHON) -m validsim.cli gate --latest && VALIDSIM_STORE=$(SMOKE_STORE) VALIDSIM_SQLITE_PATH=$(SMOKE_SQLITE_PATH) VALIDSIM_CACHE_FILE=$(SMOKE_CACHE_FILE) $(PYTHON) -m validsim.cli report --latest
 
 docker-build: ## Build the production image locally
 	docker build -t $(IMAGE) .

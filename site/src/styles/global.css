@@ -1,0 +1,145 @@
+@import './tokens.css';
+
+/* ==========================================================================
+   Global styles: reset, base, layout, and the components every page shares.
+   Component-specific rules live in the .astro files via <style> blocks, which
+   Astro scopes automatically — so a change to .faq can never leak into .tier.
+   ========================================================================== */
+
+@layer reset, tokens, base, layout, components, utilities;
+
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; }
+  * { margin: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { min-height: 100dvh; -webkit-font-smoothing: antialiased; }
+  img, picture, svg, video { display: block; max-width: 100%; }
+  h1, h2, h3, h4 { line-height: 1.1; font-weight: 500; text-wrap: balance; }
+  p { text-wrap: pretty; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--unmeasured); outline-offset: 3px; }
+}
+
+@layer base {
+  body {
+    background: var(--chassis);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: var(--t-base);
+    /* Light text on a dark ground needs more leading than usual — the
+       perceived weight is lighter, so it needs more air. */
+    line-height: 1.72;
+    font-kerning: normal;
+  }
+
+  /* Engineering-drawing grid: the only background treatment. Fades downward so
+     it never competes with content. There is deliberately no ambient glow. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, var(--rule-faint) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--rule-faint) 1px, transparent 1px);
+    background-size: 4rem 4rem;
+    mask-image: linear-gradient(to bottom, black 0%, transparent 55%);
+  }
+
+  .wrap { width: 100%; max-width: var(--shell); margin-inline: auto; padding-inline: var(--gutter); }
+
+  .skip {
+    position: fixed; inset-block-start: 0; inset-inline-start: 0; z-index: 100;
+    padding: 0.75rem 1.25rem; background: var(--unmeasured); color: var(--chassis);
+    font-weight: 700; text-decoration: none; translate: 0 -150%;
+    transition: translate 0.15s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  .skip:focus-visible { translate: 0 0; }
+}
+
+@layer layout {
+  .band { padding-block: clamp(4.5rem, 10vw, 8rem); }
+  .band + .band { border-block-start: 1px solid var(--rule); }
+
+  .band-head { max-width: var(--measure); margin-block-end: clamp(2.5rem, 5vw, 4rem); }
+  .band-head p { margin-block-start: 1rem; color: var(--ink-mid); font-size: var(--t-lg); max-width: 58ch; }
+
+  /* Monospace is used for FIGURE NUMBERS, which is data — not as decoration.
+     That distinction is the whole rule, and it is enforced by a test. */
+  .fig-label {
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--unmeasured);
+    margin-block-end: 1rem;
+  }
+}
+
+@layer components {
+  .btn {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.65rem 1.15rem;
+    font-size: var(--t-sm); font-weight: 700; text-decoration: none;
+    border: 1px solid transparent; border-radius: 2px;
+    transition: background-color 0.18s cubic-bezier(0.25, 1, 0.5, 1),
+                color 0.18s cubic-bezier(0.25, 1, 0.5, 1),
+                border-color 0.18s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  .btn-primary { background: var(--unmeasured); color: var(--chassis); }
+  .btn-primary:hover { background: color-mix(in oklch, var(--unmeasured) 86%, white); }
+  .btn-quiet { border-color: var(--rule); color: var(--ink-mid); }
+  .btn-quiet:hover {
+    border-color: var(--ink-dim); color: var(--ink);
+    background: color-mix(in oklch, var(--ink) 4%, transparent);
+  }
+
+  .v-ok { color: var(--approve); }
+  .v-block { color: var(--block); }
+  .v-unmeasured { color: var(--unmeasured); }
+  .v-key { color: var(--ink); }
+  .v-dim { color: var(--ink-dim); }
+
+  .close { border-block-start: 2px solid var(--unmeasured); padding-block-start: clamp(2.5rem, 5vw, 4rem); }
+  .close h2 { font-size: var(--t-xl); max-width: 24ch; }
+  .close p { margin-block-start: 1.5rem; font-size: var(--t-lg); color: var(--ink-mid); max-width: 54ch; }
+  .close .actions { margin-block-start: 2.5rem; }
+}
+
+@layer utilities {
+  /* Scroll-driven reveal: the reason this page needs no JavaScript for motion.
+     Guarded, because an unsupported browser would otherwise apply the `from`
+     keyframe forever and leave the section invisible.
+
+     The "never leave content invisible" rule then applies twice over: a print
+     context never advances a scroll timeline, and forced-colors ignores
+     opacity. Both force the reveal to its end state. */
+  @supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+      .reveal {
+        animation: rise linear both;
+        animation-timeline: view();
+        animation-range: entry 0% entry 55%;
+      }
+      @keyframes rise {
+        from { opacity: 0; translate: 0 1.5rem; }
+        to   { opacity: 1; translate: 0 0; }
+      }
+    }
+  }
+
+  @media print {
+    .reveal { animation: none !important; opacity: 1 !important; translate: none !important; }
+    body::before { display: none; }
+    details { break-inside: avoid; }
+  }
+
+  @media (forced-colors: active) {
+    .reveal { animation: none !important; opacity: 1 !important; }
+  }
+
+  /* Applied by the GSAP island once it has taken over, so the two systems
+     never animate the same property at the same time. */
+  .scrubbed { opacity: 1 !important; translate: none !important; }
+}

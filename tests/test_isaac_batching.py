@@ -145,7 +145,7 @@ class TestBatchHappyPath:
                              randomization_level="full")
         body = _body(seen[0])
         assert set(body) == {
-            "task_id", "robot", "environment", "seed", "episodes",
+            "task_id", "robot", "environment", "checkpoint_id", "seed", "episodes",
             "randomization_level", "scenarios",
         }
         assert body["seed"] == SEED

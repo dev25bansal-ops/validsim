@@ -11,6 +11,9 @@ area: "08 - Team & Legal"
 
 §18.3 + §2.3/§2.5 context. Compliance is simultaneously our **product** (evidence packages for Tier-4 buyers), our **tailwind** (insurers demanding proof), and our **house** (we hold customers' crown-jewel checkpoints).
 
+> [!important] Status — 2026-09-21
+> The shipped product produces branded PDF/JSON/Markdown/HTML scorecards from structured run data. ISO compliance packages, deployment-decision records, and an immutable/hash-chained audit trail are target features. Current stores are neither append-only nor immutable: `DELETE /api/v1/validations/{run_id}` and `validsim delete` permanently remove evidence. Retention/compliance policy requires a company decision and a build change.
+
 ## 18.3 Compliance considerations
 
 | Area | Action |
@@ -33,13 +36,13 @@ area: "08 - Team & Legal"
 |---|---|---|
 | Scorecard schema ISO-aligned from day one | ISO 10218 (industrial robots) / ISO 13482 (personal care robots, being updated for mobile manipulators) | Design-time, MVP ([[Product Principles]] #5) |
 | Compliance Evidence Package (PDF + structured) | Same | **Post-MVP** — Enterprise tier ([[MVP Non-Goals]]) |
-| Immutable audit trail (timestamped, hash-chained) | Regulator/insurer review | Architecture layer 4 ([[Solution Architecture]]) |
-| Deployment decision records (approve/block + reasoning) | Liability defense | MVP JSON export ([[Module Specs]] M5) |
+| Immutable audit trail (timestamped, hash-chained) | Regulator/insurer review | **Planned**; current validation history is deletable and not hash-chained ([[Solution Architecture]]) |
+| Deployment decision records (approve/block + reasoning) | Liability defense | Stored scorecard verdict ships; reasoned JSON record/export remains planned ([[Module Specs]] M5) |
 
 ### B. We *are audited* (vendor side)
 | Control | Target date | Why now |
 |---|---|---|
-| Encryption at rest + in transit for checkpoints/episodes | MVP (S3 + TLS defaults) | Checkpoints are labs' most valuable IP ([[IP Strategy]]) |
+| Encryption at rest + in transit for checkpoints/episodes | **Target** cloud controls; not implemented in this repository | Checkpoints are labs' most valuable IP ([[IP Strategy]]) |
 | SOC 2 Type II | **Year 2** | Enterprise procurement gate; Tier-3/4 deals |
 | GDPR DPA template | First EU customer | EU Machinery Regulation buyers exist in Tier 4 |
 | Insurer data-sharing agreements | Phase 3 pilots | Munich Re/Swiss Re actuarial studies ([[Go-to-Market]]) |

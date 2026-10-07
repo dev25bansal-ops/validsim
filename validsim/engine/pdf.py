@@ -2,14 +2,15 @@
 
 Renders a frozen :class:`~validsim.engine.scorecard.Scorecard` (as its
 ``to_dict`` mapping) into a one-page, print-ready PDF via reportlab's
-``platypus`` layout engine. The visual language mirrors the HTML/Markdown
-renderers in :mod:`validsim.engine.export`: a branded header, an APPROVE /
-BLOCK verdict banner, a metrics table, a failure-taxonomy table and a
-CONFIDENTIAL footer.
+``platypus`` layout engine. The visual language follows the HTML/Markdown
+renderers in :mod:`validsim.engine.export` structurally: a branded header, an
+APPROVE / BLOCK verdict banner, a metrics table, a failure-taxonomy table and
+a CONFIDENTIAL footer. The PDF colour and font profile is exporter-specific;
+it is documented in ``design-system/validsim/MASTER.md``.
 
-Accessibility note (design-system/validsim/MASTER.md): the verdict is encoded
-in *both* colour (``#1E40AF`` approve / ``#B91C1C`` block) and explicit text,
-never colour alone.
+Accessibility contract: the verdict is encoded in *both* colour
+(``#1E40AF`` approve / ``#B91C1C`` block) and explicit text, never colour
+alone.
 
 reportlab is imported **lazily inside the render functions** so the rest of the
 platform never hard-depends on PDF rendering: importing this module is always
@@ -21,13 +22,14 @@ from __future__ import annotations
 
 import io
 from typing import Any, Callable
+from xml.sax.saxutils import escape as _xml_escape
 
 from validsim import __version__
 from validsim.engine._coerce import as_float
 
 __all__ = ["render_scorecard_pdf", "scorecard_pdf_bytes"]
 
-#: Verdict banner backgrounds (from the ValidSim design system).
+#: Export-specific PDF palette documented in design-system/validsim/MASTER.md.
 _APPROVE_BG = "#1E40AF"  # primary blue
 _BLOCK_BG = "#B91C1C"  # danger red
 _TEXT_MUTED = "#667085"
@@ -51,6 +53,25 @@ def _ci_text(ci: Any) -> str:
     return f"[{low:.4f}, {high:.4f}]"
 
 
+def _robustness_text(scorecard: dict[str, Any]) -> str:
+    """Render the robustness score, marking it when it is a structural constant.
+
+    A robustness score is a dispersion across randomization groups, so with
+    fewer than two groups it is the maximum *by construction*, not by
+    measurement -- and a normal run has exactly one group, because
+    ``run_validation`` applies a single randomization level to every episode.
+    A bare "100.00" in the PDF would read as proof of a robust model.
+
+    The flag is read with ``.get`` defaulting to ``True``: a scorecard
+    serialized before the flag existed carries no provenance, and defaulting to
+    "unmeasured" would retroactively relabel every historical PDF.
+    """
+    rendered = _num(scorecard.get("robustness_score"))
+    if scorecard.get("robustness_measured", True) is False:
+        return f"{rendered} (not measured)"
+    return rendered
+
+
 def _build_story(scorecard: dict[str, Any]) -> tuple[list[Any], float]:
     """Construct the platypus flowables and the content width (in points).
 
@@ -68,11 +89,17 @@ def _build_story(scorecard: dict[str, Any]) -> tuple[list[Any], float]:
     except ImportError as exc:  # pragma: no cover - exercised only w/o reportlab
         raise RuntimeError("pip install reportlab") from exc
 
-    run_id = str(scorecard.get("run_id", "\u2014"))
-    checkpoint_id = str(scorecard.get("checkpoint_id", "\u2014"))
-    task_id = str(scorecard.get("task_id", "\u2014"))
-    created_at = str(scorecard.get("created_at", "\u2014"))
-    decision = str(scorecard.get("deploy_decision", "BLOCK")).upper()
+    # ReportLab Paragraphs parse a lightweight XML-ish markup, so every
+    # caller-supplied string (run/checkpoint/task ids, timestamps, failure-mode
+    # names) must be XML-escaped before interpolation. Without this a crafted
+    # id containing markup renders as formatting -- or raises a parse error.
+    run_id = _xml_escape(str(scorecard.get("run_id", "—")))
+    checkpoint_id = _xml_escape(str(scorecard.get("checkpoint_id", "—")))
+    task_id = _xml_escape(str(scorecard.get("task_id", "—")))
+    created_at = _xml_escape(str(scorecard.get("created_at", "—")))
+    # The verdict is interpolated into a Paragraph (banner), so it is escaped too;
+    # a crafted decision string must not become ReportLab markup.
+    decision = _xml_escape(str(scorecard.get("deploy_decision", "BLOCK")).upper())
     composite = as_float(scorecard.get("composite_score"), 0.0)
     threshold = as_float(scorecard.get("threshold"), 85.0)
     success_rate = as_float(scorecard.get("success_rate"), 0.0)
@@ -145,7 +172,7 @@ def _build_story(scorecard: dict[str, Any]) -> tuple[list[Any], float]:
         ["Composite / threshold", f"{composite:.2f} / {threshold:.2f}"],
         ["Success rate", f"{pct:.1f}%  \u00b7  95% CI {_ci_text(ci)}"],
         ["Safety score", _num(scorecard.get("safety_score"))],
-        ["Robustness score", _num(scorecard.get("robustness_score"))],
+        ["Robustness score", _robustness_text(scorecard)],
         ["Regression delta", delta_text],
         ["Episodes", str(episodes)],
         ["Created (UTC)", created_at],
@@ -175,7 +202,10 @@ def _build_story(scorecard: dict[str, Any]) -> tuple[list[Any], float]:
     if taxonomy:
         tax_rows: list[list[Any]] = [["Failure mode", "Count"]]
         tax_rows += [
-            [Paragraph(str(mode), cell_style), Paragraph(str(count), cell_style)]
+            [
+                Paragraph(_xml_escape(str(mode)), cell_style),
+                Paragraph(_xml_escape(str(count)), cell_style),
+            ]
             for mode, count in taxonomy.items()
         ]
     else:
@@ -221,11 +251,12 @@ def _make_footer() -> Callable[[Any, Any], None]:
 
 
 def scorecard_pdf_bytes(scorecard: dict[str, Any]) -> bytes:
-    """Render ``scorecard`` (a :class:`Scorecard` ``to_dict`` mapping) to PDF bytes.
+    """Render a scorecard mapping to PDF bytes.
 
     Args:
-        scorecard: The scorecard mapping to render. Missing keys fall back to
-            safe defaults so partial/malformed input still produces a document.
+        scorecard: A :class:`~validsim.engine.scorecard.Scorecard` ``to_dict``
+            mapping. Missing keys fall back to safe defaults so partial input
+            still produces a document.
 
     Returns:
         The complete PDF document as a ``bytes`` blob (starts with ``%PDF``).
@@ -258,10 +289,11 @@ def scorecard_pdf_bytes(scorecard: dict[str, Any]) -> bytes:
 
 
 def render_scorecard_pdf(scorecard: dict[str, Any], path: str) -> str:
-    """Render ``scorecard`` to a branded one-page PDF written to ``path``.
+    """Render a scorecard to a branded one-page PDF file.
 
     Args:
-        scorecard: The scorecard mapping (see :class:`Scorecard.to_dict`).
+        scorecard: A :class:`~validsim.engine.scorecard.Scorecard` ``to_dict``
+            mapping.
         path: Destination filesystem path for the ``.pdf`` file.
 
     Returns:

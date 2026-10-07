@@ -14,8 +14,6 @@ and that the bound values are never interpolated into the statement.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -116,21 +114,6 @@ class TestMemoryHistoryFilters:
             since="2026-01-01T00:00:00+00:00", until="2026-01-03T00:00:00+00:00"
         )
         assert _ids(exact) == [rid for rid, _ in _STAMPS]
-
-
-@pytest.fixture()
-def make_store(tmp_path: Path) -> Iterator[Callable[[str], SqliteValidationStore]]:
-    """Factory opening named SQLite stores under ``tmp_path``; closes on exit."""
-    created: list[SqliteValidationStore] = []
-
-    def _make(name: str = "filters.db") -> SqliteValidationStore:
-        store = SqliteValidationStore(tmp_path / name)
-        created.append(store)
-        return store
-
-    yield _make
-    for store in created:
-        store.close()
 
 
 class TestSqliteHistoryFilters:
@@ -254,6 +237,233 @@ class TestPostgresHistorySql:
         store = PostgresValidationStore(_conn_factory=lambda: conn)
         runs = store.history(since="2026-01-02T00:00:00+00:00")
         assert [r.run_id for r in runs] == ["vrun-00000002"]
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility: rows written before newer fields existed must load.
+# ---------------------------------------------------------------------------
+#
+# The scorecard is a JSON blob, so adding a field is a *read*-side concern: the
+# blob written by an older release simply has no key for the new field. The only
+# correct upgrade path is a ``.get`` default at reconstruction time. A
+# read-path filter (skip rows missing the key, or require the column) would
+# protect the future by breaking the past — the exact failure this file pins.
+#
+# Both backends' `_scorecard_from_dict` are exercised, plus a real end-to-end
+# SQLite read of a pre-adversarial row, so the guarantee is tested on the
+# reconstruction *and* on the storage path it feeds.
+
+#: A row exactly as an older release serialised it: no adversarial keys at all.
+_LEGACY_SCORECARD: dict[str, object] = {
+    "run_id": "vrun-legacy01",
+    "checkpoint_id": "ckpt-1",
+    "task_id": "pick-place",
+    "composite_score": 90.0,
+    "success_rate": 0.9,
+    "safety_score": 95.0,
+    "robustness_score": 100.0,
+    "regression_delta": None,
+    "confidence_interval": [0.8, 0.95],
+    "deploy_decision": "APPROVE",
+    "threshold": 85.0,
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "episode_count": 100,
+    "failure_taxonomy": {},
+}
+
+#: Fields added after that snapshot, with the defaults a legacy row must get.
+_ADVERSARIAL_DEFAULTS: dict[str, object] = {
+    "adversarial_episode_count": 0,
+    "adversarial_success_rate": None,
+    "block_reasons": (),
+}
+
+
+def _sqlite_scorecard_from_dict(data: dict[str, object]) -> Scorecard:
+    from validsim.store.sqlite import _scorecard_from_dict as impl
+
+    return impl(data)  # type: ignore[arg-type]
+
+
+def _pg_scorecard_from_dict(data: dict[str, object]) -> Scorecard:
+    from validsim.store.postgres import _scorecard_from_dict as impl
+
+    return impl(data)  # type: ignore[arg-type]
+
+
+#: Both backends' reconstructors, so the guarantee is asserted on each.
+_RECONSTRUCTORS = [_sqlite_scorecard_from_dict, _pg_scorecard_from_dict]
+
+
+@pytest.fixture
+def legacy_detail_row() -> tuple[object, ...]:
+    """The single-column row shape an older PostgreSQL release produced."""
+    return (dict(_LEGACY_SCORECARD),)
+
+
+class TestLegacyScorecardReconstruction:
+    """Both backends must read a blob that predates the newer fields."""
+
+    @pytest.mark.parametrize("reconstruct", _RECONSTRUCTORS, ids=["sqlite", "postgres"])
+    def test_missing_newer_fields_fall_back_to_dataclass_defaults(
+        self, reconstruct: Callable[[dict[str, object]], Scorecard]
+    ) -> None:
+        card = reconstruct(dict(_LEGACY_SCORECARD))
+        for name, expected in _ADVERSARIAL_DEFAULTS.items():
+            assert getattr(card, name) == expected, name
+        # And the fields the legacy row *does* carry are still read exactly.
+        assert card.run_id == "vrun-legacy01"
+        assert card.composite_score == 90.0
+        assert card.confidence_interval == (0.8, 0.95)
+        assert isinstance(card.confidence_interval, tuple)
+
+    @pytest.mark.parametrize("reconstruct", _RECONSTRUCTORS, ids=["sqlite", "postgres"])
+    def test_null_newer_fields_are_not_confused_with_missing_ones(
+        self, reconstruct: Callable[[dict[str, object]], Scorecard]
+    ) -> None:
+        """A *legitimate* stored null survives as itself, not as a default.
+
+        This is the case that separates a correct legacy guard from a sloppy
+        one. "Absent key -> dataclass default" is right for a row written before
+        the field existed, but a guard written as
+        ``data.get(k, default) or default`` also fires on a *present* null. The
+        old code was written that way, so a stored ``null`` was silently
+        rewritten into a plausible-looking value -- claiming a measurement the
+        stored data does not contain. ``adversarial_success_rate``
+        (``float | None``) is the honest instance: ``null`` is a real value for
+        it, and it is preserved. The non-nullable fields are covered by
+        ``test_falsy_stored_values_are_read_as_themselves`` and
+        ``test_corrupt_null_on_a_non_nullable_field_is_not_silently_coerced``.
+        """
+        legacy = {
+            **_LEGACY_SCORECARD,
+            "adversarial_episode_count": 0,
+            "adversarial_success_rate": None,
+            "block_reasons": (),
+        }
+        card = reconstruct(legacy)
+        # Nullable field: null is a real value and survives.
+        assert card.adversarial_success_rate is None
+        # Non-nullable fields: a falsy stored value reads as itself.
+        assert card.adversarial_episode_count == 0
+        assert card.block_reasons == ()
+
+    @pytest.mark.parametrize("reconstruct", _RECONSTRUCTORS, ids=["sqlite", "postgres"])
+    def test_falsy_stored_values_are_read_as_themselves(
+        self, reconstruct: Callable[[dict[str, object]], Scorecard]
+    ) -> None:
+        """``0``, ``0.0``, ``()`` and ``{}`` must not read as "absent".
+
+        This is the class of bug that separates a correct legacy guard from a
+        sloppy one, and the variant that can actually occur in production: an
+        empty ``failure_taxonomy`` or a zero ``randomization_group_count`` is a
+        perfectly normal value for a successful run. A guard written as
+        ``data.get(k, default) or default`` fires on a *present* falsy value as
+        well as on an absent key -- and the old code was written exactly that
+        way (``int(data.get("adversarial_episode_count", 0) or 0)``,
+        ``tuple(data.get("block_reasons", ()) or ())``), so it coerced stored
+        nulls and zero counts into whichever plausible value it preferred
+        instead of reporting what was on disk.
+        """
+        falsy = {
+            **_LEGACY_SCORECARD,
+            "failure_taxonomy": {},
+            "adversarial_episode_count": 0,
+            "adversarial_success_rate": 0.0,
+            "block_reasons": (),
+            "regression_delta": 0.0,
+            "randomization_group_count": 0,
+        }
+        card = reconstruct(falsy)
+        assert card.failure_taxonomy == {}
+        assert card.adversarial_episode_count == 0
+        assert card.adversarial_success_rate == 0.0
+        assert card.block_reasons == ()
+        assert card.regression_delta == 0.0
+        assert card.randomization_group_count == 0
+
+    @pytest.mark.parametrize("reconstruct", _RECONSTRUCTORS, ids=["sqlite", "postgres"])
+    def test_corrupt_null_on_a_non_nullable_field_is_not_silently_coerced(
+        self, reconstruct: Callable[[dict[str, object]], Scorecard]
+    ) -> None:
+        """A ``null`` where the dataclass declares ``tuple`` is passed through.
+
+        No shipped writer produces this -- ``to_dict`` always emits a real value
+        for a non-nullable field -- so this is a robustness boundary rather than
+        a compatibility case. What it pins is the *direction* of the failure. The
+        old code coerced it (``tuple(data.get("block_reasons", ()) or ())``
+        turned a stored ``null`` into ``()``), i.e. it invented a measurement the
+        stored data did not contain and made corrupt data indistinguishable from
+        a legitimately empty field. Reconstruction now maps stored values
+        faithfully, so the ``None`` survives and the record is visibly corrupt
+        to whatever consumes it. It is deliberately not coerced *and* not
+        rejected: a dataclass performs no type checking, so silently repairing
+        it here would be a second, different lie.
+        """
+        corrupt = {**_LEGACY_SCORECARD, "block_reasons": None}
+        card = reconstruct(corrupt)
+        assert card.block_reasons is None  # faithful, not smoothed into ()
+        assert card.deploy_decision == "APPROVE"  # the rest of the row is intact
+
+
+    def test_legacy_row_still_flows_through_a_real_sqlite_read(
+        self, tmp_path: Any
+    ) -> None:
+        """End-to-end: a pre-adversarial row on disk loads through ``get``."""
+        import json
+        import sqlite3
+
+        path = tmp_path / "legacy-blob.db"
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE validations ("
+            " run_id TEXT PRIMARY KEY, checkpoint_id TEXT NOT NULL,"
+            " task_id TEXT NOT NULL, composite_score REAL NOT NULL,"
+            " deploy_decision TEXT NOT NULL, created_at TEXT NOT NULL,"
+            " scorecard_json TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO validations VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "vrun-legacy01",
+                "ckpt-1",
+                "pick-place",
+                90.0,
+                "APPROVE",
+                "2026-01-01T00:00:00+00:00",
+                json.dumps(_LEGACY_SCORECARD),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        store = SqliteValidationStore(path)
+        try:
+            got = store.get("vrun-legacy01")
+            assert got is not None
+            assert got.scorecard.adversarial_episode_count == 0
+            assert got.scorecard.block_reasons == ()
+            assert got.scorecard.deploy_decision == "APPROVE"
+            # The legacy row is still filterable/ordered like any other.
+            assert [r.run_id for r in store.history(since="2025-01-01")] == [
+                "vrun-legacy01"
+            ]
+        finally:
+            store.close()
+
+    def test_postgres_legacy_row_shape_reconstructs(
+        self, legacy_detail_row: tuple[object, ...]
+    ) -> None:
+        """A pre-detail PostgreSQL row (scorecard only) still loads."""
+        conn = _FakeConnection(select_rows=[legacy_detail_row])
+        store = PostgresValidationStore(_conn_factory=lambda: conn)
+        got = store.get("vrun-legacy01")
+        assert got is not None
+        assert got.scorecard.deploy_decision == "APPROVE"
+        assert got.episodes == []
+        assert got.regression is None
+        assert got.baseline_run_id is None
+        assert got.evaluation.total_episodes == 100  # documented approximation
 
 
 if __name__ == "__main__":  # pragma: no cover

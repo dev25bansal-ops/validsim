@@ -1,0 +1,1752 @@
+# ValidSim (D:/SIM-TO-REAL) — Full Read Report
+
+Exhaustive audit: **271/271 files read** (29 groups, 31 agents, 1 retry round, adversarial spot-check on a 10-file sample).
+Excluded (not project files): `.venv/` (4,783 third-party files), `.git/` internals, `__pycache__`, `.coverage`, tool caches.
+
+- Groups: 29 — files reported: 271
+
+## Repository layout
+
+| Group | Files | What it is |
+|---|---|---|
+| core-engine | 13 | Simulation-validation engine (evaluate, safety, scorecard, regression, anomaly, trends, PDF/HTML export) |
+| api | 4 | FastAPI app: /api/v1 routes, auth, rate limiting, metrics, dashboard, model registry |
+| cli-config | 5 | Typer CLI, settings/config validation, structured logging |
+| jobs | 5 | Async job queue: models, memory/Redis queues, router, worker |
+| notify | 3 | Webhook + email dispatch, HMAC signing, severity routing |
+| scenarios | 3 | Adversarial scenario generator + LLM-based generator |
+| sim | 4 | Sim backends: mock runner, Isaac worker adapter, shadow-mode harness |
+| store | 4 | Validation store: memory, SQLite, Postgres backends |
+| web | 3 | Single-page dashboard (app.js / index.html / styles.css) |
+| tests-api-cli | 24 | API + CLI test suites (24 files) |
+| tests-engine | 22 | Engine + config test suites (22 files) |
+| tests-jobs-notify | 15 | Jobs + notify test suites (15 files) |
+| tests-sim-scenarios | 11 | Sim + scenarios test suites (11 files) |
+| tests-store | 8 | Store test suites (8 files) |
+| vault-engineering | 11 | Obsidian vault 04 - Engineering (11 notes) |
+| vault-product | 7 | Vault 03 - Product (7 notes) |
+| vault-strategy-market | 12 | Vault 00-02 Dashboard/Strategy/Market (12 notes) |
+| vault-exec-biz | 12 | Vault 05-06 Execution/Business (12 notes) |
+| vault-fundraising | 8 | Vault 07 Fundraising (8 notes) |
+| vault-team-risk-data-tpl | 12 | Vault 08-10, 98-99 Team/Legal/Risks/Data/Templates (12 notes) |
+| root-docs | 7 | README, CHANGELOG, CONTRIBUTING, SECURITY, design-system, infra, codebuddy memory |
+| docs-a | 9 | docs/: ADRs 0001-0006, ISSUE_CATALOG, isaac-worker, scenario-taxonomy |
+| docs-b | 5 | docs/: api-reference, async-jobs, github-actions, runbook, testing |
+| ci-infra | 19 | GitHub workflows, composite actions, Dockerfile/compose, Makefile, pyproject, requirements, examples, scripts |
+| artifacts-xml | 15 | 15 JUnit XML test artifacts (untracked) |
+| artifacts-txt | 22 | 22 pytest/log/CSV/JSON artifacts (untracked) |
+| docx-binary | 1 | project.docx — the founding spec document |
+| obsidian-configs | 4 | vault/.obsidian configs (4 files) |
+| scratch | 3 | 3 untracked helper scripts (_manifest_build, _probe_fuzz, _tmp_junit_wrap) |
+
+## Per-group digests, findings and file-by-file summaries
+
+### core-engine (13/13 read)
+
+validsim/engine is the pure-Python validation core: evaluate episodes (evaluation.py), score safety with weighted penalties capped to [0,100] (safety.py), detect regressions via a two-proportion permutation test plus descriptive duration deltas (regression.py + stats.py), and assemble a composite scorecard (0.4 success% + 0.3 safety + 0.2 robustness + 0.1 regression component, threshold 85) that gates APPROVE/BLOCK (scorecard.py). pipeline.py centralizes the run→score→persist sequence previously duplicated in API/CLI/worker, with injectable sim primitives for monkeypatch tests. Presentation layer: markdown/HTML exporters (export.py) and a lazy-reportlab PDF renderer (pdf.py); _coerce.py centralizes tolerant float/int parsing for loosely-typed scorecard dicts. Analytics: anomaly.py flags failure-mode spikes in the latest run vs a bootstrap-widened z-test baseline; trends.py computes composite trends and per-failure-mode rate directions. benchmark.py compares two scorecard dicts head-to-head, verdict decided by composite only. Code is heavily documented, frozen dataclasses throughout, JSON-serializable to_dict on every type. Main weaknesses: defensive coercion inconsistently applied (anomaly taxonomy uses bare int(v)), PDF flowables embed unescaped run_id in Paragraph markup, and scorecard hard-BLOCKs when task.episodes<=0.
+
+**Cross-file observations:**
+- Inconsistent defensive coercion: anomaly._taxonomy uses bare int(v) and would raise on non-numeric taxonomy counts, while trends._failure_taxonomy uses as_int — despite _coerce.py's docstring claiming the anomaly episode-total reader was migrated to the shared helper.
+- pdf.py embeds scorecard strings (run_id, checkpoint_id, task_id, created_at, taxonomy modes) directly into reportlab Paragraph markup without XML-escaping; export.py's HTML path escapes properly — asymmetric robustness between renderers.
+- scorecard.build_scorecard requires task.episodes > 0 for any APPROVE; a task with episodes=0 yields sufficient_evidence=False and is unconditionally BLOCK regardless of composite score.
+- safety.proximity_violation_rate divides violations by ALL episodes but distances exist only for human-involved episodes, diluting the penalty in mixed runs; intentional-looking but undocumented in the score semantics.
+- anomaly._bootstrap_se derives the standard error from the bootstrap CI width assuming symmetry ((high-low)/2z), which percentile bootstraps do not guarantee for very small baselines (3-4 points).
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/engine/__init__.py` | source ✓ | Package facade re-exporting 13 public engine symbols (Anomaly, BenchmarkResult, EvaluationResult, Regression*, SafetyResult, Scorecard, TrendSummary, and functions) with __all__. |
+| `validsim/engine/_coerce.py` | source ✓ | Shared tolerant numeric coercion (as_float/as_int) returning a caller default instead of raising on None/bad strings; semantics match the most defensive prior copy (PDF's). |
+| `validsim/engine/anomaly.py` | source ✓ | Detects failure-mode spikes in the latest run vs a baseline of all prior runs using a z-test whose sigma combines run dispersion, bootstrap SE of the mean, and binomial noise. |
+| `validsim/engine/benchmark.py` | source ✓ | Head-to-head comparison of two scorecard dicts over four higher-is-better metrics; overall verdict decided by composite alone, with defensive None handling. |
+| `validsim/engine/evaluation.py` | source ✓ | Aggregates EpisodeResult list into a frozen EvaluationResult: overall/per-task success rates, failure taxonomy (most_common order), mean duration; zeros on empty input. |
+| `validsim/engine/export.py` | source ✓ | Pure renderers turning a Scorecard into a Markdown report and a self-contained inline-CSS HTML card (values escaped) for CI summaries and email/PDF distribution. |
+| `validsim/engine/pdf.py` | source ✓ | Branded one-page A4 PDF scorecard via reportlab platypus, imported lazily so the module always imports; missing dependency surfaces as RuntimeError('pip install reportlab'). |
+| `validsim/engine/pipeline.py` | source ✓ | Single run→score→persist sequence shared by sync API, CLI and job worker; domain-level BaselineNotFoundError replaces HTTP concerns. |
+| `validsim/engine/regression.py` | source ✓ | Compares current vs baseline evaluations: success-rate drop via two-proportion permutation test, mean-duration via relative-change thresholds; frozen RegressionReport with severity helpers. |
+| `validsim/engine/safety.py` | source ✓ | 100-minus weighted penalties (collisions 0.5, force-limit rate 0.3, proximity rate 0.2), each rate capped at 1.0, keeping safety_score in [0,100]; empty run scores 100. |
+| `validsim/engine/scorecard.py` | source ✓ | Composite deploy gate: 0.4*success% + 0.3*safety + 0.2*robustness + 0.1*regression_component, clamped 0-100; APPROVE requires sufficient evidence and composite >= threshold (85). |
+| `validsim/engine/stats.py` | source ✓ | Pure-Python bootstrap statistics: percentile bootstrap CI for any statistic and a two-sided permutation test for two 0/1 samples; signatures kept NumPy-swappable. |
+| `validsim/engine/trends.py` | source ✓ | Multi-run trend signals (latest/delta composite, 3-run moving average, 10-run approval rate, improving/volatile on a 5-run window) and per-failure-mode rate trends first-vs-last usable run. |
+
+**Key points:**
+
+- `validsim/engine/_coerce.py`
+    - as_float/as_int return caller default on TypeError/ValueError instead of raising
+    - Centralizes defensive coercion previously duplicated in PDF/benchmark/anomaly/trends
+    - as_int uses int() directly: '3.5' string falls back to default, fractional floats truncate
+- `validsim/engine/anomaly.py`
+    - Rate-space comparison (count/total_episodes); needs >3 history entries and >=3 usable baseline runs
+    - sigma = sqrt(pstdev^2 + bootstrap-SE^2 + binomial var); z>=threshold warning, >=2x threshold critical; fixed seed 42, 500 resamples
+    - _taxonomy() uses bare int(v), which can raise on non-numeric counts unlike other modules
+- `validsim/engine/benchmark.py`
+    - Compares composite/success_rate/safety/robustness; delta rounded to 4dp
+    - Present value beats missing; both-missing tie; verdict from composite metric only
+    - Reads scorecard keys via as_float(default=None) for uniform 'unavailable' handling
+- `validsim/engine/evaluation.py`
+    - per_task_success sorted by task_id; taxonomy counts only failed episodes with a failure_mode
+    - Empty sequence returns all-zero result rather than raising
+    - to_dict copies inner dicts for JSON serialization
+- `validsim/engine/export.py`
+    - Markdown: verdict section, metrics table, failure taxonomy, 95% CI text
+    - HTML card: approve green #1a7f37 / block red #b42318 header; em-dash for None values
+    - Composite/threshold and title interpolated without escape (numeric/short-id fields, low risk)
+- `validsim/engine/pdf.py`
+    - Verdict encoded in colour AND text (blue #1E40AF approve / red #B91C1C block), never colour alone
+    - Reads every field defensively via .get with defaults; metrics + taxonomy tables, CONFIDENTIAL footer with __version__
+    - run_id/checkpoint/task strings interpolated into Paragraph markup unescaped — '&' or '<' would break reportlab XML parsing
+- `validsim/engine/pipeline.py`
+    - Stable seed from (checkpoint_id, task_id), ScenarioGenerator scenarios, run_validation, evaluate+compute_safety, optional compare vs baseline, build_scorecard, store.save
+    - BaselineNotFoundError (message 'baseline run <id> not found') raised after episodes run, before persist; API maps to 404
+    - run_validation/create_backend injectable with module defaults so caller monkeypatches keep intercepting; DEFAULT_THRESHOLD=85.0
+- `validsim/engine/regression.py`
+    - Significant & delta<=-0.05 critical, <=-0.02 warning; 0/1 samples reconstructed from aggregate counts
+    - Duration: relative increase >50% critical, >20% warning; before<=0 gives 0.0 relative
+    - Empty-side runs return non-significant 'info' item instead of raising
+- `validsim/engine/safety.py`
+    - Force violations: episodes with max_contact_force_n > 50N; proximity: min_human_distance_m < 0.5m
+    - collisions_per_episode is a mean that may exceed 1 but is capped in the penalty
+    - Proximity rate divides by all episodes while distances come only from human-involved episodes
+- `validsim/engine/scorecard.py`
+    - Robustness = 100 - 200*pstdev of per-randomization-group success rates; <2 groups yields 100
+    - Regression component 100 minus 25 per significant regression, floored at 0; regression_delta extracted from success_rate item
+    - sufficient_evidence requires total_episodes >= task.episodes > 0 — episodes=0 can never APPROVE; CI via 500-resample bootstrap seed 42
+- `validsim/engine/stats.py`
+    - bootstrap_ci returns (low, high, point) with linear-interpolated percentiles; validates n_resamples>=2, confidence in (0,1)
+    - Permutation test shuffles pooled labels, |perm_delta| >= |delta|-1e-12 counts as extreme; p=(extreme+1)/(n+1) smoothing
+    - significant when p < 1 - confidence
+- `validsim/engine/trends.py`
+    - improving = last-5 scores monotonic non-decreasing; volatile = pstdev(last5) > 5.0
+    - failure_mode_trends skips zero-episode runs; modes with non-zero count anywhere in usable window reported
+    - _composite raises KeyError for missing composite_score (documented contract) but coerces stray values to 0.0
+
+### api (4/4 read)
+
+The api group is a self-contained FastAPI service. main.py's create_app() is the only real entry point: it configures structured logging, then layers process-local middleware — a sliding-window rate limiter keyed strictly on client IP (POST validations/jobs/compare only; disabled by default), CORSMiddleware from VALIDSIM_CORS_ORIGINS (default allow-all), and an outermost raw-ASGI observability middleware that mints/echoes X-Request-ID, logs one line per request and bumps status-class counters. Auth is a single router-level dependency comparing X-API-Key against VALIDSIM_API_KEY with secrets.compare_digest, failing closed in production, with /api/v1/health deliberately public and DELETE additionally gated (unauthenticated when no key is configured — documented as dev-only). Routes return StoredRun.summary()/scorecard.to_dict(); exports come from engine.export/engine.pdf and PDF degrades to 501 without reportlab. Model-registry and dashboard views are computed in Python over a full store.history() scan. dashboard.py serves the no-build SPA from validsim/web reusing app.state.store. metrics.py hand-rolls Prometheus text format with one history() pass per scrape. All four files are well documented and internally consistent; the main risk areas are unauthenticated /metrics disclosure, O(n) full-history scans on several read endpoints, and import-time app construction.
+
+**Cross-file observations:**
+- main.py:854 constructs the app at import (app = create_app()), so importing validsim.api reads env, creates a store and a job queue at import time; tests that change env must call create_app() again.
+- main.py:836-849 exposes /metrics with auth deliberately stripped. Any unauthenticated network caller can read version, run/approval/block totals and the latest composite score — an information-disclosure surface worth gating.
+- dashboard.py:41-56 and main.py:779-807 (models) and main.py:724-731 (regressions) call store.history() unbounded and aggregate in Python; on Postgres/SQLite this is a full table read per request, unlike the paginated /validations endpoint.
+- Auth exemption (main.py:552) and rate-limit path matching (main.py:244-250) rely on exact path strings; a trailing-slash or case variant bypasses the intended gate/scope, so any Starlette redirect or prefix change silently alters which routes are protected.
+- metrics.py declares runs/approvals/blocks as Prometheus counters but recomputes them from current store contents, so DELETE of runs makes them decrease and breaks counter monotonicity for rate()/alerting.
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/api/__init__.py` | source ✓ | 7-line package docstring re-exporting app and create_app from validsim.api.main. Importing the package therefore runs main.py's module-level create_app(). |
+| `validsim/api/dashboard.py` | source ✓ | Serves the static SPA in validsim/web plus two dashboard data endpoints (history, summary) via an APIRouter and a Request-based get_store dependency resolving app.state.store. |
+| `validsim/api/metrics.py` | source ✓ | Prometheus text-exposition /metrics route. Run/approval/block/composite/build_info are derived from the injected store at scrape time in one history() pass; only HTTP request counts live in the lock-guarded process-local Metrics. |
+| `validsim/api/main.py` | source ✓ | 856-line FastAPI factory: env-driven auth, CORS, sliding-window rate limiting, request-ID/status observability middleware, ~13 REST endpoints (sync validation, listing, delete, scorecard json/md/html/pdf, failures, compare, regressions, model registry), plus dashboard, jobs and metrics wiring. |
+
+**Key points:**
+
+- `validsim/api/__init__.py`
+    - Re-exports only app and create_app via __all__
+    - Importing the package executes main.py's module-level app=create_app()
+- `validsim/api/dashboard.py`
+    - No Node build step: FileResponse of web/index.html at / and /api/v1/dashboard/
+    - get_store reads request.app.state.store so in-memory and SQLite backends both work
+    - summary counts APPROVE vs BLOCK, averages composite_score, None when empty
+    - mount_dashboard also mounts /static StaticFiles and a duplicate GET / handler
+- `validsim/api/metrics.py`
+    - Emits runs_total, approvals_total, blocks_total, composite_score, build_info, http_requests_total{class=}
+    - STATUS_CLASSES omits 1xx; out-of-range codes ignored rather than raising
+    - get_metrics falls back to fresh Metrics() if app.state.metrics missing
+    - _fmt drops trailing .0 for integers; output always newline-terminated
+- `validsim/api/main.py`
+    - Reads VALIDSIM_API_KEY/ENV/CORS_ORIGINS/RATE_LIMIT at call time; prod without a key raises RuntimeError (fail closed)
+    - Auth gate set via application.router.dependencies; PUBLIC_PATHS={/api/v1/health} exempted inside the dependency
+    - Rate limiter keys on client IP only, LRU max_buckets=10000 plus sweep every 1024 checks; covers POST validations/jobs/compare
+    - DELETE has require_api_key_for_destructive and uses store.delete() as atomic existence check (404 vs 204)
+    - metrics_router included twice: /api/v1/metrics gated and /metrics auth-stripped via saved_dependencies swap
+    - Module-level app=create_app() so import-time env reads and store/queue construction occur
+
+### cli-config (5/5 read)
+
+This group is the CLI surface plus its typed config, config-file loader and logging. cli.py is a Typer app whose central design decision is a two-tier state model: a writable JSON cache (.validsim/scorecards.json, overridable via VALIDSIM_CACHE_FILE) backs the read-only/informational commands (status, scorecard, report, compare, delete, and their --latest), while gate — the only deploy decision — refuses to read the cache, requires a durable store backend (sqlite/postgres, else exit 2), resolves --latest from store.history(), and never recomputes the verdict: it approves only on the exact string "APPROVE" and lets --threshold only raise (max with stored), so it fails closed. Other commands: run/validate share _run_impl via engine.pipeline.run_and_score; models aggregates store history into a table; health reads store+queue in-process (never HTTP) and always exits 0; worker drives JobWorker with --once/--watch/--max-jobs. config.py defines strict frozen models with path-containment validation for asset URDF/USD paths against VALIDSIM_ASSET_ROOT. config_loader.py is a well-tested TOML/flat-YAML bridge for operator overrides but has no runtime consumer — the CLI has no --config option and does not import it, leaving the documented "tune a deployment without editing code" and the VALIDSIM_CONFIG var in .env.example inert. logging.py is a self-contained single-handler JSON formatter, idempotent and env-level-driven, deliberately named validsim.logging (absolute imports keep stdlib intact). Overall quality is high with clear docstrings; the notable gaps are the unwired config_loader and cache/store --latest asymmetry.
+
+**Cross-file observations:**
+- config_loader.py is dead in production: load_config_file/load_default_config/discover_config_file are imported only by tests/test_config_loader.py and the audit script _group_build.py. cli.py never imports it and defines no --config option, so the VALIDSIM_CONFIG var declared in .env.example (line 150) and the module's stated purpose (operator overrides without code edits) are unfulfilled.
+- cli.py 'delete' and 'compare' resolve --latest via the cache (_resolve_run_id) but act on the store (_require_stored/store.delete) — a cached run id absent from the durable store yields exit 2 'no stored run', and delete never prunes the cache, so a deleted run stays the '--latest' target until a newer run overwrites it. delete's docstring claims it resolves 'exactly like ... gate', but gate uses the store-based _resolve_stored_run_id.
+- cli.py 'compare' can only ever compare a run against itself when both --baseline-latest and --candidate-latest are passed: both call _newest_run_id on the same cache, returning the identical id — no guard rejects baseline_id == candidate_id.
+- The JSON cache is read-modify-written with no locking (_load_cache + _save_to_cache), so two concurrent 'validsim run' invocations can clobber each other's entries; low impact given gate ignores the cache but it can make 'status --latest' miss a run.
+- config.py _is_absolute_path treats any Windows-drive-prefixed string as absolute on every platform (PureWindowsPath('data/x:file').is_absolute() and similar drive forms), so a POSIX-relative path beginning with a single-letter drive could be spuriously rejected — an edge case, mitigated by _validate_asset_path's '..'/absolute checks dominating real risk.
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/__init__.py` | source ✓ | Package docstring + single constant __version__ = "0.2.0"; exports only __version__. |
+| `validsim/cli.py` | source ✓ | Typer CLI (851 lines): run/validate, status, scorecard, report, gate, delete, models, version, health, compare, jobs, job enqueue, worker; JSON scorecard cache plus durable-store gating. |
+| `validsim/config.py` | source ✓ | Frozen Pydantic v2 models (RobotSpec, EnvironmentSpec, TaskConfig, ValidationRequest) plus asset-path containment helpers against VALIDSIM_ASSET_ROOT. |
+| `validsim/config_loader.py` | source ✓ | Optional config-file override loader: TOML via tomllib (3.11+) and a hand-rolled flat-YAML reader; discovery via VALIDSIM_CONFIG then default filenames. Not wired into cli.py. |
+| `validsim/logging.py` | source ✓ | Structured JSON logging: JsonLogFormatter, idempotent configure_logging attaching one StreamHandler to the 'validsim' logger, get_logger namespacing helper. |
+
+**Key points:**
+
+- `validsim/__init__.py`
+    - Version 0.2.0 is the CLI 'version'/'health' and API health source
+    - No re-exports: submodules must be imported explicitly
+- `validsim/cli.py`
+    - gate reads only durable store (sqlite/postgres); exits 2 on in-memory, 1 on BLOCK
+    - --latest resolves from cache for status/scorecard/report/delete/compare, from store for gate
+    - worker supports --once/--watch/--max-jobs/--poll-seconds via _drain_worker loop
+- `validsim/config.py`
+    - _validate_asset_path rejects absolute, '..' traversal and NUL bytes
+    - resolve_asset_path resolves under VALIDSIM_ASSET_ROOT (cwd default), is_relative_to check
+    - Limits: episodes 1..100000, adversarial 0..1000, dof 1..40, sha256 exactly 64 chars
+- `validsim/config_loader.py`
+    - Minimal YAML: flat key: value only; nested maps, flow collections, dup keys raise ConfigFileError
+    - DEFAULT_CONFIG_NAMES priority: .toml, .yaml, .yml; missing file returns {} (no-op)
+    - load_default_config/discover_config_file/load_config_file are referenced only by tests and _group_build.py
+- `validsim/logging.py`
+    - Level resolution: arg -> VALIDSIM_LOG_LEVEL -> INFO; unparseable degrades to INFO, never raises
+    - _RESERVED_ATTRS computed from a throwaway LogRecord so only caller `extra` fields are merged
+    - propagate=False prevents double logging; handler tagged _validsim_json_handler for replace-on-force
+
+### jobs (5/5 read)
+
+The jobs package is a self-contained async validation pipeline: frozen JobSpec/JobRecord models keyed by a shared run_id; a thread-safe in-memory JobQueue with a max_depth cap (QueueFullError) and a RedisJobQueue subclass using plain JSON keys (validsim:jobs:<id>) plus an FIFO index list, driver imported lazily; an env factory create_job_queue; a deliberately unwired FastAPI router (POST 202, 503+Retry-After on full queue, bare-array or paginated listing, job_id regex validation, bounded SSE); and JobWorker which drains the queue through the same engine path as the sync API and persists StoredRun under the job's run_id. Docs consistently cite audit findings (H3 depth cap, L1 id validation, M1 bounded SSE), indicating hardening passes. Determinism: seeds derive from stable_seed(checkpoint_id, task_id) upstream; result field points at the persisted run.
+
+**Cross-file observations:**
+- No atomic claim: _claim_next + update_status(RUNNING) is TOCTOU — two concurrent workers (or threads) can run the same job; queue offers no test-and-set dequeue
+- Redis enqueue is non-atomic across processes: exists/llen/set/rpush guarded only by a per-process lock, so max_depth and duplicate checks can race with a second API process (docstring admits single-process-only guarantee)
+- enqueue_job annotated -> dict[str,str] but returns JSONResponse (503) on one branch; declared response_model/status_code=202 mismatch with the actual 503 path
+- get_queue fallback calls create_job_queue(): with VALIDSIM_JOB_QUEUE=redis but no URL and driver installed, the first request raises ValueError → unhandled 500
+- update_status accepts any status transition (e.g. done→queued) with no validation; _apply_status on QUEUED is a silent no-op beyond status change
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/jobs/__init__.py` | source ✓ | Public API re-export barrel for the async job subsystem: models (JobRecord/JobSpec/JobStatus), queue (JobQueue/RedisJobQueue/create_job_queue), router (EnqueueJobRequest/get_queue/router), worker (JobWorker). |
+| `validsim/jobs/models.py` | source ✓ | Frozen dataclasses JobSpec (run_id/checkpoint_id/task_id/episodes=1000/adversarial=0) and JobRecord (spec, status, created/started/finished_at, error, result) plus JobStatus str-Enum queued/running/done/failed; JSON round-trip via to_dict/from_dict. |
+| `validsim/jobs/queue.py` | source ✓ | Thread-safe in-memory JobQueue (dict keyed by run_id, FIFO, max_depth cap raising QueueFullError) and RedisJobQueue persisting JSON at validsim:jobs:<id> with an index list; lazy redis import; create_job_queue env factory (VALIDSIM_JOB_QUEUE memory\|redis). |
+| `validsim/jobs/router.py` | source ✓ | FastAPI /jobs router: POST enqueue (202; QueueFullError→503 + Retry-After), GET list (bare array or {total,limit,offset,items} newest-first envelope), GET /{id}, /{id}/status, /{id}/events SSE with bounded deadline; job_id regex validation (audit L1). |
+| `validsim/jobs/worker.py` | source ✓ | JobWorker consumer: run_once claims oldest QUEUED job, marks RUNNING, executes full pipeline via engine.pipeline.run_and_score with run_validation injected, persists StoredRun under same run_id, marks DONE(result)/FAILED(error); run_forever loops with SIGTERM/SIGINT graceful stop. |
+
+**Key points:**
+
+- `validsim/jobs/__init__.py`
+    - __all__ lists 10 exports; docstring explains wiring queue into app.state.job_queue
+    - No logic; pure re-export with from __future__ annotations
+- `validsim/jobs/models.py`
+    - run_id doubles as job id — shared key between queue record and persisted run
+    - Frozen records: transitions produce new record via dataclasses.replace
+    - from_dict defaults episodes/adversarial when keys missing
+- `validsim/jobs/queue.py`
+    - max_depth default 1000, env VALIDSIM_JOB_QUEUE_MAX_DEPTH, audit H3 bound
+    - _apply_status sets started_at once on RUNNING, finished_at on terminal, error/result per status
+    - Redis client opened lazily under lock; test seam _client_factory; fail-fast ValueError only if driver present and URL missing
+- `validsim/jobs/router.py`
+    - _JOB_ID_RE ^vrun-[0-9a-f]{8}$ blocks key-collision via path param; 400 malformed, 404 unknown
+    - Not wired into api.main — deployment includes router and injects app.state.job_queue
+    - SSE stream polls queue.get with time.sleep, emits data frames then event:end or event:timeout (M1), deadline/poll overridable via app.state
+- `validsim/jobs/worker.py`
+    - _claim_next scans queue.list() for first QUEUED — no atomic claim primitive
+    - Defaults: franka_panda, mock-scene, threshold 85.0; backend from create_backend() (VALIDSIM_BACKEND)
+    - Signal handler install/restore is best-effort, silently skipped off main thread
+
+### notify (3/3 read)
+
+The notify package delivers completed scorecards through two channels, deliberately symmetric: WebhookDispatcher (dispatcher.py) for HTTP endpoints and EmailNotifier (email.py) for SMTP. Both default to dry-run — recording DeliveryResult/EmailDelivery objects on .sent with ok=True and zero network/socket I/O — and require explicit opt-in for live sends (env var VALIDSIM_WEBHOOKS_LIVE=1 for webhooks; dry_run=False plus VALIDSIM_SMTP_* env for email). Both encapsulate all transport failures into result objects and never propagate them to callers. Webhook features: multi-hook registration with preserved order, per-hook payload format (raw JSON or Slack Block Kit), HMAC-SHA256 body signing via secret, retry with exponential backoff (3 attempts, 0.1/0.2s), and severity routing where hooks declare min_severity (info/warn/critical) derived from the scorecard's deploy_decision vs composite/threshold — defaulting to info preserves send-to-everyone history. Email features: multipart/alternative HTML+text bodies generated from engine.export, strict header-injection vetting (CR/LF subject rejection, conservative single-address recipient regex, enforced even in dry-run), lazy env-based SmtpSettings with STARTTLS-by-default and password hidden from repr. __init__.py cleanly re-exports the nine public symbols. Main weaknesses found: missing Content-Type on webhook POSTs, retrying non-idempotent requests and permanent 4xx errors, replayable signatures without timestamps, and a path where email.send_scorecard can raise a TypeError (dict-to-Scorecard reconstruction) that violates the module's never-raise contract.
+
+**Cross-file observations:**
+- dispatcher._post posts str content via httpx without a Content-Type header, so JSON/Slack payloads arrive as application/octet-stream; many receivers reject or misparse them
+- _post retries non-idempotent POSTs on every failure including permanent 4xx (bad URL, auth) — wasted retries, and 5xx-after-processed risks duplicate webhook delivery
+- HMAC signature covers only the body — no timestamp/nonce in _SIGNATURE_HEADER, so a captured request is replayable indefinitely
+- email.send_scorecard builds bodies via Scorecard(**to_dict) BEFORE send(); a dict with unexpected keys raises TypeError to the caller, breaking the 'failures never propagate' contract that _deliver otherwise honors (dry-run included)
+- Threshold default 85.0 is duplicated in severity_from_scorecard and format_slack_blocks; if Scorecard's real gate constant changes, severity routing and Slack display can silently disagree
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/notify/__init__.py` | source ✓ | Package init re-exporting the notify public API: WebhookDispatcher/DeliveryResult/format_slack_blocks/severity_from_scorecard and EmailNotifier/EmailDelivery/SmtpSettings/scorecard bodies. |
+| `validsim/notify/dispatcher.py` | source ✓ | WebhookDispatcher fans a Scorecard out to named webhook hooks; dry-run by default (VALIDSIM_WEBHOOKS_LIVE=1 opts into live httpx POSTs with retries, HMAC signing, Slack Block Kit format, severity routing). |
+| `validsim/notify/email.py` | source ✓ | EmailNotifier sends scorecard/HTML/text emails over SMTP; dry-run by default, live settings read lazily from VALIDSIM_SMTP_* env; header-injection guards on subject/recipients; failures captured on EmailDelivery. |
+
+**Key points:**
+
+- `validsim/notify/__init__.py`
+    - __all__ lists all 9 exported symbols, consistent with dispatcher.py and email.py __all__
+    - Docstring: webhook dispatch plus SMTP email of scorecards
+    - Imports use `from __future__ import annotations` style module docstring conventions
+- `validsim/notify/dispatcher.py`
+    - severity_from_scorecard: BLOCK+score<threshold(85 default)->critical, other BLOCK->warn, else info; tolerates bad types
+    - dispatch() filters hooks by min_severity rank (info=0<warn=1<critical=2); ineligible hooks are not recorded in .sent
+    - _post: 1+2 attempts, exp backoff 0.1s*2^n, never raises; X-ValidSim-Signature = HMAC-SHA256 of JSON body when secret set
+- `validsim/notify/email.py`
+    - send() validates recipients against conservative _EMAIL_RE and rejects CR/LF subjects in BOTH dry-run and live modes before any send
+    - SmtpSettings.from_env parses host/port(587)/user/password/From/TLS; password field has repr=False to keep secret out of logs (finding L2)
+    - _deliver wraps all SMTP/TLS/auth/sendmail errors into ok=False EmailDelivery, never raises; send_scorecard rebuilds Scorecard from dict then uses engine.export HTML+Markdown multipart bodies
+
+### scenarios (3/3 read)
+
+Group "scenarios" = 3 files, all read fully (31 / 255 / 559 lines). Purpose: produce the twelve adversarial categories the ValidSim scorecard requires, as reproducible AdversarialScenario records for simulation episodes.
+
+Architecture. generator.py is the deterministic core: ADVERSARIAL_CATEGORIES (12 fixed strings) with per-category baseline difficulty (0.25 lighting → 0.75 emergency), a _PARAM_SAMPLERS dict of 12 lambdas drawing physically-plausible ranges (lux 5–3000, mass 0.02–5 kg, camera dropout 0–0.6, e_stop step 10–300, perturbation_eps 0.001–0.08, …), and an RNG seeded from the string f"{seed}:{task_id}". generate() cycles categories by index so any n ≥ 12 guarantees full coverage; difficulty = clamp(base ± 0.15 jitter + bias*0.5, 0.05, 0.95). coverage() is a convenience histogram over generate().
+
+llm_generator.py layers an optional LLM on the same surface, deliberately identical (generate(task_id, n) → list[AdversarialScenario]) so it is a drop-in. Its security posture is well thought out and explicitly documented: model output is treated as untrusted data, every candidate is schema-validated against the taxonomy, difficulty is clamped/coerced, no code execution or shell interpolation, and every provider or parse failure degrades to the deterministic fallback so runs are never starved. Prompt text is versioned (_PROMPT_VERSION) for auditability. The category-diversity guarantee (top up missing canonical categories before filling raw count) is the most interesting logic and is correctly bounded so the batch-size contract of exactly n holds.
+
+What looks wrong or fragile. (1) Id namespace is split and asymmetric: validated LLM items get ids "llm-{i}" that are NOT task-scoped, so llm-0 recurs for every task_id, while fallback items get "adv-{task_id}-{i:04d}" — a store keyed on scenario id will collide across tasks. (2) Frozen AdversarialScenario carries a mutable params dict (default_factory), so hashing/using it as a dict key raises and deep-copy discipline is unenforced. (3) All 12 _PARAM_SAMPLERS lambdas take an i argument and never use it — dead parameter. (4) _extract_json_array's first-'[' / last-']' heuristic silently fails on output containing a trailing "]" in prose or two arrays (falls back, but loses all LLM work). (5) Retries reuse the identical prompt with no backoff or perturbation, and httpx.Client is constructed per call, so the retry loop can be a no-op and adds latency. (6) _top_up_missing_categories builds its pool dict over reversed() to mean "prefer the first candidate", but each category appears exactly once in a 12-draw batch, so the reversal is a no-op that only invites misreading. (7) Default provider is OpenAI (api.openai.com / gpt-4o-mini) hardcoded, while the repo elsewhere advertises an LLM-agnostic model registry; a wrong-but-set VALIDSIM_LLM_API_KEY silently routes production validation traffic to OpenAI. (8) Seed-string namespacing f"{seed}:{task_id}" can alias if a task_id itself embeds ":" plus another seed value. (9) last_fallback_reason branch "elif len(fallback_batch) > needed" is unreachable in practice because fallback_batch length can never exceed needed = n - llm_count - (already added top-ups), so the "missed k of 12 categories" message never fires; only the "only X of n passed validation" text does.
+
+**Cross-file observations:**
+- llm_generator.py: LLM-validated scenarios get non-task-scoped ids ('llm-0', 'llm-1') while fallback scenarios get 'adv-{task_id}-{i:04d}'; 'llm-0' therefore repeats for every task_id and will collide in any id-keyed store.
+- llm_generator.py: the elif len(fallback_batch) > needed branch that reports 'LLM output missed k of 12 categories' is effectively dead — fallback_batch length is bounded by needed, so last_fallback_reason only ever takes the wholesale-error or 'only X of n passed validation' forms.
+- generator.py: frozen AdversarialScenario holds a mutable params dict (field(default_factory=dict)), breaking hashability and leaving shared-mutation risk on params unaddressed.
+- generator.py: every one of the 12 _PARAM_SAMPLERS lambdas accepts the index argument i and never uses it — stale signature.
+- llm_generator.py: retries resend the exact same prompt with no backoff/perturbation and open a fresh httpx.Client per attempt; combined with the hardcoded default base URL https://api.openai.com/v1 / model gpt-4o-mini, a stray VALIDSIM_LLM_API_KEY silently sends validation traffic to OpenAI.
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/scenarios/__init__.py` | source ✓ | Package façade re-exporting the rule-based generator (ADVERSARIAL_CATEGORIES, AdversarialScenario, ScenarioGenerator) and the LLM backend (LLMScenarioGenerator, OpenAICompatibleProvider, ScenarioProvider, ScenarioProviderError, ScenarioParseError, build_scenario_prompt, create_scenario_generator) with an explicit __all__. |
+| `validsim/scenarios/generator.py` | source ✓ | Deterministic seeded rule-based adversarial scenario generator: cycles the 12 scorecard categories, samples per-category params and a jittered/biased difficulty, plus a coverage() histogram. |
+| `validsim/scenarios/llm_generator.py` | source ✓ | Week-4 LLM backend: OpenAI-compatible chat-completions provider, versioned strict-JSON prompt, schema validation of untrusted model output, and a drop-in LLMScenarioGenerator that tops up missing categories and falls back to the rule-based generator. |
+
+**Key points:**
+
+- `validsim/scenarios/__init__.py`
+    - 31 lines; pure re-export, no logic
+    - __all__ lists all 9 names, matching both submodule exports
+- `validsim/scenarios/generator.py`
+    - ADVERSARIAL_CATEGORIES = 12 strings; _BASE_DIFFICULTY per category (0.25-0.75), _DIFFICULTY_BIAS_SCALE=0.5
+    - ScenarioGenerator.generate(task_id, n): rng = Random(f"{seed}:{task_id}"), category = CATEGORIES[i % 12], difficulty = clamp(base + uniform(-0.15,0.15) + bias*0.5, 0.05, 0.95) rounded to 4dp; id = adv-{task_id}-{i:04d}
+    - _PARAM_SAMPLERS dict of 12 lambdas (lighting lux/colour-temp/flicker, mass/friction/restitution, human distance/speed, spawn_offset + appears_at_step, camera dropout/depth noise/latency, joint friction/backlash/mass, wind/table accel, distractors/goal noise/swap, neighbor robots, e_stop/fire/human_down, perturbation_eps/attack_surface/injection_rate, deadline/stream speedup)
+    - coverage(task_id, n) reuses generate() and returns all-12-key counts summing to n; n<0 raises ValueError
+    - difficulty_bias applied after RNG draws so ids/params unchanged across biases (documented invariant)
+- `validsim/scenarios/llm_generator.py`
+    - OpenAICompatibleProvider: resolves base_url/api_key/model from args then VALIDSIM_LLM_BASE_URL/_API_KEY/_MODEL (defaults https://api.openai.com/v1, gpt-4o-mini, timeout 10s, temperature 0.8); raises ScenarioProviderError when no key; wraps httpx errors, non-2xx, bad JSON, missing choices[0].message.content
+    - build_scenario_prompt (_PROMPT_VERSION "2025-w24-v1"): demands a strict JSON array of exactly n objects with keys category/name/params/difficulty, enumerates the 12 taxonomy strings, embeds 2 few-shot examples, forbids prose/markdown
+    - _extract_json_array slices first '[' to last ']' then json.loads; _coerce_difficulty -> 0.5 for missing/NaN/inf, else clamp01 rounded 4dp; _validate_item drops non-dicts, off-taxonomy categories, blank names, non-dict params
+    - LLMScenarioGenerator.generate: 1+max_retries attempts, then top-up of missing canonical categories from fallback (bounded by remaining room) and plain count fill; wholesale fallback only when last_error is set and nothing accepted; tracks scenarios_generated, last_run_used_fallback, last_fallback_reason, last_run_diagnostics{missing_categories, topup_from_fallback}
+    - _top_up_missing_categories draws one fallback batch of 12 (dict built over reversed(), so first-in-order candidate wins) and serves each missing category from it; _with_batch_ids re-ids fallback items adv-{task}-{i:04d}; create_scenario_generator returns LLM path iff VALIDSIM_LLM_API_KEY is non-empty, else ScenarioGenerator(seed)
+
+### sim (4/4 read)
+
+The sim package is a two-backend simulation layer behind a Protocol (SimulationBackend.run_episode). runner.py ships MockIsaacBackend: a seeded, GPU-free stand-in whose run_episode fully determines an EpisodeResult from seed (success sampled from base rate minus randomization penalty minus scenario difficulty*0.5, clamped [0.02,0.99]); run_validation drives nominal then adversarial episodes. isaac_worker.py is an HTTP client (httpx) to a containerized Isaac Sim worker over POST /episodes/run, with deferred env config (ValueError at first use, not construction), a strict schema validator that rejects unknown/missing fields, wrong types, bool-as-int, bad seed echo, off-taxonomy failure_mode, and randomization-level mismatch; transport errors retry twice, HTTP 4xx/5xx never retry; run_episode is a degenerate batch-of-one, run_episodes batches in one round-trip. __init__.py's create_backend picks mock vs isaac from VALIDSIM_BACKEND. shadow.py (ShadowRunner) is a rollout-rehearsal harness: it drives the same batch through mock and worker at identical seeds, compares mean success rates against a 0.15 tolerance, and always emits a ShadowReport (worker errors are captured, never raised) — informational only, prod still gates on mock. Code is carefully written; no functional defects found.
+
+**Cross-file observations:**
+- Cross-file seed scheme is consistent across mock, worker, and shadow: nominal episodes at base_seed+i then scenarios at base_seed+episodes+j; worker enforces echo base_seed+index, so the three modules agree on episode ordering and seeds.
+- IsaacWorkerBackend.run_episodes is NOT part of the runtime_checkable SimulationBackend Protocol (which declares only run_episode); shadow.py uses it only after constructing IsaacWorkerBackend directly, so no protocol-violation — but any caller holding a SimulationBackend could not rely on batching.
+- runner.py success_probability can drive adversarial probability very low (difficulty*0.5 up to 0.5 subtraction plus 0.20 randomization penalty on a 0.9 base -> ~0.20) yet always floors at 0.02, so mock never reports a zero-success adversarial batch; a real worker could.
+- isaac_worker.py and shadow.py reference tests/test_isaac_worker.py and docs/isaac-worker.md (outside this group); these are asserted contracts (schema §, rollout steps §5) not re-verified here — worth confirming both targets exist in their own groups.
+- No correctness bugs found; the batch is well-defended (empty-batch no-op returns [] without network, negative episodes raises ValueError, bool/int conflation handled, frozen ShadowReport copies its mutable list in to_dict).
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/sim/__init__.py` | source ✓ | Package facade re-exporting the simulation backends and factory; create_backend() selects IsaacWorkerBackend vs MockIsaacBackend from the VALIDSIM_BACKEND env var (case-insensitive, defaults to mock), mirroring store.create_store. Isaac construction is documented as side-effect free. |
+| `validsim/sim/isaac_worker.py` | source ✓ | httpx client adapter implementing SimulationBackend over POST /episodes/run to a remote GPU Isaac worker; validates the reply back onto EpisodeResult with strict contract checks and a bounded retry policy. GPU worker is out-of-repo, exercised only via httpx.MockTransport fakes. |
+| `validsim/sim/runner.py` | source ✓ | Defines the SimulationBackend Protocol, the deterministic MockIsaacBackend (seeded CPU stand-in reproducing outcomes, contact forces, human proximity, failure taxonomy), the EpisodeResult dataclass, run_validation driver, and stable_seed. Fully seeded and GPU-free so eval runs reproducibly. |
+| `validsim/sim/shadow.py` | source ✓ | Shadow-run harness for rollout step 2 of docs/isaac-worker.md: drives the same batch through MockIsaacBackend and IsaacWorkerBackend at identical seeds, compares mean success rates, and emits a ShadowReport. Loud-but-never-fatal — worker failures are recorded as findings, not deploy blockers; prod still gates on mock. |
+
+**Key points:**
+
+- `validsim/sim/__init__.py`
+    - create_backend maps VALIDSIM_BACKEND=isaac -> IsaacWorkerBackend(), else MockIsaacBackend()
+    - Isaac path relies on lazy URL check: missing URL surfaces as ValueError at first episode, not construction
+    - Re-exports FAILURE_MODES, EpisodeResult, SimulationBackend, run_validation, stable_seed, SimWorkerError
+- `validsim/sim/isaac_worker.py`
+    - Strict schema validation: unknown/missing fields rejected, bool excluded from int slots (_matches), seed must echo base_seed+index, failure_mode must be in FAILURE_MODES, randomization_level must match request
+    - run_episode sends episodes=0 when a scenario is present (scenario IS the episode) else 1; run_episodes batches nominal+scenarios in one round-trip and returns validated ordered list
+    - _transact retries connect/timeout up to _MAX_ATTEMPTS=2 but raises immediately on HTTP>=400; deferred base_url/api_key from env, ValueError at first use; context-manager + close() release the pooled client
+- `validsim/sim/runner.py`
+    - MockIsaacBackend.run_episode: success sampled via random.Random(seed) from base rate - randomization penalty - scenario.difficulty*0.5, clamped [0.02,0.99]; failure_mode chosen from 7-tuple FAILURE_MODES; contact force/human distance/duration all seed-determined
+    - run_validation runs task.episodes nominal then one per scenario, each seed=seed+position, returning task.episodes+len(scenarios) results
+    - stable_seed uses zlib.crc32 & 0x7FFFFFFF for cross-process determinism (unlike hash()); EpisodeResult has min_human_distance_m=None when no human in scene
+- `validsim/sim/shadow.py`
+    - ShadowRunner.run builds worker backend fresh each call, catches SimWorkerError into contract_violations, computes delta=worker_rate-mock_rate and passed=worker_ok and |delta|<=tolerance (default 0.15, batch 20, seed 42)
+    - No-GPU seam: injects httpx.MockTransport into IsaacWorkerBackend; _run_mock mirrors run_validation seed scheme so rates are apples-to-apples
+    - reference_contract_cases/contract_violations_for ship canned valid request/response pairs (nominal-single, adversarial-human-proximity, batch-mixed) replayed through the real parser for worker conformance checks
+
+### store (4/4 read)
+
+The store package is a pluggable validation-result persistence layer with three interchangeable backends sharing one contract: an ephemeral thread-safe dict store (memory.py), a stdlib SQLite store (sqlite.py), and a psycopg-3 PostgreSQL store (postgres.py). __init__.py's create_store()/store_backend() select via VALIDSIM_STORE (default "memory"), with VALIDSIM_SQLITE_PATH and VALIDSIM_PG_URL for config. The contract is StoredRun (frozen dataclass bundling Scorecard + EvaluationResult + SafetyResult + episodes + optional baseline/regression) with save/get/delete/list_for_checkpoint/history/count/__len__/close/new_run_id. Both persistent stores serialize the scorecard plus detail as JSON blobs, promote query-hot columns, ALTER detail columns onto legacy schemas on first use, and reconstruct legacy rows with an approximate evaluation/safety fallback. SQL injection is well guarded: table names whitelist-validated as identifiers, all values via placeholders. Notable inconsistencies: save() overwrites in memory/sqlite but is append-only (ON CONFLICT DO NOTHING) in postgres; close() allows reopen in postgres but permanently kills the sqlite connection; both persistent stores subclass ValidationStore without super().__init__ (self._runs never exists); ~60 lines of (de)serialization and legacy-fallback logic are duplicated verbatim between sqlite.py and postgres.py. Lexical ISO-8601 comparisons for history() bounds are correct only if all timestamps share one fixed UTC format.
+
+**Cross-file observations:**
+- Backend save() semantics diverge: memory/sqlite overwrite an existing run_id, postgres inserts ON CONFLICT DO NOTHING (append-only) — documented but callers get different verdict-log behavior per backend
+- close() semantics diverge: PostgresValidationStore reconnects on next query (_ensure_ready), SqliteValidationStore permanently closes its connection so later queries raise sqlite3.ProgrammingError
+- Both persistent stores subclass ValidationStore but never call super().__init__(); self._runs is absent, so any future inherited method touching the dict would crash — inheritance used only for type advertising
+- ~60 lines duplicated verbatim between sqlite.py and postgres.py: _scorecard_from_dict, _episodes_to_json, _regression_to_json, and the identical legacy-row fallback incl. positional SafetyResult construction
+- history() date filtering relies on lexicographic compare of ISO-8601 TEXT in all backends; caller-supplied since/until bounds in a different format compare incorrectly with no validation
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/store/__init__.py` | source ✓ | Backend-selection factory: create_store() builds memory/sqlite/postgres store from VALIDSIM_STORE env; store_backend() is the single source of truth for the 'memory' default so gate refusal logic cannot disagree. |
+| `validsim/store/memory.py` | source ✓ | In-memory thread-safe store: StoredRun frozen dataclass holding all engine artifacts, ValidationStore dict guarded by threading.Lock; defines the contract the SQLite/Postgres backends satisfy. |
+| `validsim/store/postgres.py` | source ✓ | PostgreSQL backend via psycopg 3: lazy driver import, deferred connect+schema on first query, one row per run with scorecard JSONB plus promoted indexed columns; append-only save via ON CONFLICT DO NOTHING. |
+| `validsim/store/sqlite.py` | source ✓ | Stdlib sqlite3 backend: single validations table, scorecard + detail as JSON TEXT, executescript schema on open with PRAGMA-based ALTER migration; save uses INSERT OR REPLACE (overwrite). |
+
+**Key points:**
+
+- `validsim/store/__init__.py`
+    - VALIDSIM_STORE selects backend; unset/blank normalizes to 'memory' (strip+lower)
+    - sqlite path from VALIDSIM_SQLITE_PATH (default validsim.db); postgres DSN from VALIDSIM_PG_URL
+    - Postgres construction side-effect free (no driver import/connection until first use); ValueError fail-fast if DSN missing and driver installed
+- `validsim/store/memory.py`
+    - StoredRun.summary() emits compact JSON dict; run ids 'vrun-<uuid8>' via new_run_id()
+    - history() filters since/until by lexicographic ISO-8601 string compare, relies on fixed UTC format
+    - save() overwrites existing run_id; delete() pops under lock, idempotent (False for unknown id)
+- `validsim/store/postgres.py`
+    - Injection guards: table whitelist ^[a-z_][a-z0-9_]*$ before interpolation, all values via %s placeholders; _conn_factory test seam avoids live server
+    - save() append-only (first write wins) unlike memory/sqlite overwrite; close() lets a later query reconnect via _ensure_ready
+    - Subclasses ValidationStore without super().__init__ (_runs absent); _run_from_row legacy fallback builds SafetyResult(0.0,0.0,None,0.0,safety_score) positionally — fragile to field order
+- `validsim/store/sqlite.py`
+    - Connection check_same_thread=False guarded by threading.Lock; subclasses ValidationStore for interface compat only
+    - Legacy rows missing detail columns fall back to approximate EvaluationResult/SafetyResult from scorecard — same logic postgres duplicates
+    - history() uses lexical created_at >=/<= via ? placeholders; count/__len__ run SELECT COUNT(*)
+
+### web (3/3 read)
+
+The "web" group is ValidSim Dashboard v0: a build-free SPA (index.html + app.js + styles.css) served alongside the FastAPI app, statically mounted at /static. It drives five endpoints: POST /api/v1/validations (sync run → scorecard), GET /api/v1/validations/{id}/scorecard (history row reload), GET /api/v1/dashboard/history + /summary (history table, stats, client-side trends), and GET/POST /api/v1/jobs (async queue polled every 3s, paused when the tab is hidden). Panels: run form, composite scorecard with APPROVE/BLOCK/PENDING verdict, trends (latest/delta/3-MA/10-run approval rate, computed client-side mirroring engine/trends.py), failure taxonomy (horizontal Chart.js bars with an always-in-DOM accessible table fallback for offline/broken CDN), job queue with enqueue form, run history with per-row activate buttons. The code is unusually a11y-hardened: pre-paint theme script + persisted light/dark toggle, single polite announcer with 80ms re-announce trick, focus-return hygiene around disabled buttons, skip link, no colour-only signalling, reduced-motion/forced-colors/high-contrast media support, and documented WCAG AA contrast tokens for both themes. XSS surface is minimal (data via textContent; innerHTML only fixed enums/icons). Main weaknesses are external-dependency coupling (unserved CDN Chart.js, no SRI; Google Fonts @import), a client/server trends-math duplication risk, a mobile jobs-table column-mismatch CSS bug, a stale "light mode forbidden" comment, and the threshold form field being advisory until the v0 API honors it.
+
+**Cross-file observations:**
+- Responsive bug: at ≤639px styles.css hides .jobs-table .col-adv (Adversarial th) and td.cell-task but leaves the jobs 'Task' th and the adversarial td visible — header/cell misalignment in the mobile jobs table (history-table equivalents are consistently paired).
+- Stale comment: styles.css line ~28 says "Dark OLED surfaces (light mode is forbidden)" directly above a complete, tested light-theme override block — contradictory documentation.
+- The run-form Threshold input is POSTed as body.threshold but app.js comments the v0 API "ignores unknown fields", while the gate label renders server-side card.threshold — user-set threshold may silently have no effect.
+- External dependencies without integrity or offline bundle: Chart.js from cdn.jsdelivr (only onerror-degradation, no SRI) and render-blocking Google Fonts @import; a CDN compromise or hijack executes in the dashboard's origin.
+- Minor app.js leaks/edge cases: jobStatusSeen Map never prunes vanished jobs (slow growth across polls); an unrecognized job.status renders as the literal "queued" badge, losing the true status word.
+
+| File | Kind | Summary |
+|---|---|---|
+| `validsim/web/app.js` | source ✓ | Vanilla-JS SPA logic (951 lines) for the ValidSim dashboard: runs validations, renders scorecard/trends/taxonomy/history, polls the job queue. Heavy WCAG 2.1 AA engineering (live regions, focus hygiene, Chart.js→table fallback). |
+| `validsim/web/index.html` | source ✓ | Single-page dashboard markup (326 lines): run form, scorecard, trends, failure-taxonomy (canvas + always-present table), job-queue panel with enqueue form, run history, a11y announcer, skip link, inline pre-paint theme script. |
+| `validsim/web/styles.css` | source ✓ | Dark-OLED-first theme (761 lines) with full light-theme token override block, documented WCAG contrast ratios, focus-ring/halo system, responsive breakpoints 375/639/768/1024/1440, reduced-motion, prefers-contrast and forced-colors support. |
+
+**Key points:**
+
+- `validsim/web/app.js`
+    - POST /api/v1/validations, GET .../scorecard, /dashboard/history, /dashboard/summary, /api/v1/jobs (3s poll, paused on hidden tab)
+    - computeTrends() mirrors validsim/engine/trends.py client-side: latest, delta, 3-run MA, 10-run approval rate
+    - Theme via localStorage 'vs-theme' + prefers-color-scheme; chart re-drawn with per-theme hard-coded palette on flip
+    - XSS-safe: only fixed enum strings via innerHTML; all data via textContent; verdict/badges pair icon+word (no colour-only signal)
+- `validsim/web/index.html`
+    - Head inline script resolves theme before first paint (localStorage 'vs-theme' → prefers-color-scheme → dark default)
+    - Chart.js from jsdelivr CDN with onerror flag window.__vsChartJsFailed driving table fallback; no SRI/integrity
+    - Forms use novalidate but rely on reportValidity(); constraints: sync episodes 100–5000, enqueue episodes 1–100000, adversarial 0–1000
+    - Footer records composite formula: 0.4·success + 0.3·safety + 0.2·robustness + 0.1·regression
+- `validsim/web/styles.css`
+    - Token-driven theming: :root dark defaults + html[data-theme=light] overrides; per-pair contrast ratios annotated in comments
+    - Google Fonts @import (Fira Code/Sans) — render-blocking external dependency
+    - ≤639px hides secondary table columns to fit 375px; row-activate buttons and focusable scroll regions keep data keyboard-reachable
+    - Spinner/running-badge animations and all transitions neutralized under prefers-reduced-motion
+
+### tests-api-cli (24/24 read)
+
+Group covers the API (FastAPI TestClient) and CLI (Typer CliRunner) test surface. API tests exercise validation lifecycle, compare with stable_seed determinism, failures/scorecard/md/html/PDF renderers, model registry, pagination, since/until filters, DELETE, enriched health, optional X-API-Key auth (positive + a large adversarial negative suite), CORS allow-list, and env-driven rate limiting. Security regressions pin four audited fixes: H1 IP-only limiter key, H2 bounded limiter (LRU cap + periodic sweep), H3 jobs enqueue rate-limited, M3 DELETE requires auth; blank API key is auth-off and production refuses to start unauthenticated. CLI tests pin the CI contract: gate decides only from the durable store (forged cache cannot approve; exit codes 0/1/2), --latest resolution, run/validate/report/models/compare/health/version/jobs/worker commands, watch/max-jobs worker modes. test_delivery_pipeline.py is a meta-suite asserting CI workflows, actions, coverage floor, compose loopback binding and SECURITY.md truthfulness, tying the suite to ISSUE_CATALOG items 24-29. conftest.py isolates deployment env and provides the durable_store fixture. Overall the suites are dense, well-documented and regression-oriented; notable issues are a misplaced module-level importorskip in test_api.py, a stale rate-limit docstring, hardcoded version string in test_cli_version.py, and cross-file test imports relying on pytest path injection.
+
+**Cross-file observations:**
+- tests/test_api.py:159 module-level pytest.importorskip('reportlab') sits between test classes; when reportlab is absent it aborts collection of the whole module, silently skipping the later TestModelRegistry tests
+- tests/test_api_rate_limit.py docstring still says the limiter keys 'by either the X-API-Key header or the client IP', contradicting its own H1 test (and test_api_security_fixes) which pin IP-only keying
+- tests/test_cli_version.py asserts literal '0.2.0' in output in addition to __version__, so any version bump breaks the test despite the stated contract being 'output matches package metadata'
+- tests/test_cli_json.py imports helpers and the autouse cache_file fixture from module 'test_cli' by bare name, relying on pytest rootdir sys.path insertion (no tests/__init__.py); fragile under different import modes
+- Auth/rate-limit suites mutate os.environ directly rather than monkeypatch; safe only because each has its own clean_env save/restore, and conftest's autouse isolation covers just VALIDSIM_ENV/STORE/SQLITE_PATH, not API key/CORS/rate-limit vars
+
+| File | Kind | Summary |
+|---|---|---|
+| `tests/conftest.py` | test ✓ | Suite-wide fixtures: autouse _isolate_deployment_env deletes VALIDSIM_ENV/STORE/SQLITE_PATH per test; durable_store points sqlite store at tmp_path db for gate tests. |
+| `tests/test_api.py` | test ✓ | Core FastAPI integration suite: health/CORS, validation lifecycle (201 scorecard, get/404, scorecard, failures), compare+regressions with stable_seed reproducibility, PDF export, model registry endpoints. |
+| `tests/test_api_auth.py` | test ✓ | Positive tests for env-driven X-API-Key auth (VALIDSIM_API_KEY) and CORS allow-list (VALIDSIM_CORS_ORIGINS); health exempt but reports auth_enabled; uniform 401 detail. |
+| `tests/test_api_auth_negative.py` | test ✓ | Adversarial auth suite: empty/whitespace/padded/wrong-case/wrong-length keys rejected; header name case-insensitive; blank VALIDSIM_API_KEY means auth off; production refuses startup without key; DELETE/jobs gated; 401 body uniform with WWW-Authenticate: ApiKey. |
+| `tests/test_api_delete.py` | test ✓ | DELETE /api/v1/validations/{run_id}: 204 empty body, 404 unknown and re-delete, other runs survive, deleted run disappears from paginated history. |
+| `tests/test_api_filters.py` | test ✓ | since/until ISO date filtering on GET /validations using store-injected runs with fixed timestamps; inclusive window, Z-suffix normalisation, blank bounds ignored, malformed bounds 422, total reflects filter under pagination. |
+| `tests/test_api_health.py` | test ✓ | Enriched /api/v1/health readiness payload: status, version, auth_enabled, cors_wildcard, rate_limit, store_backend (memory/sqlite/postgres by class name), job_queue_backend (memory/redis). No I/O in route. |
+| `tests/test_api_jobs_wired.py` | test ✓ | Async jobs router wired into main app under /api/v1: 202 enqueue (status queued, vrun- id), list, get, 404 unknown; app-level X-API-Key gate covers included router. |
+| `tests/test_api_pagination.py` | test ✓ | Pagination for GET /validations (limit/offset, newest-first, compact summaries, default limit 100) and GET /models; invalid params (limit 0/501/-1, offset -1) -> 422. |
+| `tests/test_api_rate_limit.py` | test ✓ | Env-driven sliding-window rate limit on write routes (POST validations, compare): VALIDSIM_RATE_LIMIT 0/bad/negative disables, exceeding gives 429 + Retry-After, reads unlimited, key rotates cannot mint buckets (IP-only). |
+| `tests/test_api_renderers.py` | test ✓ | scorecard.md and scorecard.html endpoints: 200 with correct content-type, markdown contains '## Verdict:' and decision, HTML parses via HTMLParser with DOCTYPE, 404 for unknown run. |
+| `tests/test_api_security_fixes.py` | test ✓ | Regression tests for audited fixes H1/H2/H3/M3: IP-only limiter key (incl. white-box _rate_limit_key on raw scope), bounded limiter (max_buckets LRU eviction + periodic stale sweep), POST /jobs rate limited, DELETE requires auth (401 before 404) whenever key configured. |
+| `tests/test_cli.py` | test ✓ | Typer CLI suite: run/status/scorecard with cache file, gate reads durable store not forgeable cache (item 06 acceptance: store BLOCK beats hand-written APPROVE cache), malformed/absent run-id exit 2, exact-stored-verdict fail-closed, --threshold only tightens never rescues, --latest resolves from store, sqlite persistence, cache-based --latest ordering tests. |
+| `tests/test_cli_delete.py` | test ✓ | validsim delete command: removes run from store via --run-id or --latest (newest), exit 2 for missing run or zero/both flags; shared_store monkeypatches cli.create_store for cross-invocation persistence. |
+| `tests/test_cli_extra.py` | test ✓ | CLI 'models' and 'compare' commands reading the sqlite store with seeded StoredRun records: models lists checkpoints newest-activity-first with run counts/latest score, compare prints regression table with deterministic deltas, --baseline-latest/--candidate-latest XOR resolution. |
+| `tests/test_cli_health.py` | test ✓ | validsim health local status command mirroring /api/v1/health: prints version, store/job-queue backend labels, 'Runs stored: N'; always exits 0; sqlite store reports 'sqlite' backend; factories monkeypatched for shared state. |
+| `tests/test_cli_jobs.py` | test ✓ | Async job CLI: job enqueue (prints id + queued, missing -c exit 2), jobs listing (empty -> 'no jobs queued', table headers JOB ID/STATUS/CHECKPOINT), worker --once drains one job to done and persists run with result==job_id; empty queue no-op. |
+| `tests/test_cli_json.py` | test ✓ | Machine-readable CLI: report --json emits cached scorecard (matches scorecard command bytes, overrides --format), validate alias identical to run (masked-run-id output equality, shared flags in help), gate --json emits single {run_id, composite_score, threshold, decision} object preserving 0/1/2 codes (uses durable_store fixture). |
+| `tests/test_cli_report.py` | test ✓ | validsim report markdown/html from cache (sections Metrics/Failure Taxonomy/Confidence Interval), --latest, flag validation exits 2 (missing run, empty cache, neither/both flags, invalid format pdf), markdown default byte-equals explicit; run --environment/-E accepted. |
+| `tests/test_cli_version.py` | test ✓ | validsim version: exits 0, prints package __version__ plus feature summary, never touches cache/store (asserts cache file not created). |
+| `tests/test_cli_worker_watch.py` | test ✓ | worker --watch emits one 'worker: job <id> -> done' transition line per job; --max-jobs bounds the loop (0 unlimited), FIFO order, stops when queue drains before max; --once behavior unchanged (one line, second job stays queued). |
+| `tests/test_dashboard.py` | test ✓ | Week-7 dashboard: / and /api/v1/dashboard/ serve HTML referencing /static assets and Chart.js CDN; summary keys total_runs/approvals/blocks/avg_composite (None on empty); history newest-first sharing the app store instance. |
+| `tests/test_delivery_pipeline.py` | test ✓ | Meta-tests over CI/CD artifacts (ISSUE_CATALOG items 24-29): release.yml packaging steps unconditional, never twine upload, no vv docker tag; scorecard action fails closed (::error:: + exit 1), validate action sets sqlite store; 90% coverage floor declared+enforced in pyproject/ci.yml/Makefile and README matches; compose binds 127.0.0.1, build.ps1 installs dev reqs, redis/pyyaml declared; SECURITY.md placeholders filled, scope and supported-versions consistent with package version. |
+| `tests/test_e2e_async.py` | test ✓ | Full async pipeline over HTTP: POST /jobs (202 queued) -> 404 on validations pre-worker -> JobWorker.run_once on shared queue/store with MockIsaacBackend -> run fetchable at /validations/{job_id} + scorecard, job done with result==job_id and started/finished timestamps; second run_once no-op; multi-job FIFO drain. |
+
+**Key points:**
+
+- `tests/conftest.py`
+    - autouse env isolation prevents ambient shell config failing create_app
+    - durable_store fixture required by any tests/test_cli.py gate test
+- `tests/test_api.py`
+    - episode_count 72 = 60 nominal + 12 adversarial; threshold default 85.0
+    - compare permutation seed must equal stable_seed(run_id, baseline_id)
+    - module-level importorskip('reportlab') at line 159 can skip later TestModelRegistry class too
+- `tests/test_api_auth.py`
+    - auth disabled when env unset; health reachable without key
+    - explicit CORS origins echoed, unknown origins get no ACAO header
+    - OPTIONS preflight passes auth gate
+- `tests/test_api_auth_negative.py`
+    - verbatim key compare: padded real key still 401; case-sensitive value
+    - VALIDSIM_ENV=production + missing key raises RuntimeError at create_app
+    - auth runs before route 404/422 logic; blank key no longer opens routes (regression)
+- `tests/test_api_delete.py`
+    - 204 has empty content; second delete returns 404
+    - history listing total drops after delete
+- `tests/test_api_filters.py`
+    - three runs stamped 2026-01-01..03 seeded directly into ValidationStore
+    - date-only bounds accepted; '2026-13-45', '2026-02-30' rejected 422
+    - default listing must stay byte-identical to pre-feature behavior
+- `tests/test_api_health.py`
+    - exact key set asserted for payload
+    - backend labels derived from injected object class names
+    - rate_limit reports {requests, window_seconds} when VALIDSIM_RATE_LIMIT set
+- `tests/test_api_jobs_wired.py`
+    - create_app installs auth dependency before including jobs router
+    - valid key enables 202 enqueue and readback
+- `tests/test_api_pagination.py`
+    - items are summaries without episode payloads
+    - models default order ckpt-alpha before ckpt-beta; offset beyond end -> []
+- `tests/test_api_rate_limit.py`
+    - 429 detail is exactly 'rate limit exceeded'
+    - H1 regression: different X-API-Key values share one IP bucket
+    - docstring still says keyed by API key or IP, contradicting the IP-only tests
+- `tests/test_api_renderers.py`
+    - mirrors PDF export test shape for md/html renderers
+- `tests/test_api_security_fixes.py`
+    - pokes private API: _rate_limit_key, _SlidingWindowRateLimiter._hits, _SWEEP_INTERVAL
+    - sweep every _SWEEP_INTERVAL ops reclaims never-revisited clients
+    - unknown-id DELETE without key is 401, not 404
+- `tests/test_cli.py`
+    - exit-code contract 0 approve / 1 block / 2 error underpins CI actions
+    - default 40-episode run scores composite 81.4 so threshold 85 -> BLOCK
+    - gate from memory store exits 2 citing VALIDSIM_STORE
+- `tests/test_cli_delete.py`
+    - delete --latest removes only the newest of two runs
+- `tests/test_cli_extra.py`
+    - compare deltas '-0.0500' success_rate and '+0.3000' duration asserted
+    - missing baseline/candidate or empty cache -> exit 2; empty store models -> 'no checkpoints registered'
+- `tests/test_cli_health.py`
+    - no HTTP call — reads create_store/create_job_queue instances
+    - backend label from concrete class name
+- `tests/test_cli_jobs.py`
+    - shared memory queue/store monkeypatched onto cli module for cross-invocation visibility
+- `tests/test_cli_json.py`
+    - imports RUN_ID_RE/_invoke/_run_and_extract_id/cache_file from test_cli module
+    - gate --json --threshold 200: exit 1 with decision BLOCK, threshold 200.0
+- `tests/test_cli_report.py`
+    - format pdf rejected by CLI exit 2 (only markdown/html renderers)
+- `tests/test_cli_version.py`
+    - also hardcodes '0.2.0' in output alongside dynamic __version__ check
+- `tests/test_cli_worker_watch.py`
+    - queue pre-seeded with two fixed ids vrun-aaaa1111/vrun-bbbb2222 via monkeypatched create_job_queue
+- `tests/test_dashboard.py`
+    - dashboard history reads same store the API writes
+    - static styles.css/app.js/index.html served non-empty
+- `tests/test_delivery_pipeline.py`
+    - parses .github/workflows, actions/*/action.yml, docker-compose.yml, Makefile, SECURITY.md
+    - uses tomllib (Python >=3.11) and PyYAML as dev deps
+    - supported-versions regex rows must be subset of current and prior minor
+- `tests/test_e2e_async.py`
+    - injection seam: app.state.store and app.state.job_queue swapped after create_app()
+    - job run_id is the store key, so result pointer resolves through read endpoints
+    - VALIDSIM_BACKEND cleared + MockIsaacBackend pinned so GPU never selected
+
+### tests-engine (22/22 read)
+
+This group covers 22 pytest files (~4,100 lines) testing validsim's analysis/reporting engine layer: anomaly detection, scorecard benchmarking, tolerant numeric coercion, Pydantic config validation + fuzzing, config-file loading/path hardening, evaluation/regression/trends/failure-trends, safety & composite scorecard math, Markdown/HTML/PDF exporters, the shared run_and_score pipeline, Prometheus metrics content + observability wiring, and three complementary bootstrap-statistics suites (happy path, edge cases, property-style). All files are clean, deterministic, self-contained tests with no external state mutation; several deliberately use fixed master seeds (0x5EEDC0FF, 0xC0FFEE, 42) for reproducibility. Tests are consistent in style: private dataclass shapes checked for frozen/JSON-serializability, malformed/garbage input always expected to degrade gracefully rather than raise (except where a config-fuzz positive-control proves legit Pydantic coercions still pass). Coverage looks broad and internally consistent; nothing in these tests appeared broken or self-contradictory.
+
+**Cross-file observations:**
+- test_engine_branches.py and test_metrics_content.py reach into private symbols (_percentile, _HANDLER_MARKER read via getattr fallback, _escape_label mirror logic) — mildly fragile to internal renames, though test_metrics_content explicitly guards against this with getattr defaults
+- test_pdf.py and test_config_loader.py/test_pipeline.py rely on optional imports (reportlab, tomllib) via importorskip/try-import patterns, so suites stay green on machines lacking optional deps
+- No cross-file fixtures/conftest usage observed in this group — each test module is fully self-contained with its own _ep/_run/_card builder helpers, which is good for isolation but leads to duplicated boilerplate across test_evaluation/test_safety/test_engine_branches (identical _ep() EpisodeResult builder repeated 3x)
+- test_coerce.py's docstring explicitly notes OverflowError cases are intentionally excluded from the 'never raises' sweep, matching the module's TypeError/ValueError-only contract — a deliberate scope limit, not a gap
+- test_scorecard.py TestEvidenceSufficiency encodes a product rule (composite 100 but BLOCK under insufficient episodes) that isn't obvious from the weighted formula alone — worth flagging as a non-trivial business-logic invariant pinned by tests
+
+| File | Kind | Summary |
+|---|---|---|
+| `tests/test_anomaly.py` | test ✓ | Tests validsim.engine.anomaly.detect_anomalies: spike detection over per-run failure-taxonomy history with z-score thresholds. |
+| `tests/test_benchmark.py` | test ✓ | Tests validsim.engine.benchmark.compare_scorecards head-to-head metric comparison between two scorecard dicts. |
+| `tests/test_coerce.py` | test ✓ | Tests validsim.engine._coerce.as_float/as_int tolerant numeric coercion used by report/PDF renderers. |
+| `tests/test_config.py` | test ✓ | Tests Pydantic models RobotSpec/EnvironmentSpec/TaskConfig/ValidationRequest defaults and validation bounds. |
+| `tests/test_config_fuzz.py` | test ✓ | Fixed-seed randomized + example-based fuzz tests hammering TaskConfig/ValidationRequest rejecting malformed payloads with ValidationError. |
+| `tests/test_config_loader.py` | test ✓ | Tests validsim.config_loader: minimal YAML/TOML config-file parsing, scalar coercion, and file discovery order. |
+| `tests/test_config_paths.py` | test ✓ | Tests path hardening in validsim.config: rejecting absolute paths, ../ traversal, NUL bytes in urdf_path/scene_usd, plus resolve_asset_path root confinement. |
+| `tests/test_engine_branches.py` | test ✓ | Branch-coverage tests for edge cases across evaluation.py, regression.py, and stats.py not hit by other suites. |
+| `tests/test_evaluation.py` | test ✓ | Tests evaluate() aggregating EpisodeResult lists into EvaluationResult (rates, taxonomy, per-task breakdown, mean duration). |
+| `tests/test_export.py` | test ✓ | Tests Markdown/HTML scorecard exporters, checking content presence, self-containment, and clean parsing of HTML. |
+| `tests/test_failure_trends.py` | test ✓ | Tests failure_mode_trends() computing per-failure-mode rising/falling/flat rate deltas across run history. |
+| `tests/test_metrics_content.py` | test ✓ | Content-level correctness tests for the Prometheus /metrics exposition built from an injected ValidationStore. |
+| `tests/test_observability.py` | test ✓ | Presence/surface tests for X-Request-ID middleware, /metrics endpoint reachability (including auth-free root mount), and JSON logging config. |
+| `tests/test_pdf.py` | test ✓ | Tests reportlab-backed PDF scorecard exporter (render_scorecard_pdf / scorecard_pdf_bytes) end-to-end, guarded by pytest.importorskip('reportlab'). |
+| `tests/test_pipeline.py` | test ✓ | End-to-end tests for the shared run_and_score() validation pipeline (seed derivation, adversarial scenario injection, persistence, baseline/regression, backend injection, threshold gating) driven by MockIsaacBackend and in-memory store. |
+| `tests/test_regression.py` | test ✓ | Tests baseline-vs-current regression.compare(): success-rate drops graded critical/warning/info, duration slowdowns, report shape/serialization. |
+| `tests/test_safety.py` | test ✓ | Tests compute_safety() penalty math: collisions/force/proximity weighted deductions, score clamping to [0,100], custom limits. |
+| `tests/test_scorecard.py` | test ✓ | Tests build_scorecard composite math (0.4*success + 0.3*safety + 0.2*robustness + 0.1*regression-component), robustness spread, deploy gating, and evidence-sufficiency override. |
+| `tests/test_stats.py` | test ✓ | Core tests for pure-Python bootstrap_ci and two_proportion_bootstrap_test helpers (no scipy/numpy). |
+| `tests/test_stats_edge.py` | test ✓ | Boundary/degenerate-case tests for the same stats helpers, complementing test_stats.py without duplicating it. |
+| `tests/test_stats_property.py` | test ✓ | Dependency-free property-style tests (fixed MASTER_SEED random.Random, 50 iterations each) for bootstrap_ci and two_proportion_bootstrap_test. |
+| `tests/test_trends.py` | test ✓ | Tests compute_trends() multi-run TrendSummary: latest/delta/moving-average/approval-rate/improving/volatile signals. |
+
+**Key points:**
+
+- `tests/test_anomaly.py`
+    - Guard rails: empty/short (<min baseline) history and zero-episode current run return []
+    - Critical band z>=2*threshold, warning band [threshold,2*threshold); decreases never flagged
+    - to_dict is JSON-safe (no inf/NaN) and detection is deterministic across repeated calls
+- `tests/test_benchmark.py`
+    - Overall winner decided by composite only, independent of other metric winners
+    - Missing/None/non-numeric values degrade to 'tie'/None delta defensively
+    - BenchmarkResult and MetricComparison are frozen dataclasses, JSON-serializable to_dict
+- `tests/test_coerce.py`
+    - Never raises on ~18 garbage inputs (None, str, list, dict, bytes, complex) -> returns default
+    - as_int('3.5') falls back to default (documented asymmetry vs as_float accepting it)
+    - Inf/nan pass through as_float; as_int rejects inf/nan strings to default; OverflowError cases deliberately excluded from sweep
+- `tests/test_config.py`
+    - episodes bounded 1..100000, adversarial_count 0..1000, randomization is a strict literal enum
+    - checkpoint_sha256 must be exactly 64 chars
+    - Defaults: dof=7, episodes=1000, randomization='full', adversarial_count=0
+- `tests/test_config_fuzz.py`
+    - MASTER_SEED=0x5EEDC0FF, 150 iterations per sweep mutating one field at a time from curated bad-value pools
+    - Positive-control class proves Pydantic's legitimate coercions (True, '2500', 1000.0) are accepted, keeping the harness honest
+    - Covers out-of-range/nan/inf episodes, wrong-length sha256, non-literal randomization, nested-task invalid propagation
+- `tests/test_config_loader.py`
+    - Flat YAML only: nested mappings, flow collections ([a,b]) and duplicate keys all raise ValueError/ConfigFileError
+    - Scalar coercion covers int/float/bool(true/false/yes/no/on/off)/null; quoted numbers stay strings
+    - discover_config_file prefers TOML over YAML unless VALIDSIM_CONFIG env override is set
+- `tests/test_config_paths.py`
+    - Absolute (POSIX/Windows/UNC), traversal (../), and NUL-byte paths raise ValidationError
+    - resolve_asset_path joins beneath VALIDSIM_ASSET_ROOT (default cwd) and raises ValueError('escapes') on root-escape
+- `tests/test_engine_branches.py`
+    - Failed episodes with None/'' failure_mode excluded from failure taxonomy counts
+    - Empty-run (zero episodes either side) short-circuits permutation test -> p_value None, severity info
+    - Two-proportion bootstrap validates n_resamples>=2 and confidence in (0,1); _percentile single-element shortcut bypasses interpolation
+- `tests/test_evaluation.py`
+    - Empty run yields total=0, success_rate=0.0, empty taxonomy, mean_duration 0.0
+    - Per-task success rates and failure-mode counts computed correctly
+    - to_dict() round-trips basic fields
+- `tests/test_export.py`
+    - Markdown includes composite/decision/threshold/taxonomy keys and CI bounds formatted to 4 decimals
+    - HTML output must parse via stdlib HTMLParser without raising and contain <style>, no external http(s) assets
+    - Empty failure_taxonomy handled with a 'No failures' message in both formats
+- `tests/test_failure_trends.py`
+    - Rates normalised by episode_count; runs with zero/missing episodes skipped for first/last comparison
+    - Accepts both episode_count and total_episodes keys; malformed taxonomy values degrade to 0
+    - Modes absent at both ends but non-zero mid-history still reported (0.0->0.0 flat); output keys sorted by name, JSON-serializable
+- `tests/test_metrics_content.py`
+    - runs/approvals/blocks totals and composite-score gauge derived exactly from the seeded store (3 APPROVE + 1 BLOCK mix, newest-by-created_at wins)
+    - HTTP request counter bucketed by status class (2xx/3xx/4xx/5xx) via ASGI middleware, incremented once per request excluding the scrape's own pending increment
+    - configure_logging() is idempotent: repeated calls never duplicate the JSON handler; exposition validated line-by-line against a Prometheus text-format regex
+- `tests/test_observability.py`
+    - Inbound X-Request-ID echoed; missing ones generated as a fresh uuid4, distinct per request
+    - /metrics stays open (200) even with VALIDSIM_API_KEY set, while /api/v1/metrics stays gated (401/200)
+    - configure_logging namespacing via get_logger(); JsonLogFormatter emits message/level/logger/request_id/timestamp fields
+- `tests/test_pdf.py`
+    - Approve and block cards render distinct, real (>500 byte) %PDF- byte streams, also to a file path
+    - Empty dict, partial cards, and bad CI/taxonomy/episode_count types must not raise (fall back to .get defaults)
+- `tests/test_pipeline.py`
+    - Same (checkpoint_id, task) yields byte-identical composite/safety/robustness/taxonomy across calls despite distinct run ids
+    - Adversarial count adds exactly that many extra episodes; all episode ids stay unique
+    - Missing baseline raises BaselineNotFoundError before anything is persisted; explicit backend skips the factory; threshold=0 always APPROVE, threshold=1000 always BLOCK
+- `tests/test_regression.py`
+    - Large drop (-0.10) critical, medium (-0.03) warning, small noise (<0.005) info; improvements never flagged
+    - Duration +60% over baseline is critical with p_value None; +5% is info
+    - Empty RegressionReport defaults to worst_severity 'info', has_regressions False
+- `tests/test_safety.py`
+    - Exact worked example: 0.1 collisions + 0.2 force-rate + 0.1 proximity violation -> safety_score 87.0
+    - Score never drops below 0 or above 100; None distances are ignored (not penalized)
+    - force_limit_n/proximity_limit_m are tunable and change violation rates accordingly
+- `tests/test_scorecard.py`
+    - Regressions deduct 25 pts each (floored at 0) from the regression component
+    - Robustness = 100 - 200*pstdev across randomization groups
+    - A run delivering far fewer episodes than requested (1/50) gets composite 100 but deploy_decision BLOCK (evidence-sufficiency override)
+- `tests/test_stats.py`
+    - Point estimate equals sample mean by default; interval brackets it; widens as n shrinks
+    - Deterministic given a fixed seed across repeated calls
+    - Rejects empty input, n_resamples<2, confidence out of (0,1)
+- `tests/test_stats_edge.py`
+    - Zero-width CI on all-identical or single-element samples; valid bounds for 2-element samples
+    - Higher confidence level never shrinks the interval given fixed seed
+    - Wall-clock performance guard (<20s) for a 30k-sample, 20-resample run; +1/+1 p-value smoothing floor checked; p-value monotonicity across close/moderate/far effect sizes
+- `tests/test_stats_property.py`
+    - CI brackets point estimate within [0,1] for Bernoulli and uniform samples; width monotone in confidence level
+    - p-value always in [0,1] and its 'significant' flag agrees with threshold<0.05
+    - Swapping sample order negates delta exactly, preserving |delta| and the significance decision
+- `tests/test_trends.py`
+    - Empty history returns all-zero neutral defaults; single run is flat/non-volatile
+    - Moving average uses last 3 runs; approval_rate_10 uses only the last 10 runs
+    - Monotonic improvement flags 'improving'; erratic scores flag 'volatile'; to_dict round-trips JSON
+
+### tests-jobs-notify (15/15 read)
+
+Group covers the async job pipeline and the notify surface with ~180 test cases, all hermetic: Redis is faked via _client_factory, SMTP/httpx are monkeypatched, and dry-run is the default with loud-raise guards so no test can do real I/O. Tests are explicitly audit-driven and self-documenting — H3 (bounded queue, max_depth + QueueFullError -> 503 + Retry-After), L1 (job_id regex guard -> 400 before key interpolation), M1 (time-bounded SSE ending 'event: timeout'), M2 (SMTP CR/LF header injection + recipient validation), L2 (SMTP password hidden from repr), P1 (package __all__ drift). Contracts pinned are precise: dual bare-array/envelope response on GET /jobs, exact 4-key status payload, SSE frame terminators, retry count of 3 with sleeps [0.1, 0.2], HMAC header name. Two gaps are consistent across files: no negative/concurrency coverage of the worker claiming the same job twice or two workers racing, and queue/notify tests reach into private names. test_worker_shutdown additionally mutates process-global SIGINT/SIGTERM handlers on the pytest main thread. No failing evidence in these files; all are source, none generated.
+
+**Cross-file observations:**
+- tests/test_jobs_router_hardening.py:86 asserts 'vrun-cafe1234\n' -> 400. Python's '$' also matches before a trailing newline, so this only holds if _validate_job_id uses re.fullmatch or \Z; if validsim/jobs.router uses re.match(r'^vrun-[0-9a-f]{8}$') the test fails (and a real key-injection vector stays open). Needs confirmation in the router.
+- tests/test_worker_shutdown.py:206-230 installs and restores real SIGINT/SIGTERM handlers by calling run_forever on the pytest MAIN thread. Any exception inside the loop, or a hard failure before the restore, leaves the worker's handlers installed for the rest of the session, and it contends with pytest's own SIGINT handler.
+- Pervasive coupling to private internals across the group: _event_stream, _validate_job_id, _DEFAULT_STREAM_TIMEOUT, queue._client, queue_mod._import_redis, worker._stop, email._build_message, and app.state.sse_poll_interval/_stream_deadline. These are refactor-fragile rather than behavior contracts.
+- tests/test_notify_enhancements.py:181 'assert results == [results[0]] and results[0].ok' is effectively a tautology — it only proves len==1 and truthiness; it does not assert the intended 'no retries performed' or that the secret/format arguments were inert in dry-run.
+- Duplication and brittleness: _FakeRedis is reimplemented in both test_jobs.py:54 and test_queue_depth.py:46 (the latter silently drops call recording), and a near-identical _scorecard() fixture exists in four notify files. Several assertions depend on encoder formatting — e.g. json.dumps(record.to_dict()) equality (test_jobs.py:280) and the literal frames 'event: timeout\n\n' / '"status": "queued"' — so a whitespace or key-order change breaks tests without a behavior change.
+
+| File | Kind | Summary |
+|---|---|---|
+| `tests/test_jobs.py` | test ✓ | 40 tests for the async job queue: models, in-memory backend, factory/backend selection, lazy redis-driver import, Redis backend via injected fake client, and the /jobs router. |
+| `tests/test_jobs_pagination.py` | test ✓ | 18 tests pinning GET /jobs dual contract: bare FIFO array with no params, {total,limit,offset,items} newest-first envelope when limit or offset is given. |
+| `tests/test_jobs_queue_full.py` | test ✓ | 6 tests for audit H3: POST /jobs must answer 503 (not 500) once max_depth is reached, with body {"error":"queue_full","max_depth":N} and a Retry-After header. |
+| `tests/test_jobs_router_hardening.py` | test ✓ | 12 test functions (~28 cases) for audit L1 (job_id shape guard -> 400 before the queue) and M1 (SSE stream must be time-bounded, ending in event: timeout). |
+| `tests/test_jobs_sse.py` | test ✓ | 6 tests for the compact status endpoint and the SSE events endpoint, streaming safely by pre-seeding already-terminal jobs. |
+| `tests/test_jobs_worker.py` | test ✓ | 9 tests for JobWorker: queued->running->done plus store persistence, backend failure -> failed with error captured and nothing persisted, empty-queue no-op, determinism, run_forever drain. |
+| `tests/test_notify.py` | test ✓ | 8 tests for WebhookDispatcher: dry-run by default with zero network, live mode capturing HTTP/transport errors instead of raising. |
+| `tests/test_notify_email.py` | test ✓ | 13 tests for EmailNotifier: dry-run default (no socket), live SMTP via a FakeSMTP capture, TLS/login behavior, error capture, scorecard body rendering, SmtpSettings env parsing. |
+| `tests/test_notify_email_security.py` | test ✓ | 14 tests for audited SMTP findings M2 (header injection) and L2 (password in repr), all validating before any message is built or recorded. |
+| `tests/test_notify_enhancements.py` | test ✓ | 13 tests for Slack block formatting, exponential retry backoff, and HMAC-SHA256 body signing on the webhook dispatcher. |
+| `tests/test_notify_integration.py` | test ✓ | 8 end-to-end tests driving the whole notify surface from one Scorecard: 3-hook dry-run dispatch, email HTML rendering, signature correctness, retry backoff, shared-card smoke test. |
+| `tests/test_notify_routing.py` | test ✓ | 22 tests for severity-based routing: severity_from_scorecard derivation plus min_severity gating of hooks, with default 'info' preserving send-to-everyone. |
+| `tests/test_package_exports.py` | test ✓ | 6 test functions (11 cases) guarding the validsim.engine and validsim.notify facades: __all__ present, non-empty, duplicate-free, alphabetized, and every name importable. |
+| `tests/test_queue_depth.py` | test ✓ | 15 tests for the max_depth cap (audit H3) on both backends, the QueueFullError type, VALIDSIM_JOB_QUEUE_MAX_DEPTH env override, and no-partial-write guarantees. |
+| `tests/test_worker_shutdown.py` | test ✓ | 8 tests for JobWorker graceful shutdown: SIGTERM/SIGINT handlers installed by default, stop() draining the in-flight job, previous handlers restored, off-main-thread skip, opt-out flag. |
+
+**Key points:**
+
+- `tests/test_jobs.py`
+    - _FakeRedis stand-in + _client_factory injection: no live Redis needed
+    - Factory: default memory, VALIDSIM_JOB_QUEUE case-insensitive, redis client lazy (_client is None)
+    - Duplicate run_id -> ValueError 'already exists'; update_status unknown -> KeyError
+    - Subprocess test proves import validsim.jobs works with sys.modules['redis']=None
+- `tests/test_jobs_pagination.py`
+    - Envelope activates on either param; defaults limit=100, offset=0
+    - Validation: limit 0 or 501 -> 422, offset<0 -> 422; 500/0 boundaries OK
+    - Offset slices newest-first; offset beyond total gives empty items with correct total
+    - Wired create_app checks prove the envelope survives the /api/v1 prefix
+- `tests/test_jobs_queue_full.py`
+    - Cap=2 fixture; enqueues up to cap return 202, cap+1 returns 503
+    - Retry-After header present and parses to an int >= 1
+    - Rejected enqueue is side-effect free: len(queue) and GET /jobs stay at cap
+    - Separate max_depth=1 case rejects the very second request
+- `tests/test_jobs_router_hardening.py`
+    - _validate_job_id must reject 10 malformed ids incl. 'index' and 'vrun-cafe1234\n'; accept 4 well-formed
+    - All three id routes (/jobs/{id}, /status, /events) give 400 malformed, 404 valid-unknown, 200 known
+    - _event_stream bounded by max_polls and by deadline; terminal job still ends 'event: end' with no timeout
+    - Route-level test overrides app.state.sse_poll_interval/_stream_deadline to finish in ms; asserts _DEFAULT_STREAM_TIMEOUT>0
+- `tests/test_jobs_sse.py`
+    - GET /jobs/{id}/status returns exactly {job_id,status,updated_at}
+    - done and failed jobs each emit one data: frame then end with 'event: end' as final frame
+    - Content-Type is text/event-stream; unknown id -> 404 before streaming begins
+- `tests/test_jobs_worker.py`
+    - _SpyBackend snapshots status on first episode to prove RUNNING is set before the pipeline runs
+    - Success: result == job_id, started_at/finished_at set, store gets a run with scorecard.episode_count == 20
+    - _RaisingBackend: status FAILED, error contains message, result None, len(store) == 0
+    - run_forever on a daemon thread reaches DONE within 2s and stops cleanly via worker.stop()
+- `tests/test_notify.py`
+    - autouse fixture deletes VALIDSIM_WEBHOOKS_LIVE so no test can go live
+    - httpx.post patched to raise AssertionError proves dry-run makes no request
+    - Results keep registration order, status_code/error None in dry-run; dispatcher.sent accumulates across dispatches
+    - Live: 204 -> ok; 500 -> not ok with '500' in error; ConnectionError -> not ok, status_code None
+- `tests/test_notify_email.py`
+    - FakeSMTP records host/port/starttls/login/sendmail; default port 587, TLS on, login only when username set
+    - Raw MIME is re-parsed with email.message_from_string to verify Subject/From/To and both text+HTML parts
+    - Missing VALIDSIM_SMTP_HOST and ConnectionError both return ok=False with error text, never raise
+    - Empty recipient list -> ValueError matching 'recipient'; scorecard_email_body embeds score, decision, <style>
+- `tests/test_notify_email_security.py`
+    - 5 CR/LF subjects rejected with ValueError 'CR or LF' in dry-run and live; notifier.sent stays empty
+    - Monkeypatching _build_message to raise proves the guard runs before message assembly
+    - 10 bad recipients rejected ('invalid recipient') incl. CRLF, comma smuggling, angle brackets, 'a@example', 'a@@example.com'; 4 valid ones accepted
+    - SmtpSettings repr()/str() omit the password while keeping host/username; password still readable as an attribute
+- `tests/test_notify_enhancements.py`
+    - format_slack_blocks yields 3 blocks (header/section/...), 'BLOCK' adds :no_entry:, empty dict does not crash
+    - format='slack' sends {"blocks":...} over the wire; default 'json' sends the raw scorecard; format='xml' -> ValueError
+    - Retries capped at 2 (3 total calls) for both transient and permanent failures; sleeps == [0.1, 0.2]
+    - X-ValidSim-Signature equals an independently computed HMAC-SHA256 of the exact bytes; absent without a secret; body bytes stable across retries
+- `tests/test_notify_integration.py`
+    - slack+json+HMAC hooks all fire in dry-run; results carry .url and preserve registration order
+    - send_scorecard renders HTML through scorecard_to_html (spied, not altered); email body == direct export render
+    - Only the secret-bearing hook gets X-ValidSim-Signature; tampering one trailing byte changes the HMAC
+    - Both dry-run paths wired to loud-raise stubs for httpx.post and smtplib.SMTP, so zero I/O is provable
+- `tests/test_notify_routing.py`
+    - BLOCK below threshold -> critical, BLOCK at/above -> warn, APPROVE -> info even at score 10, {} -> info; decision case-insensitive/trimmed
+    - Non-numeric or None scores fall back to composite 0.0 / threshold 85.0 rather than crashing
+    - Routing matrix: info reaches only info hooks, warn reaches info+warn, critical reaches all; eligible order follows registration
+    - register(min_severity='fatal') -> ValueError; live-mode tests assert skipped URLs never appear in posted list
+- `tests/test_package_exports.py`
+    - Regression guard for audit P1 (declared surface drifting from real attributes)
+    - Required exports: engine MetricComparison/render_scorecard_pdf/scorecard_pdf_bytes; notify SmtpSettings/severity_from_scorecard
+    - Identity checks confirm re-exports are the very objects from engine.benchmark/engine.pdf/notify.email/notify.dispatcher
+    - jobs and other packages are not covered by this guard
+- `tests/test_queue_depth.py`
+    - Default cap is 1000 on both JobQueue and RedisJobQueue; max_depth <= 0 -> ValueError
+    - Duplicate run_id raises the more specific ValueError even when the queue is full
+    - Redis path: rejected enqueue leaves validsim:jobs:index unchanged and the overflow key absent
+    - Env override respected, explicit argument wins, whitespace tolerated, non-numeric -> ValueError
+- `tests/test_worker_shutdown.py`
+    - _FakeSignalRegistry swaps worker_module.signal.signal so handlers can be invoked directly
+    - Handler delivery mid-episode: thread returns promptly, job reaches DONE and is persisted, handlers restored
+    - Real signal.signal off the main thread raises ValueError that run_forever must swallow (errors == [])
+    - install_signal_handlers defaults to True (via inspect.signature) and False makes zero calls into the signal module; stop() wakes a 5s idle wait in <1s
+
+### tests-sim-scenarios (11/11 read)
+
+All 11 files read in full: 188 test functions, all offline (httpx.MockTransport, fake providers, monkeypatched smtplib) — no GPU, socket or LLM call. Three clusters: (1) Isaac worker adapter — test_isaac_worker.py (40) pins the single-episode wire contract, test_isaac_batching.py (16) extends it to run_episodes (one POST per batch, per-member contract checks, empty batch must not even build a client); test_sim_factory.py (15) proves VALIDSIM_BACKEND is honored through API/CLI/JobWorker. (2) Scenario generation — rule generator (test_scenarios.py 11, test_runner.py 13), newer difficulty_bias/coverage (test_scenarios_difficulty.py 16), LLM generator + category top-up (30), and a pinned-seed fuzz sweep (12) asserting the LLM path never raises and always returns n valid scenarios. (3) Shadow-run + email (35): tolerance comparison, contract violations recorded not raised. Overall the group is unusually rigorous about negatives, determinism and env isolation. Main weaknesses are coupling to production internals (private _build_payload/_post_run, _BASE_DIFFICULTY/_PARAM_SAMPLERS/_clamp, _build_message, _extract_json_array, _client), a positional index into reference_contract_cases() guarded only by len>=2, and substantial duplicated fixtures/coverage across files. Statistical assertions are seeded so reproducible, not flaky.
+
+**Cross-file observations:**
+- Latent IndexError: tests/test_shadow.py:384 does reference_contract_cases()[2] with a comment 'the 3-episode batch case', but the only length guarantee anywhere is len(cases) >= 2 — shipping two cases breaks the suite at collection-of-assertion time. Same positional coupling in test_detects_unknown_field/misaligned_seed which assume index 0.
+- Heavy duplication: FakeProvider + scenario_obj are re-implemented in test_llm_generator.py, test_llm_coverage.py and test_scenarios_fuzz.py; _episode_json/_backend/_ok in both isaac files; _episode_json/_reply/_task/_runner in both shadow files; test_isaac_worker.py TestFactory duplicates test_sim_factory.py TestCreateBackendFactory; test_shadow_email_paths.py re-tests the tolerance-just-below case and reference-case validity already covered in test_shadow.py — its docstring claim of targeting 'currently-thin' paths is only partly true.
+- Deep private-API coupling makes refactors expensive: _build_payload/_post_run (test_isaac_worker.py:203-208), backend._client is None, ScenarioGenerator's _BASE_DIFFICULTY/_PARAM_SAMPLERS/_clamp with a hand-rebuilt RNG draw order (test_scenarios_difficulty.py:29-45), llm_mod._PROMPT_VERSION and _extract_json_array, email_mod._build_message, runner._mock. The re-implemented reference generator can silently agree with or diverge from production rather than test behaviour.
+- Inconsistent coercion policy is pinned by tests but undocumented: LLM difficulty is clamped/defaulted ('hard'->0.5, 5.0->1.0) while a non-string or whitespace name silently drops the item and non-dict params coerce to {}; the rule generator clamps to [0.05,0.95] but the LLM path accepts [0,1]. Also test_scenarios_fuzz.py feeds NaN/Infinity via json.dumps (non-standard JSON accepted only because CPython parses it), so that 'hostile input' coverage is narrower than it reads.
+- Env isolation is hand-rolled instead of centralized: autouse _clean_env exists in test_isaac_worker.py, test_shadow.py, test_shadow_email_paths.py and test_sim_factory.py but is absent from test_isaac_batching.py, which constructs the same IsaacWorkerBackend and passes **kwargs (so an ambient VALIDSIM_ISAAC_WORKER_KEY would be picked up). tests/conftest.py is untracked/new and should own these fixtures; test_shadow_email_paths.py also patches the shared global smtplib.SMTP rather than a module-local reference.
+
+| File | Kind | Summary |
+|---|---|---|
+| `tests/test_isaac_batching.py` | test ✓ | 16 tests for IsaacWorkerBackend.run_episodes (multi-episode POST /episodes/run) over httpx.MockTransport: batching, per-member contract checks, empty-batch no-op. |
+| `tests/test_isaac_worker.py` | test ✓ | 40 tests pinning the Isaac worker wire contract (docs/isaac-worker.md): field mapping, auth, config, mismatch errors, transport retry, health probe, create_backend factory. |
+| `tests/test_llm_coverage.py` | test ✓ | 9 tests that LLMScenarioGenerator tops up missing ADVERSARIAL_CATEGORIES from the rule fallback before filling remaining count, and records last_run_diagnostics. |
+| `tests/test_llm_generator.py` | test ✓ | 21 tests for LLM scenario generation offline: clean/fenced JSON parsing, difficulty clamping, category validation, retry+fallback, prompt content, OpenAICompatibleProvider HTTP, factory. |
+| `tests/test_runner.py` | test ✓ | 13 tests for MockIsaacBackend and run_validation: determinism per seed, seed-divergence, base success rate, randomization lowering, failure taxonomy, stable_seed. |
+| `tests/test_scenarios.py` | test ✓ | 11 tests for the rule-based ScenarioGenerator: 12-category taxonomy identity, cycling order, per-(seed,task_id) determinism, id uniqueness, dataclass validation. |
+| `tests/test_scenarios_difficulty.py` | test ✓ | 16 tests for the newer difficulty_bias and coverage() additions, guarding that default output stays byte-identical to the pre-bias formula via a re-implemented reference RNG. |
+| `tests/test_scenarios_fuzz.py` | test ✓ | 12 property-style fuzz tests (no hypothesis) sweeping 150 seeded iterations for the rule generator and 80 for 10 hostile LLM payload factories; asserts no raise, exactly n valid scenarios. |
+| `tests/test_shadow.py` | test ✓ | 24 tests for ShadowRunner: mock-vs-worker success-rate tolerance comparison, contract violations recorded never raised, batch plumbing, reference contract cases, serialization. |
+| `tests/test_shadow_email_paths.py` | test ✓ | 11 tests filling claimed gaps: ShadowRunner missing-required-field and exact tolerance boundary, self-validating reference contract cases, and EmailNotifier's live SMTP branch. |
+| `tests/test_sim_factory.py` | test ✓ | 15 tests that create_backend() maps VALIDSIM_BACKEND (mock/unset/unknown/empty -> MockIsaacBackend, isaac -> IsaacWorkerBackend) and that API, CLI run, CLI worker and JobWorker all route through it. |
+
+**Key points:**
+
+- `tests/test_isaac_batching.py`
+    - Asserts a batch of N is one POST and results keep base_seed+i order and episode_id
+    - Contract breaks: wrong count, misaligned seed echo, missing field 'episodes[1]', bad failure_mode taxonomy, level echo, non-JSON
+    - test_empty_batch_no_ops_without_network asserts backend._client is None (never built) and run_episode still sends episodes:1
+- `tests/test_isaac_worker.py`
+    - test_batch_reply_maps_seeded_run calls privates backend._build_payload(...)/_post_run(payload) and feeds a raw dict scenario
+    - Asserts joint_states_summary['dof'] == 7.0 (float) from JSON int, i.e. parser coerces to float; bool rejected as number
+    - TestFactory here duplicates tests/test_sim_factory.py TestCreateBackendFactory (mock default, isaac, case-insensitive, unknown->mock)
+- `tests/test_llm_coverage.py`
+    - Diagnostics asserted as exact dict {'missing_categories': N, 'topup_from_fallback': M}; N measured on LLM output only, not final batch
+    - Top-ups follow canonical taxonomy order (ADVERSARIAL_CATEGORIES[:3]) when room < missing — coupled to taxonomy ordering
+    - FakeProvider([]) would IndexError (min(calls-1, -1)); only safe because generate(n=0) never calls the provider
+- `tests/test_llm_generator.py`
+    - Asymmetric coercion: difficulty 'hard'/None -> 0.5 and 5.0/-3.0 -> 1.0/0.0, but name=42 or '   ' DROPS the item; params non-dict -> {}
+    - Provider retries then falls back: max_retries=2 gives provider.calls==3; n<=0 returns [] without asking the model, negative raises ValueError
+    - Touches privates llm_mod._PROMPT_VERSION and llm_mod._extract_json_array; OpenAICompatibleProvider tested by monkeypatching llm_mod.httpx.Client
+- `tests/test_runner.py`
+    - run_validation drives one POST per episode (assert len(seen)==4) and seeds are unique/sequential from the base seed
+    - Statistical pins: 800 episodes rate in (0.83,0.96); adversarial rate < nominal-0.1 over 600+120 episodes
+    - pytest is imported inside test_bad_base_rate_rejected (no module-level pytest import)
+- `tests/test_scenarios.py`
+    - [s.category] == list(ADVERSARIAL_CATEGORIES) at n=12 and category == CATEGORIES[i % 12] for n=25: generation is pure cycling, not weighted
+    - params non-empty, difficulty in [0,1], name startswith category[:4].title()
+    - AdversarialScenario rejects difficulty=1.5 and unknown category with ValueError
+- `tests/test_scenarios_difficulty.py`
+    - _reference_difficulties re-implements production RNG order (jitter then per-category sampler) using private _BASE_DIFFICULTY/_PARAM_SAMPLERS/_clamp, and compares rounded floats for exact equality
+    - difficulty clamped to [0.05,0.95] at every bias; bias=±1.0 must hit both clamp bounds; bias outside [-1,1] rejected
+    - coverage(n) sums to n, all 12 keys always present, agrees with generate() counts; NaN/extreme bias values untested
+- `tests/test_scenarios_fuzz.py`
+    - All randomness pinned by MASTER_SEED=0x5CE0F00 so runs are reproducible; source is never modified
+    - _MUST_FALL_BACK set (by function __name__) asserts fallback_used for unusable payloads; n=0 never fuzzed (n>=1)
+    - Relies on json.dumps emitting non-standard NaN/Infinity, so CPython leniency is tested rather than real model output; LLM band is [0,1] while rule band is [0.05,0.95]
+- `tests/test_shadow.py`
+    - ShadowReport is a frozen dataclass with field order pinned: worker_ok, mock/worker_success_rate, delta, contract_violations, passed
+    - Any worker break -> worker_ok False and worker_success_rate exactly 0.0 (whole batch discarded), passed False, violations list non-empty
+    - line 384 hard-codes reference_contract_cases()[2] as 'the 3-episode batch case' while the only length assertion is >= 2
+- `tests/test_shadow_email_paths.py`
+    - smtplib.SMTP faked by monkeypatching 'validsim.notify.email.smtplib.SMTP' — a process-wide patch of the real smtplib module, restored at teardown
+    - STARTTLS fires only for VALIDSIM_SMTP_TLS=1, login only with user+password; sendmail called once with (from, vetted recipients, _build_message(...).as_string())
+    - Several tests re-cover test_shadow.py (tolerance-just-below, reference cases valid); docstring's 'under-covered' framing is partly inaccurate
+- `tests/test_sim_factory.py`
+    - Wiring proved by monkeypatching module-level run_validation and capturing the backend argument; stub delegates to a throwaway MockIsaacBackend so no network
+    - IsaacWorkerBackend construction is side-effect free; missing URL raises ValueError only at run_episode/is_alive, not at create_backend
+    - JobWorker honours env default but an explicitly injected backend wins (record['backend'] is injected); CLI worker asserts create_backend called exactly once
+
+### tests-store (8/8 read)
+
+Eight test files (~118 cases) cover the three ValidationStore backends (memory, SQLite, Postgres) as a contract suite: save/get/list_for_checkpoint/history/count/delete/close, plus create_store() env factory. Postgres tests are driver-absent-safe: they inject a _conn_factory fake capturing SQL, asserting parameterized placeholders (value never interpolated), whitelisted table identifiers, 12-%s INSERT, deferred connection, and 5 ALTER TABLE ADD COLUMN migrations; a live integration class gates on VALIDSIM_PG_URL. Memory/SQLite are exercised against real state with tmp_path and reopen-persistence checks. Helpers (_scorecard/_run builders, make_store fixture) are duplicated per file. Tests document deliberate behaviors: lexicographic inclusive date filtering on fixed-format ISO stamps, first-write-wins (ON CONFLICT DO NOTHING) for Postgres, legacy scorecard-only row fallback reconstructing an approximated EvaluationResult. Strengths: SQL-injection guard tests, raw-vs-decoded JSONB handling, dataclass-equality full-detail round-trips. Weaknesses: duplicated fake seams and cross-backend save-semantics divergence.
+
+**Cross-file observations:**
+- Cross-backend save divergence: SQLite/memory overwrite an existing run_id while Postgres uses ON CONFLICT DO NOTHING (first write wins); count tests claim 'overwrite does not increase count' for all backends, so re-save semantics are inconsistent.
+- _FakeCursor/_FakeConnection mocks copy-pasted across 4 files (count, delete, filters, postgres) with drift; untracked tests/conftest.py exists but the fakes are not shared.
+- _iso() in test_store_concurrency would emit invalid ISO stamps (minute>59) if total writes exceed ~3600; latent fragility at current 800.
+- test_store_memory thread test joins with timeout=30 but never checks is_alive(); a deadlock surfaces only as len() mismatch, unlike the barrier pattern in the concurrency file.
+- test_store_postgres asserts isinstance(store, ValidationStore) for the Postgres backend implying it subclasses the memory class for interface; also missing the __main__ runner block the other files have.
+
+| File | Kind | Summary |
+|---|---|---|
+| `tests/test_store_concurrency.py` | test ✓ | Barrier-released ThreadPoolExecutor hammering of memory + SQLite stores: no lost updates, checkpoint filtering under contention, concurrent writes survive close/reopen with full scorecard round-trip. |
+| `tests/test_store_count.py` | test ✓ | count() contract across all three backends: tracks saves, matches len(), overwrite-safe, delete-aware; Postgres asserted via fake _conn_factory checking exact SELECT COUNT(*) FROM <table> and params=(). |
+| `tests/test_store_delete.py` | test ✓ | delete() returns True/False for known/unknown ids, idempotent double-delete, persists across SQLite reopen; Postgres fake checks parameterized DELETE (value not interpolated) and rowcount-derived result. |
+| `tests/test_store_factory.py` | test ✓ | create_store() env-driven selection: VALIDSIM_STORE=memory default, sqlite (case-insensitive) with VALIDSIM_SQLITE_PATH or default 'validsim.db'; autouse fixture scrubs env. |
+| `tests/test_store_filters.py` | test ✓ | history(since/until) date filtering: shared 7-case param table run against real memory+SQLite filtering (inclusive lexicographic ISO bounds); Postgres fake asserts %s placeholders, AND-combined bounds, no interpolation. |
+| `tests/test_store_memory.py` | test ✓ | In-memory store: vrun-XXXXXXXX hex id format/uniqueness, save/get identity round-trip, overwrite, oldest-first ordering, 8-thread concurrency, close-is-noop, summary() dict shape incl. baseline_run_id. |
+| `tests/test_store_postgres.py` | test ✓ | Driver-absent-safe Postgres tests: table-name whitelist rejects injection, DSN resolution, lazy connect, 12-placeholder INSERT with ON CONFLICT DO NOTHING, full-detail 6-col round-trip incl raw-JSON and legacy-row fallback; live class skips unless VALIDSIM_PG_URL. |
+| `tests/test_store_sqlite.py` | test ✓ | SQLite store: scorecard exact round-trip (CI tuple, floats), overwrite semantics, oldest-first queries, persistence across reopen, full-detail (episodes/evaluation/safety/baseline/regression) round-trip, legacy-schema migration, raw SQL check of indexed cols vs blobs. |
+
+**Key points:**
+
+- `tests/test_store_concurrency.py`
+    - 16x50 memory saves assert no lost updates
+    - SQLite two-checkpoint contention + reopen persistence
+    - _submit_all collects all worker exceptions
+- `tests/test_store_count.py`
+    - count==len across backends
+    - Postgres SQL: 'SELECT COUNT(*) FROM validations'
+    - table identifier interpolated but validated
+- `tests/test_store_delete.py`
+    - double-delete second returns False
+    - SQLite deletion survives reopen
+    - DELETE uses %s placeholder only
+- `tests/test_store_factory.py`
+    - default is pure ValidationStore not Sqlite
+    - backend name case-insensitive
+    - sqlite default path resolves in cwd
+- `tests/test_store_filters.py`
+    - inclusive bounds via lexicographic ISO compare
+    - Postgres: created_at >= %s AND <= %s
+    - value never present in SQL text
+- `tests/test_store_memory.py`
+    - new_run_id regex [0-9a-f]{8} after vrun-
+    - save returns same object identity
+    - close() is no-op, store stays usable
+- `tests/test_store_postgres.py`
+    - table name validation blocks SQL injection
+    - first write wins (ON CONFLICT DO NOTHING)
+    - legacy single-column row reconstructs approximated eval
+- `tests/test_store_sqlite.py`
+    - confidence_interval tuple restored exactly
+    - pre-detail schema migrates in place
+    - scorecard_json/episodes_json stay queryable
+
+### vault-engineering (11/11 read)
+
+PLACEHOLDER
+
+**Cross-file observations:**
+- Async Job Queue.md contradicts shipped docs on three axes: JobStatus lifecycle (evaluating/reported vs 4-state), POST /validations return semantics (202 fire-and-forget vs sync 201 per API & CLI.md and Data Flow.md), and the /jobs request body shape (validation_id/checkpoint vs checkpoint_id/task_id per API Design.md). The Worker doc added a warning callout but the queue doc itself was never updated.
+- Security Hardening.md is internally inconsistent: section 4 header says '⚠️ fix in progress', the Verification status section says 'the compose file currently still carries the dev fallback', yet the Resolved (2026-09-20) callout states the fallback was removed from every service. Stale trailing text.
+- API & CLI.md claims to be the consolidated v1 reference but omits endpoints API Design.md documents as implemented: DELETE /validations/{id}, /jobs router, scorecard .md/.html renderers, /metrics. Conversely API Design.md lists POST /webhooks, GET /audit-log, POST /deployment-gate that no other doc or the consolidated reference confirms.
+- GitHub Actions Integration.md reference workflow still shows blueprint inputs (fail-below-score, adversarial-scenarios, run-id output wiring) that CLI Design.md's week-1 warning explicitly marks as never implemented; the CI doc was not reconciled with shipped action semantics.
+- Aspirational vs shipped gaps: Module Specs M1 and Tech Stack list RabbitMQ/gRPC/Argo as components while health metrics only know memory/redis/sqlite/postgres backends; Job Queue Worker.md flag table omits --watch/--max-jobs that CLI Design.md lists; Data Flow.md names a nonexistent 'validsim validate' command.
+- Security Hardening.md contradicts itself: §4 carries a 'Resolved (2026-09-20)' callout saying the dev password fallback was removed, but 'Verification status' at the bottom still states 'the compose file currently still carries the dev fallback.' Verified against docker-compose.yml: it uses ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD} with no fallback, so the Verification-status line is stale and should be removed.
+- Threshold inconsistency across docs: Job Queue Worker.md sets _DEFAULT_THRESHOLD = 85.0 while GitHub Actions Integration.md uses fail-below-score: 80 in its reference workflow. Both cite Module Specs composite scoring but no doc reconciles the two default gate values.
+- Module Specs / Tech Stack / Solution Architecture describe a full production stack (Isaac Sim GPU, gRPC+protobuf, RabbitMQ, Kubernetes 1.29, Argo, Cosmos, TimescaleDB, Auth0) that the Job Queue Worker note contradicts — the shipped worker is a CPU/mock-backend consumer on a memory-or-Redis FIFO with no priority/lease. Docs mix target-state and shipped-state without always labeling which.
+- Job Queue Worker.md references an 'evaluating → reported → gate:*' lifecycle as existing in [[Async Job Queue]] but notes the shipped enum collapses it to four states; consumers must be documented against the four-state set — a naming/spec drift risk between the two linked notes.
+- Redis depth-cap correctness claim in Job Queue Worker.md (reads LLEN under the same lock as SET/RPUSH) protects only against a single process racing itself; it does not bound total depth across multiple worker/API processes sharing one Redis, which the distributed-rate-limiting roadmap item in Security Hardening.md implicitly acknowledges as a known gap.
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/04 - Engineering/API & CLI.md` | doc ✓ | Consolidated v1 API+CLI reference: 11 endpoints (health, validations CRUD-lite, scorecard/PDF, failures, compare, models, history, regressions), pagination envelopes, X-API-Key auth, CORS env, and CLI command table with gate/store-vs-cache semantics. |
+| `vault/04 - Engineering/API Design.md` | doc ✓ | Full REST surface incl. async /jobs router (202, SSE with 60s deadline, queue-full 503+Retry-After), DELETE /validations with destructive-auth gate, .md/.html/.pdf scorecard renderers, /metrics Prometheus mount, IP-keyed sliding-window rate limiter. |
+| `vault/04 - Engineering/Async Job Queue.md` | doc ✓ | Design note making submission fire-and-forget via memory/Redis queue (VALIDSIM_JOB_QUEUE, VALIDSIM_REDIS_URL); defines JobSpec/JobStatus/JobRecord dataclasses and before/after table. Content is stale versus shipped behavior. |
+| `vault/04 - Engineering/CLI Design.md` | doc ✓ | Typer CLI surface: implemented commands (job enqueue/jobs/worker/report/gate/delete/models/compare/version) with backing calls and exit-code contracts, clearly separated from a week-1 blueprint sketch flagged as partly never shipped. |
+| `vault/04 - Engineering/Data Flow.md` | doc ✓ | Six-step run lifecycle (SUBMIT→QUEUE→SIMULATE→EVALUATE→REPORT→DEPLOY) plus async submission flow diagram; documents shared run_and_score pipeline, hash-chained audit trail as compounding asset, and latency budget (<1h total). |
+| `vault-dir placeholder` | other ✗ | unused placeholder |
+| `vault/04 - Engineering/GitHub Actions Integration.md` | doc ✓ | Reference GitHub Actions workflow (validate-action@v1 + scorecard-action@v1) that gates robot-policy merges; defines fail-below-score semantics and CI-variant roadmap. |
+| `vault/04 - Engineering/Job Queue Worker.md` | doc ✓ | Spec for JobWorker (validsim/jobs/worker.py): FIFO claim, delegates to shared run_and_score pipeline, 4-state lifecycle, docker worker service, queue depth-cap (H3) and SSE deadline (M1) hardening. |
+| `vault/04 - Engineering/Module Specs.md` | doc ✓ | Five core modules M1–M5 with sprint weeks: ingestion/orchestration, Isaac simulation engine, LLM adversarial generator (12 categories), scoring engine (composite 40/30/20/10), reporting/compliance. |
+| `vault/04 - Engineering/Security Hardening.md` | doc ✓ | Audit findings/fixes: constant-time API-key auth, env CORS allow-list, HMAC-SHA256 webhooks, required POSTGRES_PASSWORD, SSL-mode guidance, and remaining roadmap (per-client keys, distributed rate limit, urdf_path validation). |
+| `vault/04 - Engineering/Solution Architecture.md` | doc ✓ | Five-layer topology (ingestion→sim→scoring→reporting→integration) plus shared run_and_score pipeline for API/CLI/worker, cross-cutting observability (request-id, structured logs, Prometheus), store prune/range ops, decisions table, scale envelope. |
+| `vault/04 - Engineering/Tech Stack.md` | doc ✓ | §6 full stack table (Isaac Sim 4.x, PhysX 5, FastAPI, Redis 7, Postgres 16+Timescale, K8s/Argo, Next.js 14, Auth0/Stripe…), DGX Cloud infra diagram, and compute economics ($100K credits, $3.50/A100-hr +20% margin). |
+
+**Key points:**
+
+- `vault/04 - Engineering/API & CLI.md`
+    - POST /validations is 201 synchronous against mock backend; newest-first list with total/limit/offset
+    - gate exits 0/1/2 and reads durable store, never forgeable JSON cache; --run-id XOR --latest
+    - CORS via VALIDSIM_CORS_ORIGINS, default *; API key read once at create_app()
+- `vault/04 - Engineering/API Design.md`
+    - Job ids share vrun-<8hex> shape; malformed id rejected 400 pre-queue; SSE bounded 60s with end/timeout frames
+    - Rate limiter keyed on client IP only, write routes only; 0=disabled default; X-Request-ID correlation
+    - Lists webhooks/audit-log/deployment-gate endpoints not confirmed by the API & CLI consolidated doc
+- `vault/04 - Engineering/Async Job Queue.md`
+    - JobStatus enum shown as queued/running/evaluating/reported/failed — Worker doc says shipped enum is 4-state
+    - Claims POST /validations becomes 202 fire-and-forget; shipped API keeps it sync 201
+    - Example job body uses validation_id/checkpoint/task_config, not API Design's checkpoint_id/task_id
+- `vault/04 - Engineering/CLI Design.md`
+    - Blueprint warning: validsim ci, --fail-below, --randomization, scorecard --format pdf never implemented
+    - gate exits 2 on VALIDSIM_STORE=memory; only exact stored APPROVE approves; --threshold only tightens
+    - worker supports --once/--watch/--max-jobs/--poll-seconds; --latest resolves vs cache except gate vs store
+- `vault/04 - Engineering/Data Flow.md`
+    - All surfaces execute identical run_and_score sequence; queue result and StoredRun share one run_id key
+    - MVP envelope 1,000–5,000 episodes <30 min on 4×A100; scorecard <5 min; total wait <1 hour
+    - Step 1 mentions a CLI 'validate' command that appears in neither CLI doc
+
+### vault-product (7/7 read)
+
+The vault-product group is seven complete, tightly cross-linked markdown notes (created 2026-09-18, status: complete) defining ValidSim's product layer. Core thesis: a cloud validation platform where an ML engineer submits a VLA checkpoint (GR00T/pi0 on Franka Panda, tabletop bin picking in Isaac Lab) and gets a defensible scorecard in <1 hour with zero config. MVP scope is deliberately one stack, one benchmark, 1,000–5,000 episodes, 6+ domain-randomization axes, 50–100 GPT-4o-generated adversarial scenarios, composite score weighted 40/30/20/10 (success/safety/robustness/regression). Nine explicit non-goals (multi-embodiment, HIL, ISO compliance generation, fleet gating, billing, ROS 2, Cosmos, SSO) each carry a dated return path tied to pricing tiers. Six product principles enforce bootstrap 95% CIs on every metric, actionable failures (video + taxonomy + fix suggestion), approve/block as first-class decisions, and developer-native CLI/API/GitHub Actions entry. User flows cover sync validation, an async job queue (job id == run id, SSE with 60s timeout, 503 queue_full + Retry-After), a nightly adversarial sweep CI workflow (2,000+200 episodes, gate --latest exits 1 on block, SQLite durable store), run deletion with 401-before-404 auth ordering, and dashboard surfaces (job queue panel, trends, failure taxonomy). Five personas form one buying committee with the ML Engineer as wedge and the CTO/compliance roles consuming outputs. Docs are internally consistent; heavy wiki-link usage references many notes outside this group (8-Week Sprint Plan, Module Specs, Data Flow, Pricing Tiers, etc.).
+
+**Cross-file observations:**
+- Endpoints cited (POST /api/v1/jobs, /status, /events, DELETE /validations/{id}, /dashboard/history) are specified in detail in Core User Flows — worth verifying against validsim/api/main.py in the engineering group
+- Minor inconsistency: Product Vision capability 1 claims 1,000–100,000 episodes/run while MVP Scope and Flow 1 cap at 1,000–5,000 (vision figure is aspirational horizon, not MVP)
+- Core User Flows admits a gap: Flow 5 (run deletion) has no CLI command and no dashboard button — API-only, flagged as 'curl away'
+- Flow 3 (Compliance Report, ISO format) is referenced by the Compliance Officer persona and Product Principle 5 but is explicitly out of MVP per Non-Goals; MVP ships only a branded PDF — personas may overstate current capability
+- Env vars named across docs (VALIDSIM_JOB_QUEUE=memory|redis, VALIDSIM_STORE=sqlite) should match .env.example; memory queue is per-process so enqueue+worker need Redis to share
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/03 - Product/Core User Flows.md` | doc ✓ | Maps 5 user flows (Submit&Validate, Async job queue, Deployment Gate, Compliance Report, Nightly Sweep, Run deletion) plus dashboard surfaces onto personas, endpoints, and sprint weeks. |
+| `vault/03 - Product/MVP Non-Goals.md` | doc ✓ | Scope-defense doc listing nine exclusions from MVP (multi-embodiment, HIL, ISO compliance gen, fleet gating, custom physics, billing, ROS 2 bridge, Cosmos, SSO/RBAC) each with rationale and return path tied to a revenue tier. |
+| `vault/03 - Product/MVP Scope.md` | doc ✓ | Defines the MVP wedge: one VLA stack (GR00T/pi0) on Franka Panda tabletop bin picking in Isaac Lab, expressed as an 8-step pipeline with sprint weeks, plus definition-of-done checklist and scope guardrails. |
+| `vault/03 - Product/Product Principles.md` | doc ✓ | Six non-negotiable product principles (zero-config, statistical rigor, actionable failures, deployment gating, compliance-ready, developer-native) with conflict-resolution table. |
+| `vault/03 - Product/Product Vision.md` | doc ✓ | Vision statement ('submit checkpoint, receive defensible scorecard, deploy with confidence'), five product capabilities, horizon roadmap (MVP→Year 1-2→Year 3 standard), and what 'defensible' means. |
+| `vault/03 - Product/Scorecard UX.md` | doc ✓ | Specs the scorecard screen: ASCII wireframe, element-by-element anatomy with data sources and design rules, four interaction states, and downstream output formats (PDF/JSON/PR comment/audit trail). |
+| `vault/03 - Product/User Personas.md` | doc ✓ | Five personas (ML Engineer wedge, Robotics Lead, Fleet Operator, CTO/VP Eng, Compliance Officer) with pain/goal/frequency table, deep-dives mapping each to a product surface and pricing tier. |
+
+**Key points:**
+
+- `vault/03 - Product/Core User Flows.md`
+    - Flow 1 target: checkpoint→scorecard <1hr, zero config; sync POST /validations holds socket 15–45 min for 5,000 episodes
+    - Async Flow 1b: POST /jobs returns 202, job id == run id (vrun-+8hex), SSE stream with 60s timeout event, queue_full returns 503+Retry-After:5
+    - Flow 5 DELETE /validations/{run_id} checks 401 before 404, requires VALIDSIM_API_KEY, no CLI delete command yet
+- `vault/03 - Product/MVP Non-Goals.md`
+    - Meta-rule: MVP optimizes only Flow 1 (Submit & Validate); Flows 2 and 3 exist in architecture but not product
+    - Every exclusion has a dated return path (Post-MVP/Year 1-2/Year 2) tied to pricing tiers
+    - Named risk: 'Scope creep beyond the single wedge task' from the 90-Day Roadmap
+- `vault/03 - Product/MVP Scope.md`
+    - 8-step pipeline: 1,000–5,000 episodes, 6+ domain-randomization axes, <30 min on 4x A100, 50–100 LLM adversarial scenarios (GPT-4o), composite 40/30/20/10 score
+    - Only growth axis allowed during sprint: more episodes/scenarios/better stats — never more robots, tasks, or integrations
+    - DoD includes branded PDF scorecard, 1-minute demo video with both founders, blog post by Week 8
+- `vault/03 - Product/Product Principles.md`
+    - Principle 2: every metric needs bootstrap 95% CI; '94% success' without episode count+CI is a bug
+    - Conflict resolution: inconclusive gate state when CI too wide — never gate on noise; rigorous defaults (5,000 episodes, full randomization)
+    - Principle 4: gate is a decision not a report — validsim gate exits non-zero on block; gating stickiness drives NRR >120% target
+- `vault/03 - Product/Product Vision.md`
+    - Year 3+ ambition: become the de-facto robot safety evidence standard for Tier-4 buyers
+    - 'Defensible' bar: 95% CIs on every metric, hash-chained immutable audit trail, episode-level reproducibility (video/joints/forces/contacts)
+    - Resisted temptation: building 9 embodiments/5 task libs instead of 1 stack + 1 task with a real external user by week 6
+- `vault/03 - Product/Scorecard UX.md`
+    - Composite = 40% success + 30% safety + 20% robustness + 10% regression; safety always 0–100, never letter grades
+    - Regression display mandates p-values (p=0.03 flags, p=0.08 hedges); 'Inconclusive' state when episodes insufficient for 95% CI
+    - Dashboard load target <2 seconds; Approve/Block are actions on this screen, not exports
+- `vault/03 - Product/User Personas.md`
+    - ML Engineer is the wedge: 5–20 runs/month, aha moment is the Slack ping with score and regression count
+    - Economic chain: 5–20 runs/mo/engineer × 10–50 engineers drives usage expansion toward NRR >120%
+    - Design rule: enterprise roles consume outputs (PDF/audit trail), not dashboards — engineer-first motion everywhere; personas to be validated in discovery calls
+
+### vault-strategy-market (12/12 read)
+
+ValidSim's strategy & market vault: 3 dashboard notes plus 9 strategy/market notes, all complete and internally coherent Obsidian markdown with frontmatter, dense cross-wikilinking, and a consistent \"GitHub Actions for robots\" thesis — a sim-to-real CI/CD gate between model checkpoint and fleet deploy, targeting YC W27 (Nov 2, 2026 8pm PT), scoring 8.7/10 (highest of seven bets), with a five-force \"why now\" and a four-tier buyer model. Numbers reconcile tightly across Why Now, Demand Signals, Market Sizing and Buyer Tiers ($27.6B 2025 VC, $3.92B FM funding/9 deals, $40.5B humanoid market 2033, $300M-$640M validation TAM, matching SAM segment tables). Home.md designates Key Figures as the sole owner of every number. The only real problems are in Build Status.md: it self-labels its history table stale/unverified (one non-producible \"1274 passed, 96% cov\" row, one FAIL so not 100% pass, chronologically disordered rows), and YC Countdown's 2026-09-19 log (\"338 tests\") is stale vs the newer 1328-test run. A flagged planning conflict: the 8-week sprint ending Nov 13 postdates the Nov 2 deadline. All 12 files read fully; folder name uses a raw \"&\" (\"02 - Problem & Market\").
+
+**Cross-file observations:**
+- Build Status.md is tagged auto_generated:true yet its build-history table contradicts its own Latest Run row and includes an explicitly-unverified last row ("1274 passed, 2 skipped, 96% cov — agent fleet waves 4-18") called not producible by scripts/build.ps1 (docs/ISSUE_CATALOG.md item 20).
+- Build Status.md history rows are out of chronological order: a 2026-09-20 row precedes a 2026-09-19 13:00 row; page also self-corrects an earlier "100% (last 13 runs)" claim because one FAIL run exists.
+- Cross-note staleness: YC Countdown progress log (2026-09-19) says "platform at 338 tests green" while Build Status reports a newer 1328-passed / 95.88%-coverage run — a dated log vs current state, but reads as a conflict if taken as latest.
+- Documented, unresolved planning tension in YC Countdown: the 8-Week Sprint Plan starting Sep 18 ends Nov 13, after the Nov 2 YC deadline; three options (compress sprints, submit Oct 26 at week-6 state, or target S27) are listed but none chosen.
+- Home.md's single-source rule (Key Figures owns all numbers) is largely honored — funding/market/sizing figures match across Why Now, Demand Signals, Market Sizing and Buyer Tiers — but Key Figures.md is outside this read group so the canonical values themselves were not verifiable here.
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/00 - Dashboard/Build Status.md` | doc ✓ | Auto-generated CI dashboard page (frontmatter auto_generated:true): latest run 2026-09-21 reports 1328 passed, 2 skipped, 95.88% coverage in 28.2s; also a build-history table, capability list, and agent-fleet section. |
+| `vault/00 - Dashboard/Home.md` | doc ✓ | Vault map-of-content: one-line pitch ("GitHub Actions for robots"), company facts (ValidSim, pre-seed, 2 founders, Delaware C-Corp, YC W27 target, 8.7/10 bet score), and section-by-section links to all other notes plus six usage rules. |
+| `vault/00 - Dashboard/YC Countdown.md` | doc ✓ | Deadline dashboard for YC W27 (Nov 2, 2026, 8pm PT): key dates, a 7-item traction checklist, a weekly countdown overlaid on the 8-week sprint plan, application rules of thumb, and a 2026-09-19 progress log entry. |
+| `vault/01 - Strategy/Company Identity.md` | doc ✓ | Core identity card: ValidSim working name, one-liner, category (DevOps for Robotics / Physical AI Infrastructure), pre-seed stage, accelerators, the one-sentence thesis, the CI/CD market analogy, and a we-are/we-are-not table. |
+| `vault/01 - Strategy/Strategic Advantages.md` | doc ✓ | Scorecard justifying the 8.7/10 composite (highest of seven evaluated frontier bets): six weighted criteria, seven numbered strategic advantages, and a table mapping each advantage to its execution venue and evidence artifact. |
+| `vault/01 - Strategy/Vision & Positioning.md` | doc ✓ | Vision ("submit a checkpoint, receive a defensible safety-and-success scorecard, deploy with confidence"), a formal positioning-statement table, an ASCII stack diagram of the checkpoint-to-deployment gap, a category-creation analogy table, and three positioning risks. |
+| `vault/01 - Strategy/Why Now (2026).md` | doc ✓ | Five converging timing forces: VC capital explosion, weekly/bi-weekly model shipping cadence, humanoid deployments going live, NVIDIA open-sourcing the simulation layer, and emerging compliance pressure; closes with urgency scores and a counter-falsification hedge. |
+| `vault/02 - Problem & Market/Buyer Tiers.md` | doc ✓ | Four-tier buyer segmentation with named companies, counts, annual spend and buying triggers (Tier 1 robot FM labs → Tier 4 insurers/regulators), ending with the MVP ICP and a five-segment summary table. |
+| `vault/02 - Problem & Market/Demand Signals.md` | doc ✓ | Five observable demand signals (VC funding, robot-FM funding, humanoid unit volumes, US manufacturing labor gap, China state policy) with supporting macro data, a discovery-call instrumentation checklist, and an explicit falsification list. |
+| `vault/02 - Problem & Market/Market Sizing (TAM SAM SOM).md` | doc ✓ | Sizing model: TAM derived from $40.5B humanoid market (2033) x 15-20% software share x 5-8% validation share = $300M-$640M; SAM $15M-$80M (2026) → $300M-$1B+ (2030) bottom-up; SOM $100K-$500K ARR year 1 to $5M-$10M year 3; plus investor analogy table. |
+| `vault/02 - Problem & Market/Pain Quantified.md` | doc ✓ | Seven pain points each carrying a dollar cost (bespoke tooling $200K-$500K/lab, downtime $10K-$100K/hr, blocked deals $500K-$5M, teleop $500K-$2M/yr, 2-5x insurance premiums), grouped into three sellable pain classes with willingness-to-pay anchors and discovery questions. |
+| `vault/02 - Problem & Market/Problem Statement.md` | doc ✓ | Canonical problem: robot foundation models update at software cadence but there is no CI/CD for machines that can cause physical harm; catalogs current validation practice plus the "three zeros", the physical-vs-digital asymmetry, a buyer-tier table, and a first-person buyer monologue. |
+
+**Key points:**
+
+- `vault/00 - Dashboard/Build Status.md`
+    - Latest run: 1328 passed, 2 skipped, 95.88% cov, 28.2s (2026-09-21)
+    - Self-declared warning: 2026-09-18/19/20 rows come from old builds/build-log.csv and are unverified (docs/ISSUE_CATALOG.md item 20)
+    - Pass rate corrected to not-100%: one FAIL row exists (2026-09-18 17:10:52, 1 failed/96 passed)
+    - History table rows out of chronological order: a 2026-09-20 row sits before a 2026-09-19 13:00 row
+- `vault/00 - Dashboard/Home.md`
+    - Rules Key Figures as the single owner of all numbers; a fact in two notes means one is wrong
+    - Build Status is regenerated by CI and never hand-edited; link to it, never write it
+    - Ends with a caution that an idea picked from this blueprint still needs 25 real customer conversations
+- `vault/00 - Dashboard/YC Countdown.md`
+    - YC terms stated: $500K = $125K for 7% + $375K uncapped MFN; ~1-2% acceptance on 30,000+ apps/batch
+    - Flags timeline tension: 8-week sprint starting Sep 18 ends Nov 13, after the Nov 2 deadline; 3 options listed, unresolved
+    - Traction gate: 25 discovery calls, 2-3 LOIs/paid pilots, 1-min demo video, 1 public artifact, 1 repeatable metric, C-Corp, Inception app
+    - Progress log 2026-09-19 says "338 tests green" — stale against Build Status's 1328-test latest run
+- `vault/01 - Strategy/Company Identity.md`
+    - Thesis: no productized CI/CD layer between "model checkpoint" and "deploy to fleet"
+    - Cites Physical Intelligence $5.6B and Skild AI $1.4B Series C at $14-15B valuation
+    - Software CI/CD was $0 in 2010 and is $10B+ now; robot CI/CD is $0 in 2026 (inflection-point framing)
+    - ValidSim used across all product surfaces (validsim run, validsim/validate-action@v1, validsim.com); alternatives RoboCI/PolicyGate/CheckpointAI kept until incorporation
+- `vault/01 - Strategy/Strategic Advantages.md`
+    - Criteria: Market 7, Urgency 9, White space 9, Feasibility 8, YC fit 9, NVIDIA Inception fit 10 → composite 8.7/10
+    - Advantages 1-3 (white space, NVIDIA fit, devtools narrative) decay; first-mover durability only 12-18 months
+    - Advantages 5-7 (recurring revenue, compliance tailwind, data flywheel) compound; the sprint plan converts decay→compound
+    - Inception row cites $100K DGX + $100K AWS + up to $150K Nebius credits
+- `vault/01 - Strategy/Vision & Positioning.md`
+    - Positioned as a cloud-native sim-to-real CI/CD platform running 1,000-100,000 parallel episodes
+    - Explicit anti-positioning: not a simulation company, not "ML testing", not anti-hardware
+    - Anchors: GitHub Actions (primary), Selenium/Cypress, MLflow/W&B, Vanta/Drata; Datadog-class is adjacent (Formant, Viam, not us)
+    - Differentiator claim: only massively parallel, physics-accurate simulation can quantify physical deployment risk
+- `vault/01 - Strategy/Why Now (2026).md`
+    - Capital: $27.6B robotics VC 2025 (2x the 2024 $8.2B), $18.8B H1 2026, $8.7B humanoid 2026 YTD, $3.92B into robot FMs across 9 deals
+    - Core insight: validation frequency now scales with model-update frequency, not hardware refresh cycles — that makes it a CI/CD problem
+    - Humanoid volumes: 10,000+ units/yr by 2027, 38,000/yr by 2030; China 2026-2030 five-year plan lists humanoids as strategic
+    - Isaac Sim open-sourced = both the NVIDIA Inception fit (10/10) and the platform risk (Risk Register #2)
+- `vault/02 - Problem & Market/Buyer Tiers.md`
+    - Tier 1: ~50-100 FM labs in 2026, $50K-$500K/yr; design-partner offer of up to 50 free validation runs/month for feedback + LOI
+    - Tier 4 strategy is partner-don't-sell: insurer adoption of the scorecard format makes it the de-facto standard (moat)
+    - First-25-call ICP: Tier-1 ML engineer at a robot FM company, training VLA models, shipping weekly, "3 test scenes and a prayer"
+    - Segment/spend table mirrors the Market Sizing SAM rows exactly (5 segments x 3 years x spend)
+- `vault/02 - Problem & Market/Demand Signals.md`
+    - Signal-vs-noise discipline: VC funding is customer-creation evidence, not revenue; the owned proof is weekly/bi-weekly update cadence
+    - Labor gap: 449,000 unfilled US manufacturing jobs (Mar 2025) → 2.1M projected by 2030; $1T/yr skilled-trades drag (JLL)
+    - KPI target: 50 discovery conversations by month 6 → 100 by month 12 (feeds KPIs + YC traction checklist)
+    - Three named kill conditions: funding winter, humanoid deployment slip, NVIDIA shipping the productized CI layer itself
+- `vault/02 - Problem & Market/Market Sizing (TAM SAM SOM).md`
+    - Derivation chain is stated explicitly to defend in interviews; funding rows flagged as leading indicators, not TAM
+    - TAM segments sourced to Grand View Research, PitchBook, Dealroom, New Market Pitch
+    - SAM: $15M-$80M (2026) → $100M-$400M (2028) → $300M-$1B+ (2030) annual
+    - SOM Year 3 $5M-$10M ARR cross-checked against Financial Projections' bottom-up $6M-$12M at 100-200 customers
+- `vault/02 - Problem & Market/Pain Quantified.md`
+    - Three pain classes: wasted engineering (cost replacement), blocked revenue (deal unblocking), catastrophic tail risk (risk quantification)
+    - ROI argument: catching one regression per quarter pays for the Pro tier ($8,000/mo) many times over
+    - Tail-risk class is why the scorecard must be statistically rigorous (ties to Product Principles #2)
+    - Every row doubles as a pitch-deck talking point; all figures owned by Key Figures
+- `vault/02 - Problem & Market/Problem Statement.md`
+    - "Three zeros" (no regression detection, no safety scoring, no audit trail) are declared to be the product spec
+    - Bad robot deploy is asymmetric to software: $50K component damage, $10K-$100K/hr line downtime, or human-injury liability
+    - Conclusion: validation must be massively parallel, physics-accurate, and audit-ready — the unique YC-application insight
+    - Signature discovery question: "How do you validate a model update before deploying it to your fleet?"
+
+### vault-exec-biz (12/12 read)
+
+ValidSim vault: 4 Execution + 8 Business notes forming a YC-W27-oriented plan. Execution: 8-week sprint (Isaac Sim env → episode runner → eval engine → GPT-4o adversarial scenarios → regression detection → API/CLI → Next.js dashboard → E2E demo), 90-day 4-phase roadmap to 2-3 LOIs and YC submission, MVP acceptance metrics (5K eps <30min on 4xA100, >95% regression accuracy vs seeded v41/v42), and company KPIs (ARR $10K→$200K, north star = validation runs, hero metric = regressions caught). Business: hybrid SaaS+usage model (bet: every model update = recurring spend), $0/$2K/$8K/$20-50K tiers with $75-per-5K-run usage pricing and $3.50/A100-hr pass-through, unit econ (LTV/CAC 5-14x, NRR>120%, 70-80% GM), 3-yr ARR $240K-450K → $6-12M funded by a ~$350K compute-credits arbitrage, GTM = labs→open-source dev funnel→enterprise/insurers, competitive claim of 9/10 white space in sim-based pre-deployment, and a 6-moat relay-race thesis terminating in an insurer-adopted compliance standard. Notable internal contradictions: 4x- vs 8x-A100 throughput (acknowledged), test counts 1,230/1,274/1,330 across notes, and sprint-plan security items all [x] vs KPIs' list of 7 open HIGH findings.
+
+**Cross-file observations:**
+- Test-count figures disagree across notes: KPIs.md says 1,330 collected (and debunks a prior 1,274), Unit Economics.md says '1,230 tests green', git log says 250 at last commit — no single verifiable number.
+- Sprint Plan marks all five security-hardening boxes [x] complete while KPIs.md records seven Security HIGH findings (items 06/07/08/09/10/17/28) still open or in progress per docs/ISSUE_CATALOG.md.
+- Throughput target stated three ways: 1,000 eps <30min on 4xA100 (sprint W2), 5,000 eps <30min on 4xA100 (MVP metrics), 1,000 eps <30min on 8xA100 (KPIs SLO) — KPIs.md itself flags this and defers resolution to a Decision Log entry.
+- Unit Economics payback '2-5 months' doesn't survive its own derivation: CAC $15K ÷ $2,100/mo gross profit ≈ 7.1 months; the 5-month upper bound only holds near the low-CAC end.
+- Known schedule conflict: 8-week plan from Sep 18 ends Nov 13 vs Nov 2 YC deadline; roadmap compresses submission to Oct 26-30 with only a Week-6/7 demo state — the plan and the deadline are reconciled by weakening the demo, not the timeline.
+- Discovery Call Script is status:draft while it is declared 'the highest-priority artifact in the vault', and KPIs' month-12 ARR floor ($200K) actually sits below Financial Projections' Y1 range ($240K-$450K) despite both notes claiming containment.
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/05 - Execution/8-Week Sprint Plan.md` | doc ✓ | Day-by-day 8-week MVP build plan (Isaac Sim env → episode runner → eval engine → LLM adversarial gen → regression detection → API/CLI → dashboard → E2E demo), split across two founders with weekly exit criteria. |
+| `vault/05 - Execution/90-Day Roadmap.md` | doc ✓ | Four-phase 12-week plan to a YC W27 application: discovery calls + incorporation, MVP wedge, 2-3 LOIs, apply & signal. Operating rules: momentum is the product; everything serves the application narrative. |
+| `vault/05 - Execution/KPIs.md` | doc ✓ | Company operating dashboard: product, business, and technical metrics with month-6/month-12 targets (ARR $10K→$200K, 500→5,000 runs). North star is validation runs completed; hero metric is regression bugs caught. |
+| `vault/05 - Execution/MVP Success Metrics.md` | doc ✓ | Seven engineering acceptance tests defining MVP-done (5,000 eps <30min on 4x A100, 100 adversarial scenarios/run, regression accuracy >95% vs seeded v41/v42 ground truth, <2s dashboard). Status: complete. |
+| `vault/06 - Business/Business Model.md` | doc ✓ | Hybrid SaaS + usage-based model: subscription floor plus per-run pricing, GPU pass-through at +20% margin, enterprise compliance, per-seat/per-robot API licensing. Structural bet: every model update = recurring spend. |
+| `vault/06 - Business/Competitive Landscape.md` | doc ✓ | Claims white space scored 9/10 in the sim-based x pre-deployment quadrant; Formant/Viam/InOrbit are post-deployment fleet ops, W&B/MLflow lack physics, UL/TUV are partners. NVIDIA is the main platform risk. |
+| `vault/06 - Business/Discovery Call Script.md` | doc ✓ | Sales playbook for the first 25 discovery calls: ranked Tier-1 target list (PI, Skild, Figure, 1X, Apptronik...), 15-minute call structure, verbatim core question, 7 probes, objection handling, and a 4-line LOI ask. Status: draft. |
+| `vault/06 - Business/Financial Projections.md` | doc ✓ | 3-year plan: Y1 burn $200K-$350K vs up to $350K free compute credits (the 'credits arbitrage'), ARR $240K-$450K Y1, $1.4M-$2.4M Y2, $6M-$12M Y3, with internal consistency checks and YC-rejection sensitivity. |
+| `vault/06 - Business/Go-to-Market.md` | doc ✓ | Three phases mirroring buyer tiers: design-partner LOIs (M1-4), developer-led growth via MIT-licensed CLI + public benchmarks (M4-9, goal 500 stars/10 paying teams), enterprise & insurer compliance (M9-18, $500K-$2M ARR). |
+| `vault/06 - Business/Moat.md` | doc ✓ | Six-moat stack with durability ratings and a 'relay race' thesis: first-mover (12-18 mo) buys time for integration/NVIDIA lock-in, feeding the data flywheel, terminating in the compliance standard as the very-high-durability moat. |
+| `vault/06 - Business/Pricing Tiers.md` | doc ✓ | Four subscription tiers ($0 / $2K / $8K / $20-50K per month) plus usage pricing ($75 per 5K-episode run, $750 per 100K run, $3.50/A100-hr GPU, $50 compliance PDF), anchored against internal-build and downtime costs. |
+| `vault/06 - Business/Unit Economics.md` | doc ✓ | Year-2 targets: $3K blended ARPU, CAC $5-15K, LTV $72K, LTV/CAC 5-14x, 70-80% GM, 2-5 mo payback, NRR >120%, with derivations, a three-regime COGS analysis (mock/GPU-loaded/BYO-GPU), and sensitivity table. |
+
+**Key points:**
+
+- `vault/05 - Execution/90-Day Roadmap.md`
+    - Phase 1: 25 discovery calls in 2 weeks; Delaware C-Corp; NVIDIA Inception app
+    - Notes Week-10 submission assumption breaks from Sep 18 start; compress to Oct 26-30
+    - Friday ritual: demo, exit-criteria RAG check, call quota, decision log
+- `vault/05 - Execution/KPIs.md`
+    - Tech KPI: test count 190→1,330 collected by 2026-09-21; 95.88% coverage vs 90% CI floor
+    - Explicitly flags 4x-A100 (demo) vs 8x-A100 (SLO) throughput contradiction
+    - Records Security HIGH findings 06/07/08/09/10/17/28 still open per docs/ISSUE_CATALOG.md
+- `vault/05 - Execution/MVP Success Metrics.md`
+    - Regression accuracy proven via deliberately regressed v42 with p=0.03 delta, no false positives
+    - Latency budget: submit→scorecard <1 hour total
+    - Week-8 demo checklist includes `validsim gate --threshold 85` approve/non-zero-exit behavior
+- `vault/06 - Business/Business Model.md`
+    - 70-80% GM target; software lines 90%+, pass-through is the dilutive line
+    - Buyer-tier→stream mapping for Tier 1-4; explicit non-goals (no marketplace, no consulting, no hardware)
+    - Four NRR>120% expansion axes: seats, episodes, embodiments, compliance reports
+- `vault/06 - Business/Competitive Landscape.md`
+    - Two real threats: NVIDIA productizing CI, and in-house lab tools (substitution)
+    - 'Empty field' evidence: $3.92B across 9 FM 2026 deals, none to a validation vendor; quarterly falsifiable check
+    - Competitor-to-partner rows: cert bodies, reinsurers, MLflow/W&B integrations
+- `vault/06 - Business/Discovery Call Script.md`
+    - Core question: 'How do you validate a model update before deploying it to your fleet?'
+    - LOI must name sponsor + success criteria (e.g. catch >=1 real regression in 3 runs); free pilots without criteria don't count
+    - Quota: 10 calls/wk weeks 1-4, 5/wk after; Founder 1 owns calls while Founder 2 builds
+- `vault/06 - Business/Financial Projections.md`
+    - YC $500K + Inception credits fund Y1; pre-seed $1-2M Q2-Q3 2027 funds first hires
+    - Consistency table validates ARR vs SOM and KPI floors; Y3 = ~2-4% of SAM
+    - Risk #7 noted: ~98% YC rejection probability with credit/LOI mitigations
+- `vault/06 - Business/Go-to-Market.md`
+    - Phase 1 goal: 2-3 signed LOIs with success criteria before YC application
+    - GitHub Actions PR comment is the compounding acquisition loop
+    - Sequencing rationale: labs have pain today; enterprise follows bottom-up (Risk #5)
+- `vault/06 - Business/Moat.md`
+    - Compliance standard path: ISO-aligned schema day one → reinsurer pilots → UL/TUV acceptance → RFP thresholds
+    - Honest weaknesses: NVIDIA double-edged dependence, network effects need ~30-50 customers (Y1 has 5-15)
+    - Cross-lab aggregate benchmarks are the stated answer to in-house-build substitution risk
+- `vault/06 - Business/Pricing Tiers.md`
+    - Adversarial + regression timeline gated at Pro; MVP non-goals are the Enterprise roadmap
+    - Blended ARPU $3K/mo supports Y2 $4K / Y3 $5K MRR projections; LTV $72K
+    - Flagged as hypothesis until 3 LOIs test the $2K Team price
+- `vault/06 - Business/Unit Economics.md`
+    - Today's MVP runs on MockIsaacBackend (CPU-only), so per-run GPU COGS ~$0 — explicitly 'not the cost basis for published scorecards'
+    - Projected GPU COGS $5-7 per 5K-episode run vs $75 list keeps compute <10% of revenue
+    - BYO-GPU self-hosted-runner SKU proposed as a third margin lever; cites '1,230 tests green'
+
+### vault-fundraising (8/8 read)
+
+vault-fundraising = 8 markdown notes (3 active, 3 draft, 2 complete), ~39KB, all created 2026-09-18 except the Momentum Log (09-20). Coherent three-track fundraising plan: YC W27 (Nov 2 deadline, $500K standard deal), NVIDIA Inception (apply W1–2, ~$350K compute credits), then a four-round ladder. The copy documents (YC Application Answers, NVIDIA Inception Application, Pitch Deck Outline) are paste-ready drafts with [X] placeholders still unfilled for every traction number — discovery calls, LOIs, demo video, episodes/run, A100 wall-clock. Repeated load-bearing frame: "GitHub Actions for robots" + cost-of-bad-deploy-is-physical, with figures sourced to [[Key Figures]] and [[Build Status]]. Weakest evidence: the sim backend is admittedly a deterministic mock, and it is disclosed honestly in YC Answers Q3 (good sign for investor credibility, but the whole ask depends on fixing it). Biggest audit issue: Engineering Momentum Log cites Build Status as its only numeric source yet reports 601 passed / 95% coverage while Build Status now reports 1328 passed, 2 skipped, 95.88% (1330 collected). Growth chain 190→250→338→601 is also truncated — Build Status continues to 1274. All vault cross-links in these 8 notes resolve to existing files (61 md notes total).
+
+**Cross-file observations:**
+- Stale headline number: Engineering Momentum Log line 43 claims '601 passed, 2 skipped · 95% coverage' but its cited source 00 - Dashboard/Build Status.md line 25 now says 1328 passed, 2 skipped, 95.88% coverage (1330 collected). Momentum Log line 42 growth series also stops at 601, omitting the 1274-passed run.
+- Three test-count figures coexist across the group with no reconciliation note: 126 (YC Answers Q3), 97 (Pitch Deck slide 8 + YC Answers Q6), 338 then 601 (Momentum Log) — all are historical checkpoints presented as present tense. Deck and app answers will read as contradictory to a reviewer who checks CI.
+- Unfilled placeholders block submission: YC Answers Q3/Q4/Q7 and Pitch Deck slide 8 still carry [X]/[Company A/B/C]/[recorded / scheduled week of [date]]. The group's own rule (YC Answers lines 15-16) forbids shipping these.
+- Date arithmetic is only correct because it was patched: YC Application lines 43-44 overrides the 90-Day Roadmap's 'submit in Week 10' instruction, which from a Sep 18 start lands after the Nov 2 deadline. Any other note still repeating 'Week 10' is now wrong — Momentum Log and both applications consistently use 'week of Oct 26', but the roadmap itself was not updated in this group's scope.
+- Momentum Log attributes velocity to '~75 subagents across 7 waves' and frames it as founder output; Pitch Deck and YC Answers describe a 2-founder team with no such claim. Risk: the same evidence is presented as team size in one doc and tooling in another, which a diligence pass will probe.
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/07 - Fundraising/Engineering Momentum Log.md` | doc ✓ | Investor-facing velocity log: shipped 0.2.0 capabilities (338 tests, API-key+HMAC auth, Redis job queue, trend analytics, nightly adversarial sweep) framed as measured receipts. Sep 20 2026, 43 days to YC W27. |
+| `vault/07 - Fundraising/Funding Plan.md` | doc ✓ | Four-round capital ladder with trigger metrics per round and sequencing constraints. Status: complete. |
+| `vault/07 - Fundraising/Investor Narrative.md` | doc ✓ | Seed/Series-A narrative as three stories (market, traction, team) plus a 90-second assembled pitch and an objection-handling index. Status: complete. |
+| `vault/07 - Fundraising/NVIDIA Inception Application.md` | doc ✓ | Paste-ready Inception application text: company description, explicit GPU workload statement, NVIDIA product mapping table, credit use, 6/12-month milestones. Status: draft. |
+| `vault/07 - Fundraising/NVIDIA Inception.md` | doc ✓ | Program brief: eligibility, benefits, week-by-week sequencing from incorporation, dollar value, three strategic uses, failure modes with fallbacks. Status: active. |
+| `vault/07 - Fundraising/Pitch Deck Outline.md` | doc ✓ | Ten-slide deck spec with per-slide key message, content, figures and visual, plus five narrative rules. Demo video sits between slides 3 and 4. Status: draft. |
+| `vault/07 - Fundraising/YC Application Answers.md` | doc ✓ | Drafted W27 answers Q1–Q7 in short/expanded pairs with placeholder discipline, a moat table and a traction-evidence checklist. Status: draft. |
+| `vault/07 - Fundraising/YC Application.md` | doc ✓ | YC W27 brief: program facts, verbatim 10-second pitch and unique-insight lines, application strategy, traction targets, 60-second demo storyboard, interview prep. Status: active. |
+
+**Key points:**
+
+- `vault/07 - Fundraising/Engineering Momentum Log.md`
+    - Claims current suite = 601 passed / 2 skipped / 95% coverage; growth series 190→250→338→601
+    - Asserts 100% pass rate across last 11 runs; ~75 subagents across 7 waves as operating leverage
+    - Cites [[Build Status]] as the read-only numeric source — but numbers there now disagree
+- `vault/07 - Fundraising/Funding Plan.md`
+    - YC W27 $500K (Jan 2027) → Pre-Seed $1–2M (Q2–Q3 2027) → Seed $3–5M → Series A $10–20M
+    - Order fixed as Incorporate → Inception → YC; do not raise pre-seed before LOIs
+    - Cap table: YC 7%/$125K standard, advisors 0.25–0.5% (pool ≤2%), founders 50/50 4yr/1yr cliff
+- `vault/07 - Fundraising/Investor Narrative.md`
+    - Market thesis: robot fleet spend creates robot CI/CD, a $0 category, mirroring cloud→CI/CD $0(2010)→$10B+
+    - Figures: $27.6B VC robotics 2025, $18.8B H1 2026, $3.92B/9 deals robot FMs, 10k+ humanoids/yr by 2027
+    - Five objections each routed to a named vault note (NVIDIA risk, in-house build, humanoid timing, TAM, enterprise sales)
+- `vault/07 - Fundraising/NVIDIA Inception Application.md`
+    - Acceptance rule: name the GPU workload explicitly — 1,000–100,000 parallel Isaac Lab episodes on A100/H100
+    - Credits earmarked as COGS not R&D: $100K DGX + up to $100K AWS + up to $150K Nebius
+    - Strategic frame: every ValidSim run is industrial-scale Isaac Sim consumption = demand creation for NVIDIA
+- `vault/07 - Fundraising/NVIDIA Inception.md`
+    - Free, parallel to YC (apply W1–2), 10/10 fit; approval in days–weeks
+    - Up to ~$350K compute vs Year-1 burn $200K–$350K → year one effectively compute-funded
+    - Fallbacks: AWS/GCP A100 PAYG + Nebius direct; pass-through pricing if credits run out; Inception as hedge vs NVIDIA productizing
+- `vault/07 - Fundraising/Pitch Deck Outline.md`
+    - Arc: Problem→Why Now→Solution→How→Market→Model→Traction→Competition→Team→Ask; ≤40 words/slide
+    - Slide 8 still contains placeholders [X]/25 calls, [X] LOIs and a "97-test CI-green" claim
+    - Close on one number and one date: "$500K, YC W27, deadline Nov 2"
+- `vault/07 - Fundraising/YC Application Answers.md`
+    - Q3 states a 126-test pytest suite green and openly flags the sim backend as a deterministic mock pending the Isaac Lab port
+    - Q5 moat logic: bad-deploy cost is physical → parallel (GPU economics), physics-accurate (PhysX 5), audit-ready (insurance standard)
+    - Every [X] must be a measured number traceable to Build Status, a discovery-call note, or a signed LOI before submission
+- `vault/07 - Fundraising/YC Application.md`
+    - Deadline Nov 2 2026 8pm PT, decisions Dec 11, batch Jan 2027, $500K terms, ~1–2% acceptance
+    - Self-corrects the roadmap's "Week 10" instruction — from a Sep 18 start that lands after the deadline; real target is week of Oct 26
+    - Hardcoded composite scorecard example 87.3 with 2 regressions reused across storyboard and deck
+
+### vault-team-risk-data-tpl (12/12 read)
+
+Vault sections 08–10 + templates. Team/Legal: two founders (ML/robotics + platform/infra) in a Delaware C-Corp, 50/50 equity 4yr/1yr cliff, YC standard $500K ($125K/7% + $375K uncapped MFN); week-1 checklist mandates PIIAA IP assignment before first commit and 83(b) elections; $10–15K legal budget. IP strategy: open-source MIT CLI/Actions, trade-secret + provisional patents on simulation pipeline and adversarial scenario generation, trade-secret failure taxonomy, publish scorecard schema but keep weights proprietary; hard rule: file provisionals before W8 blog/benchmarks. Hiring: 6 post-funding hires re-sequenced Sep 2026 (GPU/Isaac infra #1 $160–210K, GTM engineer #2, ML #3, frontend #4, sales #5, SRE #6) because agent-assisted build (1,230 tests) shifts binding constraints to hardware and distribution. Risk Register: 11 risks; top-3 = VLA churn (High prob), NVIDIA productization, in-house builds; risks 6/9/11 (compute-cost abuse, API abuse, async queue DoS) marked mitigated 2026-09-20 with concrete code claims (VALIDSIM_RATE_LIMIT limiter, QueueFullError→503 cap 1000, 60s SSE deadline). Data & Sources: Key Figures is declared single source of truth (robotics VC $27.6B/2025, humanoid market $40.5B by 2033, YC W27 deadline Nov 2 2026) with 12 numbered sources; unsourced figures flagged for care. Templates: Decision Log (reversibility test, prefix taxonomy), Discovery Call (5 anchor pain questions, 25-call YC target), Meeting Note. Attachments dir is empty placeholder.
+
+**Cross-file observations:**
+- Founding Team gap table is stale vs revised Hiring Plan: it lists frontend/UX as 'Hire #2, month 5–7' and sales 'Hire #5, month 9–12', but Hiring Plan now has GTM engineer at #2 (mo 5–7), frontend at #4 (mo 9–12), sales at #5 (mo 10–13).
+- Hiring Plan claims a '1,230-test platform', while the most recent git commits record 190→250 tests; vault test-count claim likely diverges from repo reality (needs code-group verification).
+- Risk Register mitigations (risks 6/9/11, dated 2026-09-20) name concrete code behaviors — VALIDSIM_RATE_LIMIT 429+Retry-After, max_depth=1000 QueueFullError→503, 60s SSE deadline, IP-keyed buckets — these should be verified against validsim/api/main.py; vault doc is the signal, source check pending.
+- Sources.md maintenance rule 3 requires SRC-01…SRC-12 PDF/screenshot snapshots in 99 - Attachments, but that directory holds only .gitkeep — diligence artifacts not yet stored.
+- Cross-note numeric consistency otherwise holds: YC $500K/$125K/7%/$375K MFN, acceptance ~1–2% / ~98% rejection, $27.6B PitchBook, 8.7/10 composite, and pain anchors ($200–500K, $10–100K/hr, $500K–$5M, 2–5×) match across Key Figures, Sources, Compliance, Risk Register, and the Discovery Call template.
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/08 - Team & Legal/Compliance.md` | doc ✓ | Compliance plan: SOC 2 Type II Year 2, ISO 10218/13482-aligned scorecard, GDPR DPA at first EU customer, Munich Re/Swiss Re insurer pilots; two-sided posture (we generate evidence as product; we are audited as vendor). |
+| `vault/08 - Team & Legal/Corporate Structure.md` | doc ✓ | Delaware C-Corp rationale and week-1 legal checklist: 50/50 equity with 4yr vest/1yr cliff, YC terms decoded ($125K/7% + $375K uncapped MFN), PIIAA before first commit, 83(b) 30-day clock, $10–15K legal budget. |
+| `vault/08 - Team & Legal/Founding Team.md` | doc ✓ | Two-founder split (Founder 1 ML/robotics owns M2–M4; Founder 2 platform/infra owns M1/API/dashboard), ownership map per sprint layer, non-build duties, and named gaps bridged by later hires. |
+| `vault/08 - Team & Legal/Hiring Plan.md` | doc ✓ | Six post-funding hires sequenced by phase; Sep 2026 revision moves #1 to GPU/Isaac infra and #2 to founding GTM engineer because agent-assisted build (1,230 tests) shifted constraints to hardware and distribution. |
+| `vault/08 - Team & Legal/IP Strategy.md` | doc ✓ | Asset-by-asset protection: provisionals+trade secrets for pipeline and adversarial generator, MIT for CLI/Actions, proprietary dashboard/API; chain of title via PIIAA+CLA; publication calendar gated on provisional filings. |
+| `vault/09 - Risks/Risk Register.md` | doc ✓ | 11 scored risks with heatmap; top-3 = VLA churn (High prob), NVIDIA productization, in-house builds; risks 6/9/11 (compute abuse, API abuse, async queue DoS) marked mitigated 2026-09-20 citing specific code controls. |
+| `vault/10 - Data & Sources/Key Figures.md` | doc ✓ | Declared single source of truth for all pitch numbers: 20 sourced figures ($27.6B 2025 VC, $40.5B humanoid by 2033, YC W27 deadline Nov 2 2026) plus 16 internal ValidSim estimates (burn, ARR path, pricing ladder). |
+| `vault/10 - Data & Sources/Sources.md` | doc ✓ | 12 numbered citations (YC, NVIDIA, PitchBook, Dealroom, Grand View, JLL, Nebius...) mapped to Key Figures, with a caution table for figures lacking a numbered source and quarterly refresh maintenance rules. |
+| `vault/98 - Templates/Decision Log.md` | doc ✓ | Obsidian template for durable decisions: reversibility (one-way-door) test, options table, principle check against Product Principles, affected-notes table, review trigger + kill criteria, six title prefixes (ARCH/SCOPE/PRICE/GTM/LEGAL/FUND). |
+| `vault/98 - Templates/Discovery Call.md` | doc ✓ | Customer discovery template tied to YC 25-call target: company/tier fields, five verbatim anchor questions quoting Pain Quantified dollar anchors, demand-signal checklist, LOI scoring, 5-minute non-negotiable post-call steps. |
+| `vault/98 - Templates/Meeting Note.md` | doc ✓ | Lightweight meeting template (internal/partner/advisor/investor): agenda, decisions with owner+rationale, action table, parking lot, follow-up checklist that routes irreversible decisions to Decision Log and reconciles numbers against Key Figures. |
+| `vault/99 - Attachments/.gitkeep` | other ✓ | Empty placeholder keeping the attachments directory in git; no SRC-01…SRC-12 diligence snapshots stored here yet despite Sources.md rule 3. |
+
+**Key points:**
+
+- `vault/08 - Team & Legal/Compliance.md`
+    - SOC 2 Type II by Year 2; encryption at rest+in transit from MVP
+    - Sequence: ISO alignment (free in MVP) → insurer pilots → certification → SOC 2
+    - Standards vacuum is moat: publish schema not weights, co-brand with UL/TÜV
+- `vault/08 - Team & Legal/Corporate Structure.md`
+    - DE C-Corp gates YC paperwork, NVIDIA Inception, VC terms
+    - IP assignment must cover everything from first Isaac script
+    - YC terms: $500K total = $125K for 7% + $375K uncapped MFN
+- `vault/08 - Team & Legal/Founding Team.md`
+    - Pure-software + open-source substrate justifies 2-founder feasibility 8/10
+    - Gaps admitted to investors: frontend/UX, enterprise sales, academic credibility
+    - Speed claims calibrated: 8-week MVP, weekly demo, 10 calls/week
+- `vault/08 - Team & Legal/Hiring Plan.md`
+    - Hire #1 GPU/Isaac infra ($160–210K): mock→Isaac swap hardware-blocked, not code-blocked
+    - Hires 1–4 ≈ $580K–760K; pre-seed funds team of 4–5 only
+    - Rule: no hires before funding; seats duplicating agent output deferred
+- `vault/08 - Team & Legal/IP Strategy.md`
+    - Rule: open entry points, trade-secret engines, patent category-defining methods
+    - Do not publish W8 blog or benchmarks before provisionals on file
+    - Explicitly not owned: NVIDIA stack IP, customer checkpoints, public USD assets
+- `vault/09 - Risks/Risk Register.md`
+    - Mitigation claims name V ALSID_RATE_LIMIT limiter, max_depth 1000→503, 60s SSE deadline
+    - Residual gaps admitted: limiter process-local, cap soft under multi-process Redis
+    - YC rejection treated as plan (~98% base rate, reapply S27)
+- `vault/10 - Data & Sources/Key Figures.md`
+    - Table wins over any disagreeing note; citation discipline requires Sources number
+    - External: $27.6B/1,009 deals 2025; humanoid mkt $40.5B @38.2% CAGR
+    - Internal: Y1 burn $200–350K; ARR path to $6–12M; funding ladder $500K→$10–20M
+- `vault/10 - Data & Sources/Sources.md`
+    - Unsourced: PI $5.6B valuation, 10K/38K humanoid unit forecasts, pain-point $ ranges
+    - Rule: new market claim needs row 13 here before appearing in any note
+    - Diligence snapshots SRC-01…SRC-12 to be stored in 99 - Attachments
+- `vault/98 - Templates/Decision Log.md`
+    - Irreversible decisions are binding until formally reversed
+    - Every entry checks consistency vs Product Principles / operating rules
+    - Prefix taxonomy assigns owners per domain
+- `vault/98 - Templates/Discovery Call.md`
+    - Anchor questions map to $200–500K build cost, $10–100K/hr downtime, 2–5× premiums
+    - Move to design-partner pipeline if warm + interest ≥4
+    - Quotes usable in deck only if they confirm, not decorate
+- `vault/98 - Templates/Meeting Note.md`
+    - Irreversible decisions must be copied into Decision Log
+    - Follow-up forces drift-check against Key Figures
+    - Asks whether the meeting moves a YC Countdown checklist item
+- `vault/99 - Attachments/.gitkeep`
+    - Empty file, zero bytes — directory placeholder only
+
+### root-docs (7/7 read)
+
+Root docs describe ValidSim, a sim-to-real validation platform (FastAPI + Typer CLI, engines scoring success/safety/robustness/regression into an APPROVE/BLOCK gate). CHANGELOG's Unreleased (iteration 6) adds an async Redis job queue with worker/SSE endpoints, run deletion, enriched /health, benchmark compare, SMTP notifier, and a 90% CI coverage gate; README expands this further with observability (Prometheus /metrics, JSON logging, X-Request-ID), jobs pagination + 503 backpressure, SIGTERM-draining worker, trends/anomaly engines, and claims 1328 passed / 2 skipped (~96% coverage) as of 2026-09-21. SECURITY.md is unusually honest: single intake channel (GitHub private vuln reporting), retracts previously fabricated contact details, treats any BLOCK→APPROVE flip as High/Critical, admits CORS wildcard default is a known unsafe default, notes nothing is tagged/released despite 0.2.0 in the changelog. CONTRIBUTING gives dev workflow and a strict style contract (frozen models, full type hints, __all__, one test file per module). memory.md is a build-automation log (runs #5–#7, up to 250 tests, commit-checkpoint-never-push directive). infra/README documents CI gating docker build on tests and the nightly suite. design-system/MASTER.md is the dashboard's visual spec. Docs are broadly consistent on architecture and env vars, but test counts and infra descriptions have drifted between iteration boundaries, and the design file carries template-generation artifacts contradicting the product's stated dark-first dashboard.
+
+**Cross-file observations:**
+- Test-count drift: CONTRIBUTING.md says '~250 tests', memory.md (cycle 4) says 250 passed, CHANGELOG says 250 — but README claims 1328 passed/2 skipped and CHANGELOG Unreleased describes many new suites; CONTRIBUTING is stale by roughly a full iteration.
+- README explicitly retracts the '24/7 hourly automation' claim (defers to docs/ISSUE_CATALOG item 17: no scheduler exists in-repo), yet .codebuddy/automations/validsim-24-7-continuous-build/memory.md logs runs #5–#7 as if that automation ran — the automation lives outside the repo.
+- design-system/MASTER.md is internally inconsistent: labeled 'Category: Financial Dashboard', its Global Rules palette is light-mode (#F8FAFC background, white modal/card) while Style Guidelines mandate Dark Mode (OLED) and Anti-Patterns forbid 'Light mode default'; README claims the shipped dashboard has a light/dark toggle — which file the dashboard actually follows is ambiguous.
+- MASTER.md 'Page Pattern' section is corrupted: three rows of raw CSV (28,Bento Grid Showcase... / 29,Interactive 3D Configurator... / 30,AI-Driven Dynamic Landing...) pasted mid-list, unrelated to a validation dashboard — looks like a generator template leak.
+- CHANGELOG/SECURITY say iteration 6 added a Compose 'worker' service and Redis-backed job queue as live, and README lists api+redis+postgres+worker — but infra/README still describes redis as 'future job queue' and omits the worker service; CHANGELOG compare links also point at placeholder example.com URLs.
+
+| File | Kind | Summary |
+|---|---|---|
+| `.codebuddy/automations/validsim-24-7-continuous-build/memory.md` | doc ✓ | Execution memory/log for a '24/7 continuous build' automation: pipeline directive (commit checkpoints when green, never push) plus per-run notes (runs #5–#7, 2026-09-18) and a forward-progress backlog. |
+| `CHANGELOG.md` | doc ✓ | Keep-a-Changelog history: Unreleased (iteration 6: async job queue/Redis worker/SSE, run deletion, enriched health, difficulty bias, benchmark compare, SMTP, 90% coverage gate), 0.2.0, 0.1.0. |
+| `CONTRIBUTING.md` | doc ✓ | Dev guide: setup (make/pip/docker), test & lint commands mirroring CI, strict code style (type hints, frozen models, __all__), commit conventions, PR checklist, architecture paragraph, file map. |
+| `README.md` | doc ✓ | Project front page: repo layout, quick start (API/CLI/docker compose), API hardening, async job queue, observability (Prometheus, JSON logs, X-Request-ID), and a long milestone checklist claiming 1328 tests / 96% coverage. |
+| `SECURITY.md` | doc ✓ | Disclosure policy: GitHub-advisory-only intake (explicit retraction of fake mailbox/PGP), safe harbour, SLA table, scope (any APPROVE-flip bug is High/Critical), version support, licence posture, existing hardening list. |
+| `design-system/validsim/MASTER.md` | doc ✓ | Auto-generated design-system master: color/typography/spacing/shadow tokens, button/card/input/modal CSS, anti-patterns, pre-delivery checklist — intended as truth for the FastAPI dashboard at /. |
+| `infra/README.md` | doc ✓ | Self-validation infra overview: pipeline ASCII flow (local make → CI lint/test/gated docker build → nightly), component table (Dockerfile, compose, workflows, Makefile), Week-1 sprint framing. |
+### docs-a (9/9 read)
+
+docs-a covers ValidSim's full ADR set (0001-0006) plus two engineering reference docs (isaac-worker, scenario-taxonomy) and the ISSUE_CATALOG audit doc. The ADRs record: (1) an append-only Nygard-format ADR practice, (2) a weighted composite scorecard gate, (3) a Redis/in-memory job queue chosen over Celery, (4) a pluggable store with SQLite-overwrite vs Postgres-append-only semantics, (5) an MIT-CLI/proprietary-engine licensing split, and (6) a 2026-09-21 revision making the CLI gate a durable-store verdict reader rather than a composite recomputer. ISSUE_CATALOG is a 33-item production-readiness audit with self-declared statuses (Verified/Static/Reported/Unverified); it documents two Critical defects (gate approving engine-BLOCKed runs; empty API key silently disabling auth) as fixed same-day, and a large set of documentation-accuracy defects (item 17) where vault/investor pages assert features that don't exist and a fabricated pytest count propagated into a false dashboard. isaac-worker.md is an explicitly pre-GPU HTTP contract, never exercised against real hardware, only mock-transport-tested. scenario-taxonomy.md specifies 12 adversarial categories, deterministic seeding, and a fallback-safe optional LLM generator path. Cross-file consistency is good where I could check it: ADR0006 matches ISSUE_CATALOG items 01/06/11/22's stated fix; ADR0002 carries the exact superseded-annotation ISSUE_CATALOG describes. Known unresolved tensions flagged by the catalog itself: Postgres store has zero CI coverage (item 09) despite being compose's default and the append-only audit-trail guarantee (ADR0004) has no rollback path (item 10); job queue's non-atomic claim/enqueue (items 07/08) was anticipated as a known limitation in ADR0003 but remains unaddressed; isaac-worker.md's own deployment sketch still contains the invalid env var/port flagged by item 16.
+
+**Cross-file observations:**
+- ISSUE_CATALOG states its own test counts three different ways across the document (1292, 1328 passed/2 skipped, 1330 collected) while simultaneously being the doc that catalogues exactly this class of bug as item 18 — an unresolved self-reference
+- Several catalog items mark themselves 'Reported (R)' — meaning unverified subagent findings, not independently checked (items 10,12,13,14,30,32,33) — these should not be treated as fact without re-verification
+- isaac-worker.md's §4 deployment sketch contradicts item 16 of ISSUE_CATALOG: it still cites VALIDSIM_WORKER_TOKEN and a nonexistent Dockerfile.worker/ports, which item 16 (status R, unfixed as of catalog date) flags but this doc was not corrected for
+- ADR0006 acknowledges an unenforced parity gap: SQLite requires deploy_decision NOT NULL but Postgres's column is nullable — documented as safe-only-because-null-blocks, not actually validated
+- None of these docs were read against actual source code (cli.py, scorecard.py, queue.py, store/*.py) since that is outside docs-a's file list — every 'verified' claim in ISSUE_CATALOG about code behavior is taken on the doc's own word, not independently confirmed
+
+| File | Kind | Summary |
+|---|---|---|
+| `docs/ISSUE_CATALOG.md` | doc ✓ | 33-item production-readiness audit catalog (baseline ff15533, dated 2026-09-21) with status tags V/S/R/U/✅/◐; many critical items (gate ignoring deploy_decision, empty-API-key auth bypass) marked fixed this session. |
+| `docs/adr/0001-record-architecture-decisions.md` | doc ✓ | Establishes ADR practice for the repo using the Nygard format (Status/Context/Decision/Consequences), append-only, one decision per record, supersede-don't-edit. |
+| `docs/adr/0002-scorecard-composite-gate.md` | doc ✓ | Defines the composite scorecard gate: weighted sum 0.4*success + 0.3*safety + 0.2*robustness + 0.1*regression, APPROVE if composite>=threshold (default 85.0). Marked partially superseded by ADR 0006 for how `gate` derives its answer; weights/formula stand. |
+| `docs/adr/0003-async-job-queue-redis.md` | doc ✓ | Chooses a pluggable job queue (memory default / redis production) over Celery, with lazy driver import, bounded max_depth (default 1000) raising QueueFullError->503. |
+| `docs/adr/0004-store-abstraction-sqlite-postgres.md` | doc ✓ | Pluggable validation store: in-memory interface subclassed by SQLite (INSERT OR REPLACE, mutable) and PostgreSQL (INSERT...ON CONFLICT DO NOTHING, append-only/tamper-evident), selected by VALIDSIM_STORE. |
+| `docs/adr/0005-open-source-cli-proprietary-platform.md` | doc ✓ | Licensing plan: MIT for the CLI/Actions client surface (Phase 2 carve-out, once provisional patents filed), proprietary for the scoring/scenario/taxonomy engine. Current repo is declared Proprietary in pyproject.toml. |
+| `docs/adr/0006-gate-reads-the-durable-store.md` | doc ✓ | Supersedes ADR 0002's gate mechanism: `validsim gate` now reads the stored deploy_decision verdict from the durable store (never the JSON cache), requires a durable backend, approves only on exact 'APPROVE', and treats --threshold as tighten-only. |
+| `docs/isaac-worker.md` | doc ✓ | HTTP wire contract (pre-DGX, never yet run against a real GPU) between VALIDSIM's client and a containerized Isaac Sim/Isaac Lab worker: POST /episodes/run, GET /health, Bearer-token auth, strict JSON schema with no unknown-key tolerance. |
+| `docs/scenario-taxonomy.md` | doc ✓ | Full spec of the 12 fixed adversarial scenario categories, their per-category parameter ranges/samplers, the deterministic seed model (rng=Random(f"{seed}:{task_id}")), difficulty computation (base+jitter+bias, clamped [0.05,0.95]), and the optional LLM generator path with schema validation and coverage top-up. |
+
+**Key points:**
+
+- `docs/ISSUE_CATALOG.md`
+    - Items 01/02 (critical): gate approved BLOCK runs, VALIDSIM_API_KEY="" bypassed auth — both ✅ fixed 2026-09-21
+    - Item 17: vault/investor docs assert nonexistent features, fabricated build-log row (1274 passed) driving a false 100%-pass dashboard
+    - Item 25's own premise was corrected mid-catalog: pytest-cov WAS installed (7.0.0); real gap was floor living only in uncommitted pyproject
+    - Suite stated as 1292 tests pre-fix, 1328 passed/2 skipped at 95.84-95.88% coverage after; 31s wall time
+    - Sequencing section orders fixes by day/week; item 17 flagged as non-negotiable before any external send (YC/NVIDIA pitch)
+- `docs/adr/0001-record-architecture-decisions.md`
+    - Decisions immutable once accepted; changes require a new superseding ADR, never an in-place edit
+    - Low ceremony: ADR ships in the same PR as the change it documents
+- `docs/adr/0002-scorecard-composite-gate.md`
+    - Weights justify ordering success>safety>robustness>regression as risk priorities
+    - Gate section explicitly annotated 'Superseded by ADR 0006' — the gate now reads stored verdict, not composite arithmetic
+    - Acknowledges weakness: a weighted sum can mask a catastrophic single-axis (e.g. safety) failure
+- `docs/adr/0003-async-job-queue-redis.md`
+    - Rejects Celery: the workload is GPU-bound simulation orchestration (K8s/Argo), not distributed Python task fan-out
+    - In-memory backend is single-process, drops jobs on exit, explicitly not for production
+    - Redis serialization is JSON-by-convention (no pickles/hashes) with parameter-free keys
+- `docs/adr/0004-store-abstraction-sqlite-postgres.md`
+    - SQLite overwrites a re-saved run_id; Postgres's first write wins and later writes are ignored — deliberate seam between dev ergonomics and audit-trail immutability
+    - delete() exists on all backends including append-only, so it's a write-path guarantee, not absolute immutability
+    - Lazy psycopg import + first-use connection, mirroring ADR 0003's optional-driver discipline
+- `docs/adr/0005-open-source-cli-proprietary-platform.md`
+    - Rule: open the entry points, trade-secret the engines, patent the category-defining methods
+    - Boundary invariant to police: CLI must only read a stored scorecard, never re-derive scoring locally
+    - Publish the scorecard schema/format (a standard insurers adopt) while keeping weights/calibration secret
+- `docs/adr/0006-gate-reads-the-durable-store.md`
+    - Four rules: store-not-cache, durable-backend-precondition (exit 2 on memory), exact-string APPROVE, max(stored,given) threshold
+    - Closes ISSUE_CATALOG items 01/06/22 (and partially 11) by making forgery require DB access, not a JSON file drop
+    - Notes a parity gap: SQLite enforces deploy_decision NOT NULL, Postgres column is nullable (null can block but never approve)
+- `docs/isaac-worker.md`
+    - Status: contract-only, no live service — verified exclusively against httpx.MockTransport fakes in tests/test_isaac_worker.py
+    - Auth var is correctly given as VALIDSIM_ISAAC_WORKER_KEY here; ISSUE_CATALOG item 16 says this same doc's §4 deployment sketch still cites a nonexistent VALIDSIM_WORKER_TOKEN and a nonexistent Dockerfile.worker
+    - Rollout is shadow-mode-first: mock and real backend run same seeds side-by-side, compare drift, only promote after N consecutive agreements
+    - Retry policy: 2 attempts on connect/timeout errors, 0 on 4xx/5xx (deterministic, expensive to redo)
+- `docs/scenario-taxonomy.md`
+    - Rule-based generator is default and does no network I/O; LLM path is opt-in (VALIDSIM_LLM_API_KEY) and always degrades back to rule-based on any failure
+    - Two different difficulty clamps: LLM validation path clamps to [0,1], rule-based clamps tighter to [0.05,0.95] — explicitly documented as an intentional asymmetry
+    - Coverage guarantee is best-effort within batch size n, not beyond it (worked example shows 10/12 categories possible when LLM misses more categories than there's room to top up)
+    - Bias consumes no RNG draws, so ids/categories/params stay byte-identical across difficulty_bias settings — only the difficulty field moves
+
+### docs-b (5/5 read)
+
+docs-b is five markdown docs describing the ValidSim v0.2.0 MVP from complementary angles, and they are unusually well cross-referenced and mutually consistent. api-reference.md is the canonical HTTP contract (env-gated auth incl. /health, destructive-route extra gate, sync POST /validations vs async /jobs with job_id==run_id, opt-in IP-keyed rate limiting, queue-full 503, PDF 501, pagination only on /validations and /models). async-jobs.md details the async path: 4-state JobRecord lifecycle, memory vs Redis queue (lazy import, JSON keys, FIFO index list), audit guards H3 (max_depth=1000, soft under multi-process) and M1 (SSE 60s deadline/1s poll), CLI commands, and the docker worker service. github-actions.md covers the CI deploy gate: local mock pipeline MVP (run→gate→scorecard must share one job), CLI stdout parsing contract, gate exit codes 0/1/2 with verdict-from-durable-store (cache is forgeable, threshold may only tighten), and forward sections on async and the not-yet-built Isaac GPU backend. runbook.md is the ops view: compose stack, env-var table (LLM key presence selects generator; webhooks dry-run by default; TLS/sslmode caveat), incident playbooks, pg_dump backups with append-only store and deterministic cache re-derivation. testing.md codifies the reproducibility contract (zlib.crc32 stable_seed, pinned MASTER_SEED sweeps, no hypothesis), skip gates for Postgres/reportlab, 90% branch-coverage floor vs ~95% baseline, and ci.yml vs nightly.yml roles. Recurring anchors across files: composite = 40% success/30% safety/20% robustness/10% regression, vrun-[0-9a-f]{8} ids, stable_seed(checkpoint,task_id), 03:00 UTC nightly. All docs are current with the v0.2.0 code per their own cross-checks; minor drift noted in observations.
+
+**Cross-file observations:**
+- Runbook §1 lists the compose stack as api+redis+postgres only, but async-jobs.md §8 documents a fourth 'worker' service in the same docker-compose.yml — the runbook's service table and make docker-up description are stale/incomplete relative to the worker addition.
+- Run-id format described inconsistently: api-reference.md says 'vrun-<uuid8>' in §4.1/§4.6 while §4.6 and async-jobs.md §3.1 pin the exact contract to regex ^vrun-[0-9a-f]{8}$ (hex, not uuid); the 'uuid8' phrasing is loose and could mislead a client validating ids.
+- github-actions.md has an apparent internal tension resolved by reading closely: §3 documents 'adversarial' default 50 for the action while api-reference.md documents task.adversarial_count default 0 for the API — different layers, but a reader comparing examples may mistake it for drift; neither doc cross-notes this.
+- api-reference.md §1/§8 quick-start examples call DELETE and POST /validations with a bare localhost base URL that only works because auth is off by default; the docs never consolidate the env-var list for jobs (VALIDSIM_JOB_QUEUE/REDIS_URL/MAX_DEPTH live only in async-jobs.md §7 though runbook §2 claims to be the env reference and says 'these join the store/backend vars documented in runbook §2').
+- Status values naming: testing.md and async-jobs.md use JobStatus.DONE enum form while API docs show lowercase 'done' wire values — consistent (enum serializes lowercase) but no doc states the wire/enum mapping explicitly.
+
+| File | Kind | Summary |
+|---|---|---|
+| `docs/api-reference.md` | doc ✓ | Full REST contract for ValidSim API v0.2.0: auth, CORS, all endpoints (validations/models/regressions/dashboard/health/jobs), pagination, error codes, rate limiting, with JSON examples. |
+| `docs/async-jobs.md` | doc ✓ | Async job architecture: 4-state lifecycle (queued/running/done/failed), REST+SSE endpoints, CLI (job enqueue/jobs/worker), memory vs Redis queue backends, depth cap & SSE deadline guards, docker-compose worker. |
+| `docs/github-actions.md` | doc ✓ | GitHub Actions deploy-gate integration guide: validate/scorecard composite actions (monorepo + future @v1 forms), CLI output parsing contract, gate exit codes, secrets, examples incl. nightly sweep, async-vs-sync, self-hosted GPU runner. |
+| `docs/runbook.md` | doc ✓ | Operations runbook: docker-compose local stack (api/redis/postgres), full env-var table, CI gate usage, incident playbooks (401s, Postgres, PDF 501, webhooks, LLM), backups and cache recovery. |
+| `docs/testing.md` | doc ✓ | Testing strategy: reproducibility contract (seeded mock backend, pinned master seeds), 5 test categories, Postgres and reportlab skip gates, 90% coverage floor (~95% baseline), CI wiring (ci.yml + nightly.yml), troubleshooting. |
+
+**Key points:**
+
+- `docs/api-reference.md`
+    - Env-gated auth read at create_app(): VALIDSIM_API_KEY unset = open; all /api/v1 routes incl. /health are gated; DELETE has extra destructive gate
+    - Two validation paths: sync POST /validations (201 full scorecard) vs async POST /jobs (202, job_id==run_id, vrun-[0-9a-f]{8}); malformed job ids 400, unknown 404
+    - Rate limiting opt-in (VALIDSIM_RATE_LIMIT=0 default), IP-keyed sliding window on 3 write routes; queue full=503, PDF missing reportlab=501, pagination limit 1-500 on /validations and /models only
+- `docs/async-jobs.md`
+    - Job run_id IS job_id (vrun-<uuid8>); worker persists StoredRun under same id so gate/dashboard see async and sync runs identically; same pipeline via run_and_score
+    - Audit guards: max_depth cap default 1000 (VALIDSIM_JOB_QUEUE_MAX_DEPTH) -> QueueFullError -> 503 queue_full + Retry-After:5; Redis cap is per-process lock so soft under multi-process; SSE stream bounded 60s deadline/1s poll -> event:timeout
+    - Redis backend: plain JSON keys validsim:jobs:<id> + list index (regex id validation closes a keyspace-collision hole); lazy driver import, fail-fast ValueError on missing URL; memory queue is per-process (CLI worker can't see jobs cross-process)
+- `docs/github-actions.md`
+    - MVP is self-hosted local mock pipeline (MockIsaacBackend): run→sqlite store + JSON cache→gate; no SaaS, no API key; all steps must share one job (runner temp is per-job)
+    - gate exit codes 0=APPROVE/1=BLOCK/2=misuse; verdict is authoritative from durable store (never the forgeable JSON cache); --threshold may only raise the bar; gate --json and --latest supported
+    - Scorecard action fails closed on missing scorecard; CLI 'scorecard' is JSON-only (inline Python renders comment; newer 'validsim report --format markdown' not yet wired); §9-10 preview async /jobs path and VALIDIDSIM_BACKEND=isaac GPU runner (contract-only, not built)
+- `docs/runbook.md`
+    - Env reference: store (memory/sqlite/postgres), backend (mock/isaac), API key, CORS, LLM (presence of VALIDSIM_LLM_API_KEY selects LLM generator), webhooks dry-run by default, cache file for status/scorecard/report but gate ignores it
+    - Health probe is auth-gated too: setting VALIDSIM_API_KEY breaks the compose healthcheck until header added; TLS caveat — sslmode=require fails against stock postgres:16-alpine until SSL configured; connections leaving host must use sslmode=require
+    - Backups: daily pg_dump -Fc retained 14d; store save is ON CONFLICT DO NOTHING (append-only verdict log); cache recoverable by re-run since stable_seed(checkpoint,task_id) reproduces scorecards
+- `docs/testing.md`
+    - Determinism rests on: per-episode random.Random(seed); episode seeds seed+i (adversarial offset seed+episodes+j); stable_seed=zlib.crc32&0x7FFFFFFF, not salted hash() — so exact-value asserts like episode_count==72 are safe
+    - Property/fuzz tests avoid hypothesis: pinned MASTER_SEED + random.Random loop (50-150 iters); fuzz asserts pydantic rejects bad input AND never raises for LLM scenarios (always falls back to rule-based generator); positive control keeps bad-pools honest
+    - Live deps gated by skipif VALIDSIM_PG_URL and importorskip('reportlab') — skips are expected in CI JUnit summary; 90% branch-coverage floor in pyproject (CI) / --cov-fail-under=90 (make cov); nightly.yml archives 30d evidence but is not a deploy gate
+
+### ci-infra (19/19 read)
+
+The ci-infra group is the ValidSim platform's build/CI/packaging surface: three GitHub Actions workflows (ci.yml push/PR, nightly.yml scheduled, release.yml tag-triggered), two composite Actions (validate, scorecard) used by the example workflows and by downstream customers, a multi-stage Dockerfile + docker-compose stack (api/worker/redis/postgres, loopback-only, no GPU worker yet), .dockerignore/.gitignore, .env.example (the fullest documentation of runtime config semantics in the repo), Makefile mirroring CI commands, root conftest.py, pytest.ini, pyproject.toml (setuptools+ruff+coverage), requirements.txt/requirements-dev.txt, and scripts/build.ps1 (Windows local build that regenerates an Obsidian build-status dashboard).
+
+Consistent, deliberate design across files: (1) "gate-the-deploy" discipline — docker jobs are always `needs: test`, CI has no push step, release's package-check is unconditional and never uploads; (2) a recurring theme, stated explicitly in .env.example, actions/validate, and the nightly example, that `validsim gate` must read a durable store (sqlite/postgres), never the forgeable JSON cache, and exits 2 rather than deciding from `memory` in-process; (3) coverage floor 90% duplicated across ci.yml, Makefile, and pyproject.toml with an explicit rationale that it's a visible CI contract, not an implied config.
+
+Main issues found: (a) scripts/build.ps1 has a real PowerShell range-operator bug in its venv-probe loop — `1..0` for single-element candidate arrays produces `($null, "python")` as extra args, so only the `py -3.12` candidate is correctly splatted; (b) dependency-set divergence — ci.yml installs only ruff+pytest-cov inline (never requirements-dev.txt, hence never PyYAML) while nightly.yml and release.yml do install requirements-dev.txt, and all three under-specify cache-dependency-path (only requirements.txt) relative to what they actually install; (c) example workflows still claim "no pyproject.toml yet," directly contradicted by the repo's actual pyproject.toml and by actions/validate's own comment; (d) action-version drift, docker/build-push-action@v5 in release.yml vs @v6 in ci.yml; (e) Dockerfile hardcodes OCI version 0.2.0 while pyproject.toml versions dynamically from validsim.__version__, a drift risk.
+
+**Cross-file observations:**
+- scripts/build.ps1 line 41/43: PowerShell range bug — for a 1-element array `@("python")`, `$cand[1..($cand.Length-1)]` is `$cand[1..0]`, which PowerShell evaluates as a descending range `@($null, "python")`, so the probe command gets garbage extra args and likely fails; only the 2-element `py -3.12` candidate is correctly formed.
+- Dependency-set inconsistency across the three workflows: ci.yml installs only `ruff>=0.5 pytest-cov>=5.0` inline (never requirements-dev.txt, so never PyYAML) while nightly.yml and release.yml do `pip install -r requirements.txt -r requirements-dev.txt` — a test importing yaml could pass nightly/release but fail CI.
+- All three workflows set `cache-dependency-path: requirements.txt` only, but nightly.yml and release.yml actually install requirements-dev.txt too — pip cache key is incomplete, may serve stale installs when dev deps change.
+- examples/nightly-adversarial-sweep.yml's header comment claims the repo has "no pyproject.toml yet," but pyproject.toml exists in this same file group and actions/validate/action.yml's own comment confirms the repo now ships one — stale/contradictory documentation.
+- docker/build-push-action@v6 in ci.yml vs @v5 in release.yml, and Dockerfile hardcodes OCI label version 0.2.0 while pyproject.toml derives version dynamically from validsim.__version__ — two independent version-drift risks in the same build/publish path.
+
+| File | Kind | Summary |
+|---|---|---|
+| `.dockerignore` | config ✓ | Docker build-context exclusions: VCS, secrets (.env/.pem/.key), tests/, docs/, .github/, scripts/, Dockerfile itself, caches and venvs. |
+| `.env.example` | config ✓ | Comprehensive env template: Postgres/store, Redis queue, API hardening (key/CORS/rate-limit/env mode), mock vs isaac backend, LLM scenario gen, webhooks/SMTP, CLI cache path. |
+| `.github/workflows/ci.yml` | config ✓ | Push/PR CI: ruff lint + pytest with --cov-fail-under=90 and JUnit XML, artifacts/step-summary, then a test-gated Docker build (push:false). |
+| `.github/workflows/nightly.yml` | config ✓ | 03:00 UTC daily + manual workflow_dispatch full pytest run, JUnit artifact with 30-day retention. |
+| `.github/workflows/release.yml` | config ✓ | On `v*` tag push: test → docker build/push to GHCR → package-check (python -m build + twine check, never uploads). |
+| `.gitignore` | config ✓ | Ignores build/test caches, venvs, *.db, secrets (.env/.pem/.key) with a !.env.example exception, and Obsidian workspace noise. |
+| `Dockerfile` | source ✓ | Two-stage python:3.12-slim build: venv in builder, copied to runtime, non-root uid/gid 1001, HEALTHCHECK via stdlib urllib, CMD uvicorn on :8000. |
+| `Makefile` | config ✓ | Dev entry points (help/install/test/cov/lint/run/metrics/health/cli-run/worker/jobs/smoke/docker-build/up/down/clean) mirroring CI commands. |
+| `actions/scorecard/action.yml` | config ✓ | Composite action: reads the run's cached JSON scorecard, renders Markdown via an inline stdlib script, appends to job summary, optionally posts as a PR comment via gh. |
+| `actions/validate/action.yml` | config ✓ | Composite action: installs validsim (pip install ., with requirements.txt+PYTHONPATH fallback), runs `validsim.cli run`, parses run-id/score from stdout, then gates via `validsim.cli gate`. |
+| `conftest.py` | source ✓ | Root conftest: prepends repo root to sys.path so the flat-layout `validsim` package imports under pytest. |
+| `docker-compose.yml` | config ✓ | Local stack: api (Dockerfile build) + redis:7-alpine + postgres:16-alpine + CPU worker reusing the api image; all published ports loopback-only. |
+| `examples/nightly-adversarial-sweep.yml` | config ✓ | Copy-ready workflow example: 2000 episodes + 200 adversarial nightly/dispatched run, gate on durable sqlite store, wrap scorecard as JUnit, upload evidence. |
+| `examples/robot-validation.yml` | config ✓ | Copy-ready example calling ./actions/validate and ./actions/scorecard monorepo-relative, with a downstream `deploy` job gated on validate's success. |
+| `pyproject.toml` | config ✓ | Setuptools build config for the `validsim` package: deps, [dev] extra, CLI entry point, ruff (line-length 100, py310), coverage (branch=true, fail_under=90). |
+| `pytest.ini` | config ✓ | Minimal pytest config: testpaths=tests, standard naming conventions, addopts -q --tb=short. |
+| `requirements-dev.txt` | config ✓ | Dev/test deps: pytest>=8.0, pytest-cov>=5.0, ruff>=0.5, PyYAML>=6.0. |
+| `requirements.txt` | config ✓ | Runtime deps: fastapi, uvicorn, pydantic, typer, httpx, psycopg[binary], redis, reportlab — all lower-bound pinned (>=), not exact-pinned. |
+| `scripts/build.ps1` | source ✓ | PowerShell continuous-build script: bootstraps a .venv, pip-installs requirements, runs pytest with JUnit XML, appends builds/build-log.csv, and regenerates the Obsidian 'Build Status.md' dashboard note. |
+
+**Key points:**
+
+- `.dockerignore`
+    - Excludes vault/, .env*, *.pem, *.key to keep secrets out of images
+    - Excludes tests/, docs/, .github/, scripts/ from the runtime build context
+    - Doesn't exclude scratch artifacts (junit.xml, full.txt, _*.xml) visible untracked in git status — build-context bloat only, image unaffected since Dockerfile COPYs validsim/ explicitly
+- `.env.example`
+    - Documents that `validsim gate` refuses to decide from the `memory` store (exit 2) and must point at sqlite/postgres
+    - VALIDSIM_ENV=production makes a blank VALIDSIM_API_KEY a startup failure instead of an open API
+    - Notes sslmode=require must not be used against stock postgres:16-alpine (SSL off → all conns fail)
+- `.github/workflows/ci.yml`
+    - Installs only requirements.txt plus inline 'ruff>=0.5'/'pytest-cov>=5.0', not requirements-dev.txt (unlike nightly.yml/release.yml which do install it) — dep-set divergence risk
+    - cache-dependency-path only lists requirements.txt
+    - docker job is hard-gated on `needs: test`
+- `.github/workflows/nightly.yml`
+    - Installs -r requirements.txt -r requirements-dev.txt but cache-dependency-path lists only requirements.txt (stale/incomplete pip cache key)
+    - No ruff lint step and no coverage floor (intentionally full-suite only)
+    - Same JUnit-summary inline Python parser as ci.yml/release.yml, duplicated verbatim
+- `.github/workflows/release.yml`
+    - Uses docker/build-push-action@v5 while ci.yml uses @v6 — action version drift between workflows
+    - package-check job is `needs: docker` (gated on a successful image push) and is explicitly non-conditional after removing a prior `if: has-token=='true'` guard that let it pass vacuously
+    - Same cache-dependency-path omission (only requirements.txt) as nightly.yml while installing requirements-dev.txt too
+- `.gitignore`
+    - Covers `*.db` and `builds/` but none of the loose `_*.txt`/`_*.xml`/`junit.xml`/`full.txt` scratch files currently showing untracked in git status
+    - Explicitly negates `.env.example` out of the blanket `.env.*` ignore
+- `Dockerfile`
+    - OCI label hardcodes version 0.2.0, while pyproject.toml derives version dynamically from validsim.__version__ — drift risk between the two
+    - Builds a venv in stage 1 but only pip-installs from requirements.txt (never the package itself), so `import validsim` in the image relies on the source COPY, not an installed package
+    - HEALTHCHECK uses urllib (no curl/wget added), matching the compose healthcheck
+- `Makefile`
+    - `cov` target duplicates the same 90% floor as ci.yml/pyproject.toml
+    - `clean` uses POSIX find/rm — documented as requiring WSL/Git-Bash on Windows
+    - No explicit `gate`/`report` target despite the CLI supporting them (smoke chains run→gate→report)
+- `actions/scorecard/action.yml`
+    - Fails the step (exit 1) instead of silently succeeding when no cached scorecard exists — comment notes this used to hand PRs a green gate backed by nothing
+    - Pins VALIDSIM_CACHE_FILE to ${RUNNER_TEMP}/validsim/scorecards.json, same path the validate action pins, so both must run in one job
+    - PR-number resolution falls back from GITHUB_EVENT_PATH JSON parse to `gh pr view`, then skips gracefully on push events
+- `actions/validate/action.yml`
+    - Sets VALIDSIM_STORE=sqlite and VALIDSIM_SQLITE_PATH under runner.temp, since gate must decide from a durable store, not the forgeable JSON cache
+    - Parses run-id via regex 'vrun-[0-9a-f]{8}' and score from the 'Composite:' line, last-match-wins, failing hard if either is missing
+    - Documented exit-code contract: gate 0=APPROVE, 1=BLOCK (fails job), 2=unknown/missing run (also fails job)
+- `conftest.py`
+    - Single side effect: insert repo root into sys.path if absent
+    - No fixtures or hooks defined at root level (untracked tests/conftest.py exists separately, outside this file group)
+- `docker-compose.yml`
+    - POSTGRES_PASSWORD is required via ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD} interpolation in both the postgres service and the API/worker DSNs
+    - Worker healthcheck is a raw stdlib socket PING/PONG to Redis, not HTTP, since the worker process serves no port
+    - GPU `worker-gpu` service is a commented-out placeholder only — intentionally absent from the running stack
+- `examples/nightly-adversarial-sweep.yml`
+    - Header comment claims "no pyproject.toml yet, so there is nothing to pip-install from the repo itself" — contradicted by the actual pyproject.toml in this same repo and by actions/validate/action.yml's own note that the repo now ships one
+    - Writes sqlite to ${{github.workspace}}/.validsim/runs.db but reads the scorecard cache from CWD-relative .validsim/scorecards.json (CWD is the workspace, so these agree)
+    - JUnit wrap step runs `if: always()` and re-derives APPROVE/BLOCK independently from cached JSON, mirroring (not reusing) the gate's own decision logic
+- `examples/robot-validation.yml`
+    - Job-level outputs pass run-id/score from the validate step to the deploy job
+    - Deploy job only fires on push to refs/heads/main, not on PRs
+    - Relies on scorecard's `if: always()` to still comment when the gate blocks
+- `pyproject.toml`
+    - Dynamic version pulled from validsim.__version__
+    - Runtime deps list matches requirements.txt exactly (8 packages)
+    - Coverage comment states baseline ~93-95% with the 90% floor chosen to absorb normal jitter
+- `pytest.ini`
+    - Redundant with CI/Makefile explicitly passing `tests/` as an argument anyway
+    - No markers/filterwarnings config despite the repo running many test groups
+- `requirements-dev.txt`
+    - Notably includes PyYAML, which ci.yml's install step never installs (it only adds ruff+pytest-cov inline) — tests importing yaml could pass nightly/release but fail CI
+    - Matches pyproject.toml [project.optional-dependencies].dev exactly
+- `requirements.txt`
+    - Kept in sync with pyproject.toml dependencies list (verified identical)
+    - No upper-bound pins, so CI/nightly/release can drift independently over time since nothing is hash-pinned
+- `scripts/build.ps1`
+    - Venv bootstrap loop has a likely bug: for single-element candidate arrays `@("python")` and `@("python3")`, `$cand[1..($cand.Length - 1)]` evaluates to `1..0` in PowerShell, i.e. `@($cand[1],$cand[0])`=`@($null,"python")`, so the probe is invoked as `python <null> python -c ...` instead of `python -c ...` — only the two-element `py -3.12` candidate is correctly formed
+    - Correctly treats a pytest run with no parseable summary line as "suite did not run" rather than logging a false pass/fail verdict
+    - Defines a `$ResampleBudget` parameter that is never referenced anywhere else in the script (dead parameter)
+
+### artifacts-xml (15/15 read)
+
+Fifteen generated JUnit-XML test reports from 2026-09-20 (host LAPTOP-MSLI2NU1, tz +05:30), all pytest-written with a single testsuite named "pytest", documenting an incremental test-count ramp over one work session: 481 → 582 → 691 → 823 → 849 → 1125 → 1292 tests. Only two artifacts show failures: _sts_junit.xml/_sts_junit2.xml (a real flaky/broken rate-limit test: test_api_key_gets_its_own_bucket expected 429 but got 201 Created) and validsim-nightly-junit.xml (hand-authored-looking gate artifact: composite score 73.12 below threshold 85.0, run vrun-95614a26). Two Postgres integration tests are skipped in every large suite ("no postgres"). No two files are byte-identical, but _coerce_wave/_pipeline_refactor/junit/pytest_report are same-run variants (849 tests, differing timestamps/times). All are stray untracked debris at repo root (git status shows them as ??); none belong in version control — builds/junit.xml (1292 tests, all passing) is the most complete snapshot.
+
+**Cross-file observations:**
+- 15 untracked JUnit XML artifacts litter the repo root and builds/ — should be gitignored or deleted; no .gitignore coverage evident since they show as ?? in git status
+- _sts_junit.xml and _sts_junit2.xml record a genuine test failure: tests.test_api_rate_limit.TestRateLimitEnabled::test_api_key_gets_its_own_bucket asserted 429 but received 201, twice within a minute — a rate-limiting bug or race, later apparently fixed (subsequent 849-test runs pass)
+- validsim-nightly-junit.xml is structurally different (no timestamp/hostname/time attrs, suite name 'nightly-adversarial-sweep', failing 'testcase' gate:vrun-95614a26 with 'composite 73.12 below threshold 85.0') — appears hand-written or generated by the scorecard gate, not pytest
+- TestPostgresIntegration round-trip tests are skipped in every full run ('no postgres') — Postgres store coverage never exercised locally
+- File sizes cluster (103552B ×4, 83424B ×3, 100732B ×2) but md5s all differ; they are re-runs of near-identical suites, so most are redundant duplicates of each other
+
+| File | Kind | Summary |
+|---|---|---|
+| `_coerce_wave.xml` | artifact ✓ | pytest JUnit XML: 849 tests, 0 fail/err, 2 skipped (postgres), 18.14s, ts 2026-09-20T06:16:29+05:30. |
+| `_obs_junit.xml` | artifact ✓ | pytest JUnit XML: 1125 tests, 0 fail/err, 2 skipped, 18.02s, ts 2026-09-20T08:04:57+05:30 — observability-wave run. |
+| `_pipeline_refactor_junit.xml` | artifact ✓ | pytest JUnit XML: 849 tests, 0 fail/err, 2 skipped, 17.97s, ts 2026-09-20T06:22:20+05:30. |
+| `_pytest_report.xml` | artifact ✓ | pytest JUnit XML: 481 tests, 0 fail/err, 2 skipped, 41.65s, ts 2026-09-20T01:17:14+05:30 — earliest timestamp of the set. |
+| `_r1.xml` | artifact ✓ | pytest JUnit XML: 691 tests, 0 fail/err, 2 skipped, 13.25s, ts 2026-09-20T03:13:27+05:30. |
+| `_r2.xml` | artifact ✓ | pytest JUnit XML: 691 tests, 0 fail/err, 2 skipped, 12.75s, ts 2026-09-20T03:13:44+05:30. |
+| `_routing_junit.xml` | artifact ✓ | pytest JUnit XML: 691 tests, 0 fail/err, 2 skipped, 12.87s, ts 2026-09-20T03:12:59+05:30. |
+| `_sts_junit.xml` | artifact ✓ | pytest JUnit XML: 823 tests, 1 failure, 2 skipped, 21.16s, ts 2026-09-20T04:47:01+05:30; failing test test_api_key_gets_its_own_bucket (201 != 429). |
+| `_sts_junit2.xml` | artifact ✓ | pytest JUnit XML: 823 tests, 1 failure (same rate-limit test, 201 != 429), 2 skipped, 23.96s, ts 2026-09-20T04:47:52+05:30. |
+| `bench_junit.xml` | artifact ✓ | pytest JUnit XML: 12 tests, 0 fail, 0 skipped, 0.04s, ts 2026-09-20T02:15:09+05:30 — tiny benchmark subset run. |
+| `builds/junit.xml` | artifact ✓ | pytest JUnit XML: 1292 tests, 0 fail/err, 2 skipped, 25.12s, ts 2026-09-20T11:37:27+05:30 — largest and latest full suite, in builds/. |
+| `junit.xml` | artifact ✓ | pytest JUnit XML: 849 tests, 0 fail/err, 2 skipped, 23.25s, ts 2026-09-20T05:28:54+05:30 — default pytest location output. |
+| `pytest_junit.xml` | artifact ✓ | pytest JUnit XML: 582 tests, 0 fail/err, 2 skipped, 12.19s, ts 2026-09-20T02:14:41+05:30. |
+| `pytest_report.xml` | artifact ✓ | pytest JUnit XML: 849 tests, 0 fail/err, 2 skipped, 25.55s, ts 2026-09-20T05:33:19+05:30. |
+| `validsim-nightly-junit.xml` | artifact ✓ | Gate-result JUnit XML (not standard pytest format): suite 'nightly-adversarial-sweep', 1 test, 1 failure — 'composite 73.12 below threshold 85.0' for run vrun-95614a26. |
+
+**Key points:**
+
+- `_coerce_wave.xml`
+    - 849 tests all pass
+    - 2 skips: TestPostgresIntegration (no postgres)
+    - byte-unique but 1 of four 849-test near-duplicates
+- `_obs_junit.xml`
+    - 1125 tests, zero failures
+    - test count jumped 849→1125 in this run
+- `_pipeline_refactor_junit.xml`
+    - 849 tests all pass
+    - same-size near-duplicate of _coerce_wave.xml
+- `_pytest_report.xml`
+    - earliest run captured (01:17) at 481 tests
+    - slowest relative time: 41.65s
+- `_r1.xml`
+    - 691 tests all pass
+    - one of three 691-test runs within ~45s of each other
+- `_r2.xml`
+    - 691 tests all pass
+    - 17s after _r1.xml — re-run for comparison
+- `_routing_junit.xml`
+    - earliest of the three 691-test runs
+    - 691 tests all pass
+- `_sts_junit.xml`
+    - FAILURE: test_api_rate_limit.TestRateLimitEnabled::test_api_key_gets_its_own_bucket — assert 201 == 429
+    - rate-limit bucket-per-api-key logic broken at this commit
+    - 2 postgres skips
+- `_sts_junit2.xml`
+    - Same failure re-recorded 51s later — not flaky, deterministic
+    - confirms rate-limit bug reproducible
+- `bench_junit.xml`
+    - 12 tests only, near-instant (0.04s) — bench subset
+    - no skips
+- `builds/junit.xml`
+    - 1292 tests all pass — fullest coverage snapshot
+    - latest timestamp of the whole set (11:37)
+- `junit.xml`
+    - 849 tests all pass
+    - likely re-runs of this overwrite the root artifact
+- `pytest_junit.xml`
+    - 582 tests all pass
+    - intermediate stage of the test-count ramp
+- `pytest_report.xml`
+    - 849 tests all pass
+    - fourth 103552-byte near-duplicate of the 849-test suite
+- `validsim-nightly-junit.xml`
+    - Composite score 73.12 vs threshold 85.0 — nightly gate failed
+    - Missing timestamp/hostname/time attrs — hand-authored or CLI-generated
+    - case name gate:vrun-95614a26 ties to scorecard gate logic
+
+### artifacts-txt (22/22 read)
+
+All 22 files are untracked generated artifacts: pytest console dumps, one build-log CSV, and the .validsim scorecard store — no source. Suite snapshots trace test-count growth: 252 collected (collect.txt) → 338+2 skip (builds/last-build-output.txt) → 451→716→809→849→1077→1125→1244 passing runs across the _*.txt dumps, matching build-log.csv rows (2026-09-18→09-20, 1 FAIL early, final 1274 passed 96% cov). Two dumps record real failures: pytest_full.txt (849 items) has 34 failures all rooted in NameError: 'ScenarioGenerator' is not defined hit via validsim/cli.py (an in-progress CLI/pipeline refactor), and _sts_full/_sts_run.txt show test_api_rate_limit::test_api_key_gets_its_own_bucket failing with 201≠429 (per-key rate-limit bucket not applied). scorecards.json holds 3 pick-place runs, composite 73.1–80.2 vs gate 85.0 → all BLOCK. run2.txt adds an environment hazard: a CodeBuddy sitecustomize trash-guard aborts pytest tmp cleanup with SystemExit(1) at bulk-delete>500. Several dumps are exact duplicates, and last-build-output.txt is stale relative to build-log.csv.
+
+**Cross-file observations:**
+- Massive artifact pollution: 21 scratch/log files in repo root and builds/ are untracked (git status '??'); none gitignored — _probe_fuzz.py etc. nearby too
+- Exact duplicates: _coerce_run.txt == _pipeline_refactor_pytest.txt; run1.txt == pytest_routing_run.txt; full.txt == _obs_pytest.txt + summary line; _sts_run.txt ⊂ _sts_full.txt
+- pytest_full.txt shows a genuine regression (34 failures, NameError 'ScenarioGenerator' not defined via cli.py) that the newest build-log.csv row (1274 passed) and all other dumps do not reflect — dumps span multiple WIP revisions and are contradictory as a record of 'current' state
+- _sts_*.txt captures a real behavior bug: requests with their own API key returned 201 where 429 expected (per-key rate-limit buckets)
+- run2.txt: CodeBuddy's safe-delete sitecustomize shim raises SystemExit(1) inside pytest's atexit tmpdir cleanup (count 540 > 500 threshold) — can corrupt exit codes of otherwise green runs; builds/last-build-output.txt (338 tests) is stale vs build-log.csv's 1274-test final row
+
+| File | Kind | Summary |
+|---|---|---|
+| `.validsim/scorecards.json` | artifact ✓ | ValidSim scorecard store: 3 sim-run results (vrun-87ab5b94/7c76933b/95614a26), all task pick-place, dated 2026-09-19. Composite 80.16/77.29/73.12 vs threshold 85.0 → every deploy_decision=BLOCK; success rates .66/.57/.52 with CIs, failure taxonomies (perception_error, collision, grasp_failure...), regression_delta null. |
+| `_coerce_run.txt` | artifact ✓ | Bare pytest progress dump: 847 passed + 2 skipped = 849 collected, 0 failed (100%). Byte-identical to _pipeline_refactor_pytest.txt. |
+| `_jsonwave_pytest.txt` | artifact ✓ | Pytest progress dump, smaller revision: 714 passed, 2 skipped (~716 collected), 0 failed. |
+| `_obs_pytest.txt` | artifact ✓ | Pytest progress dump: 1123 passed, 2 skipped, 0 failed; same run as full.txt minus the summary line. |
+| `_p1.txt` | artifact ✓ | Tiny pytest subset dump: 37 passed, 2 skipped, 0 failed. |
+| `_p2.txt` | artifact ✓ | Pytest subset dump: 456 passed, 2 skipped, 0 failed. |
+| `_pipeline_refactor_pytest.txt` | artifact ✓ | Duplicate of _coerce_run.txt: 847 passed, 2 skipped, 0 failed. |
+| `_pytest_tail.txt` | artifact ✓ | Pytest dump: 449 passed, 2 skipped, 0 failed (~451 tests). |
+| `_sts_full.txt` | artifact ✓ | Pytest run (~810 tests) with 1 FAILURE: tests/test_api_rate_limit.py::TestRateLimitEnabled::test_api_key_gets_its_own_bucket; rest passed, 2 skipped. |
+| `_sts_run.txt` | artifact ✓ | Same run as _sts_full.txt plus FAILURES detail: assert 201 == 429 at test_api_rate_limit.py:140 — a second request with its own API key got 201 instead of rate-limited 429. |
+| `_tsrun.txt` | artifact ✓ | Pytest progress dump: 1075 passed, 2 skipped, 0 failed. |
+| `builds/build-log.csv` | artifact ✓ | 13-row build history (UTC ts,result,stage,duration,summary) 2026-09-18→09-20: one FAIL (1 failed/96 passed), then PASSes growing 97→1274 tests; final row cites '96% cov, agent fleet waves 4-18 (~130 subagents)'. |
+| `builds/last-build-output.txt` | artifact ✓ | Tail of last build: '338 passed, 2 skipped in 8.25s' — matches the 2026-09-19 14:31 CSV row (not the newer 1274-test row). |
+| `collect.txt` | artifact ✓ | pytest --collect-style per-file counts for 19 test files, 252 items total (old revision, ~matches 250-test commit); includes test_isaac_worker 40, test_store_postgres 26. |
+| `full.txt` | artifact ✓ | Complete run dump: '1123 passed, 2 skipped in 19.30s', 0 failed. |
+| `out_prop.txt` | artifact ✓ | 7 dots at [100%]: small property/hypothesis test run, 7 passed, no summary line captured. |
+| `pytest_full.txt` | artifact ✓ | Full verbose session (win32, Py3.14.4, pytest-9.0.2, 849 items): 34 failed, 813 passed, 2 skipped in 17.33s. All failures in test_cli/test_cli_json/test_cli_report/test_sim_factory with identical cause: NameError "ScenarioGenerator is not defined". |
+| `pytest_out.txt` | artifact ✓ | Pytest progress dump: 1242 passed, 2 skipped, 0 failed — largest single run captured here. |
+| `pytest_routing_run.txt` | artifact ✓ | Pytest dump: 689 passed, 2 skipped, 0 failed; identical to run1.txt. |
+| `run1.txt` | artifact ✓ | Duplicate of pytest_routing_run.txt: 689 passed, 2 skipped. |
+| `run2.txt` | artifact ✓ | Same 691-test suite then an atexit crash: CodeBuddy's safe-delete trash shim blocked pytest tmpdir GC (count 540 > threshold 500) and raised SystemExit(1) in _pytest/pathlib cleanup_numbered_dir. |
+| `s.txt` | artifact ✓ | '24 passed in 0.21s' — quick 24-test subset run, 0 failed. |
+### docx-binary (1/1 read)
+
+project.docx (54 KB, tracked) is the founding spec for the whole repo: ValidSim, "GitHub Actions for robots" — a sim-to-real CI/CD gate that takes a VLA checkpoint (GR00T/pi0), runs 1,000-100,000 parallel Isaac Lab episodes with domain randomization plus 50-100 LLM-generated adversarial scenarios across 12 categories, then emits a composite score (40% success / 30% safety / 20% robustness / 10% regression delta, 95% bootstrap CI) that approves or blocks fleet deployment. 19 sections cover problem, TAM/SAM/SOM, architecture, an 8-week sprint plan, pricing, GTM, 3-year financials, YC/NVIDIA strategy, KPIs, risks, and a sourced appendix. Extracted with python zipfile + regex on word/document.xml (~61k chars, 1,057 paragraphs) since it is a binary office container.\n\nTwo structural findings dominate. First, formatting: 0 tables and 0 heading styles in the XML — it is raw markdown pasted into Word, so pipe tables, `---` rules and ASCII box diagrams render as literal text; the doc's own "copy into Word, tables transfer cleanly" advice does not apply to this artifact. Second, provenance: it is unedited LLM output, opening with "I'll create a comprehensive startup document for you" and ending with four "Want me to:" follow-up offers, inside a file marked CONFIDENTIAL. \n\nSubstantively it is coherent and it does match the code on disk (validsim/cli.py, api/main.py, store/, actions/validate + scorecard, PDF export, registry endpoints all map to sections 4.5-4.7 and 7.3), which makes it the repo's authoritative requirements doc rather than stray marketing. Weak points for the orchestrator: the timeline is impossible from today (2026-09-22) — an 8-week MVP plus a 12-week roadmap against a Nov 2 YC deadline, with the file dated Sep 17; and the market numbers ($27.6B 2025 robotics VC, $3.92B across 9 robot-FM deals, $40.5B humanoid TAM by 2033) are single-sourced to secondary blogs (Mean CEO Blog, New Market Pitch, Value Add VC) with no primary verification. Treat the competitive and financial sections as unvalidated inputs to a decision, as the closing note itself warns.
+
+**Cross-file observations:**
+- project.docx is not a formatted Word document: word/document.xml contains zero <w:tbl> elements and zero heading pStyles. Every table is pipe-delimited markdown, every 'code block' is box-drawing ASCII. So the closing instruction 'copy into Word and tables transfer cleanly' is false for this file as it stands — the docx is the already-pasted result.
+- The document is verbatim LLM output, not edited prose. Line 1 is 'I'll create a comprehensive startup document for you', and the tail (lines 1046-1056) is an assistant sign-off offering follow-ups (write YC answers, draft Inception text, pitch deck). These meta-artifacts sit in a file marked 'Classification: Confidential — Founding Document'.
+- The document's stated MVP scope matches the repo's actual code: validsim/cli.py, validsim/api/main.py, validsim/store/, actions/validate + actions/scorecard, PDF scorecard, and model registry endpoints all trace to sections 4.5/4.6/7.3. It is the spec the rest of this repo was built against.
+- Timeline is internally inconsistent with today's date (2026-09-22): YC W27 deadline Nov 2 2026 is 6 weeks out, but section 15's 90-day roadmap starts at 'Week 1' and the file docProps created date is 2026-09-17. The 8-week MVP plus 12-week roadmap cannot both fit before the stated deadline.
+- Untracked scratch clutter surrounds it (git status shows ~35 ?? entries: _*.txt, _*.xml, junit.xml, full.txt, out_prop.txt). project.docx itself is tracked, but the audit's own extraction file was removed rather than left behind.
+
+| File | Kind | Summary |
+|---|---|---|
+| `project.docx` | binary ✓ | 19-section confidential founding document (~9,132 words) for a robot-policy validation SaaS, authored by 'dev bansal' 2026-09-17. Extracted via zipfile+word/document.xml; readable but unstyled. |
+
+**Key points:**
+
+- `project.docx`
+    - ValidSim/Sim-to-Real startup plan: CI/CD for robot foundation models, YC W27 (Nov 2 2026) + NVIDIA Inception
+    - 6-layer architecture, 12-endpoint API, validsim CLI, 8-week MVP sprint plan, 4 pricing tiers ($0/$2K/$8K/custom)
+    - File is raw markdown pasted into Word: 0 <w:tbl>, 0 heading styles, --- rules and ASCII diagrams survive as literal text
+    - Claims composite 8.7/10, highest of seven evaluated bets; all market figures cited to PitchBook/Dealroom/Grand View
+
+### obsidian-configs (4/4 read)
+
+The vault/.obsidian directory contains four tiny JSON config files, all read in full. They define a stock Obsidian setup for the documentation vault: app.json routes attachments to "99 - Attachments" and new files to "00 - Dashboard" with alwaysUpdateLinks enabled; core-plugins.json enables 14 standard core plugins (graph, backlinks, templates, file-recovery, etc.); graph.json is effectively default (no color groups); templates.json sets the template folder to "98 - Templates". Nothing looks wrong — these are IDE/editor settings with no bearing on the ValidSim code, tests, or CI. The referenced folders (00 - Dashboard, 98 - Templates, 99 - Attachments) are part of the vault's numbering convention; 00 - Dashboard exists (its "Build Status.md" is tracked in git), while 98/99 folders were not in this group's file list so their existence is unverified here. No community-plugins.json or workspace files are present in this group.
+
+**Cross-file observations:**
+- templates.json references "98 - Templates" and app.json references "99 - Attachments"; whether those folders exist in the vault is outside this group's file list
+- graph.json has empty colorGroups — vault graph is unstyled (cosmetic only)
+- No .obsidian/workspace.json or community plugin configs committed — reasonable hygiene for VCS
+
+| File | Kind | Summary |
+|---|---|---|
+| `vault/.obsidian/app.json` | config ✓ | Obsidian app settings: attachments go to "99 - Attachments", links auto-update, new files created in "00 - Dashboard" folder. |
+| `vault/.obsidian/core-plugins.json` | config ✓ | Enables 14 core plugins: file-explorer, global-search, switcher, graph, backlink, outgoing-link, tag-pane, page-preview, templates, note-composer, command-palette, outline, word-count, file-recovery. All standard defaults; no community plugins file present. |
+| `vault/.obsidian/graph.json` | config ✓ | Minimal graph-view config: collapse=false, empty colorGroups array — graph display left at defaults, no per-folder color coding. |
+| `vault/.obsidian/templates.json` | config ✓ | Templates plugin points at folder "98 - Templates" for new-note templates. |
+
+**Key points:**
+
+- `vault/.obsidian/app.json`
+    - attachmentFolderPath: 99 - Attachments
+    - alwaysUpdateLinks: true
+    - newFileLocation folder -> 00 - Dashboard
+- `vault/.obsidian/core-plugins.json`
+    - graph/backlink/outgoing-link enabled (supports vault linking)
+    - templates plugin enabled
+    - file-recovery enabled
+- `vault/.obsidian/graph.json`
+    - colorGroups empty — no graph color groups configured
+- `vault/.obsidian/templates.json`
+    - template folder: 98 - Templates
+
+### scratch (3/3 read)
+
+Three throwaway scripts prefixed with underscore, all untracked scratch tooling in the repo root. _manifest_build.py builds a path+size inventory (_manifest.json) for repo-size auditing. _probe_fuzz.py is a manual robustness probe of validsim.scenarios.llm_generator: it feeds 11 classes of malformed LLM JSON responses through a fake provider and prints (never asserts via exit code) whether validation and fallback behave; it also spot-checks rule-based generator determinism/coverage. _tmp_junit_wrap.py adapts the nightly adversarial-sweep scorecard cache into JUnit XML so a composite-score gate below threshold surfaces as a CI test failure (validsim-nightly-junit.xml exists untracked, confirming it has been run). Nothing here is production code; all are one-off helpers whose outputs (manifest, junit xml) remain as untracked artifacts in the working tree, likely candidates for cleanup/gitignore.
+
+**Cross-file observations:**
+- _probe_fuzz.py catches all exceptions and only prints — it can never fail a run, so regressions in LLMScenarioGenerator robustness would go unnoticed if it were ever wired into CI
+- _manifest_build.py silently records size 0 on OSError, which could understate the manifest total without any warning
+- All three scripts and their outputs (_manifest.json, validsim-nightly-junit.xml) are untracked scratch files lingering in the repo root; a .gitignore entry for the underscore-prefixed scratch pattern would prevent audit noise
+- _tmp_junit_wrap.py duplicates the CLI's --latest ordering logic (max by created_at string) rather than importing it — a drift risk if the CLI ordering changes
+- _probe_fuzz.py hardcodes n=13 and specific category names (lighting_change, sensor_degradation, task_ambiguity), coupling the probe to current taxonomy constants
+
+| File | Kind | Summary |
+|---|---|---|
+| `_manifest_build.py` | source ✓ | Walks the repo tree and writes _manifest.json listing every file path + byte size, excluding top-level caches (.venv, .git, .pytest_cache, .ruff_cache, .benchmarks), __pycache__ dirs, .pyc, .coverage, and _manifest.json itself. |
+| `_probe_fuzz.py` | source ✓ | Manual/ad-hoc fuzz harness probing LLMScenarioGenerator robustness: a fake provider FP returns canned raw text, and check() validates output count, category taxonomy, difficulty bounds [0,1], name and dict params for 11 malformed-response cases (nan/inf, empty, prose-wrapped, non-taxonomy, bad types, truncated JSON), then asserts rule-based determinism, category coverage and unique ids. |
+| `_tmp_junit_wrap.py` | source ✓ | Temp CI helper converting the nightly scorecard cache (.validsim/scorecards.json) into a single-testcase JUnit XML (validsim-nightly-junit.xml); the gate test fails when composite_score < threshold, mirroring CLI --latest ordering by created_at. |
+
+**Key points:**
+
+- `_manifest_build.py`
+    - os.walk with dirs[:] pruning for excludes
+    - prints count and total bytes; writes sorted JSON to _manifest.json
+    - OSError on getsize falls back to size 0
+- `_probe_fuzz.py`
+    - SWALLOW-exception check(): any Exception prints RAISED instead of failing — probe only, no assertion exit code
+    - fallback=ScenarioGenerator(seed=42) exercised via g.fallback_used flag
+    - final block checks determinism across two seed=7 runs, full ADVERSARIAL_CATEGORIES coverage, difficulty 0.05-0.95, 30 unique ids
+- `_tmp_junit_wrap.py`
+    - Graceful skip (exit 0) when cache missing or empty
+    - max() over runs by stringified created_at to pick newest scorecard
+    - failure element carries deploy_decision; run produces validsim-nightly-junit.xml seen in git status untracked list
+
+## Adversarial spot-check (10-file sample re-read independently)
+
+Verdict: **discrepancies**
+
+- `docs/api-reference.md` — The summary repeats as fact the doc's claim that 'all /api/v1 routes incl. /health are gated' (§2 warning: 'Health probe is also gated', §4.5 table Auth=✓). This is stale: validsim/api/main.py defines PUBLIC_PATHS={'/api/v1/health'} and exempts it inside require_api_key (lines 92, 552) — the item-05 fix, marked ✅ 2026-09-21 in ISSUE_CATALOG. The doc contradicts both the shipped code and .env.example ('/api/v1/health stays open for the container healthcheck'). A future reader must know the doc's health-auth statement is wrong, not just that the doc says it.
+- `docs/api-reference.md` — The summary calls it a 'Full REST contract' with no caveat, but the repo's own ISSUE_CATALOG lists this file as diverging from code in at least three more ways it doesn't flag: item 12 — the POST /validations 201 example (composite 87.5) is arithmetically impossible for its shown inputs (formula gives 95.3); item 13 — GET /jobs is documented (lines 603, 650, 783) as a bare unpaginated FIFO array while jobs/router.py actually accepts limit/offset and returns a {total,limit,offset,items} newest-first envelope; item 14 — neither /metrics (the deliberately auth-stripped Prometheus mount in main.py:843-849) nor /api/v1/metrics appears in the document at all, so 'all endpoints' is false of the doc's own coverage.
+- `vault/07 - Fundraising/YC Application Answers.md` — The summary relays Q3's claims ('126-test pytest suite green on continuous CI', 'hourly build agent that republishes status') neutrally, missing that these are exactly the assertions ISSUE_CATALOG item 17 documents as FALSE (zero scheduled tasks exist; item 18 records the true suite at 1328 passed/2 skipped and test counts stated 'six incompatible ways'), and that item 17 marks the fundraising pages non-negotiable to fix before any external YC/NVIDIA send. The file also contradicts itself: Q6 says '97-test CI-green scaffold' while Q3 says 126. The summary's 'placeholder discipline' point covers [X] markers but not these baked-in false numbers. (Also minor: 'Q1–Q7 in short/expanded pairs' is wrong for Q7, which is a single long-form moat/traction section with no Short/Expanded pair.)
+- `actions/validate/action.yml` — Borderline omission rather than error: the Python-setup step also pins VALIDSIM_CACHE_FILE=${RUNNER_TEMP}/validsim/scorecards.json (line 96) precisely so the separate ValidSim Scorecard composite action in the same job can find the run — a cross-action contract a future reader editing either action must know. The summary covers the sqlite store pins and the stdout-parsing/gate contract but drops the cache-file wiring entirely.
+
+**Critic notes:** Verified accurate (all key points checked against source, nothing load-bearing missed): validsim/api/main.py (856 lines; env reads at create_app time incl. RuntimeError fail-closed; router.dependencies auth with PUBLIC_PATHS-in-dependency; IP-only rate-limiter key, 10k LRU buckets, sweep every 1024 checks, 3 POST routes; destructive DELETE gate + store.delete() as atomic existence check; double metrics mount with saved_dependencies swap; module-level app=create_app()); validsim/engine/scorecard.py (weights 0.4/0.3/0.2/0.1, clamp 0-100, robustness 100−200·pstdev with <2 groups → 100, 100−25 per significant regression floored at 0, regression_delta from the success_rate item, sufficient_evidence = total_episodes >= task.episodes > 0, bootstrap 500 resamples seed 42 — the only unmentioned nuance is the extra len(bits)==total_episodes guard on CI computation, immaterial); tests/test_shadow.py (exactly 24 tests by class count; frozen-dataclass field order pin; worker-failure → rate 0.0/whole batch; the line-384 index-[2] brittleness vs the '>= 2' length assertion is correctly called out — I confirmed shadow.py ships exactly 3 cases with the 3-episode batch-mixed case at index 2, so the criticism stands); validsim/web/app.js (951 lines; endpoints and 3s poll paused on hidden tab; computeTrends mirrors the four displayed trends.py fields — note it omits trends.py's improving/volatile signals, a fair simplification; vs-theme + prefers-color-scheme + per-theme palette redraw; XSS discipline confirmed: every innerHTML concatenation is a fixed enum string or a toFixed number); validsim/store/postgres.py (lazy psycopg import with v3 check, deferred _ensure_ready, JSONB + promoted indexed columns, ON CONFLICT DO NOTHING append-only vs memory/sqlite overwrite, table regex whitelist, %s-only values, _conn_factory seam, no super().__init__ so _runs never exists, close()→reconnect, and the positional SafetyResult(0.0,0.0,None,0.0,safety_score) fallback confirmed to match the dataclass field order collisions/max_force/min_human/proximity/score); .env.example (gate-refuses-memory-exit-2 note, production-blank-key startup failure, sslmode=require warning — all present as claimed; full var set matches the summary's scope); docs/ISSUE_CATALOG.md (33 items, baseline ff15533 dated 2026-09-21, V/S/R/U/✅/◐ legend, items 01/02 ✅, item 17 fabricated 1274-passed build-log row driving the false 100% dashboard, item 25's in-entry correction that pytest-cov 7.0.0 was in fact installed, 1292→1328 passed/2 skipped at 95.84% (item 25) / 95.88% (item 06) with 31s wall time, day/week sequencing with item 17 non-negotiable — all verified verbatim; the catalog's own 'Four of the findings' line that then lists nine IDs is an internal typo in the file the summary neither claims nor contradicts). The three files flagged are the docs/vault/action entries where the summary transcribed the document faithfully but failed to mark that the document itself is contradicted by the code or by the repo's own audit catalog — which is precisely what a future reader must know.

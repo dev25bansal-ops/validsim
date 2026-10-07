@@ -73,6 +73,21 @@ class TestBootstrapCiSmallN:
         low, high, point = bootstrap_ci(values, n_resamples=2, seed=SEED)
         assert low <= point <= high
 
+    def test_interval_brackets_the_point_estimate_at_every_resample_count(self) -> None:
+        """A resampling interval must always contain the observed statistic.
+
+        At ``n_resamples == 2`` the percentile endpoints are just the extremes
+        of two noisy resample means, so an unlucky pair can put both on the same
+        side of the point estimate and report an interval that excludes the
+        very value it was computed from. That is not a meaningful confidence
+        interval, and it used to depend on which sampler happened to be used.
+        """
+        values = _bernoulli(0.5, 40, seed=3)
+        for n_resamples in (2, 3, 5, 8, 32, 64, 500):
+            low, high, point = bootstrap_ci(values, n_resamples=n_resamples, seed=SEED)
+            assert low <= point <= high, f"point escaped the interval at n_resamples={n_resamples}"
+            assert low <= high, f"inverted interval at n_resamples={n_resamples}"
+
     def test_custom_statistic_on_tiny_sample(self) -> None:
         low, high, point = bootstrap_ci(
             [2.0, 9.0], statistic=statistics.median, n_resamples=32, seed=SEED

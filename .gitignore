@@ -16,15 +16,28 @@ env/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 
 # Build pipeline outputs
 builds/
 
+# Test-run reports and local scratch output
+/*junit*.xml
+/pytest*.xml
+/_*.xml
+/coverage-*.xml
+/pytest*.txt
+/_*.txt
+/*.log
+
 # Transient CLI/CI caches
 .tmp-ci-smoke/
 .validsim/
 *.db
+*.sqlite
+*.sqlite3
 
 # Temp extraction artifacts
 _extracted_project.txt

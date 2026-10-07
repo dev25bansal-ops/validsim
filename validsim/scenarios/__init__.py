@@ -8,7 +8,9 @@ from validsim.scenarios.generator import (
     ScenarioGenerator,
 )
 from validsim.scenarios.llm_generator import (
+    current_scenario_backend,
     LLMScenarioGenerator,
+    llm_enabled,
     OpenAICompatibleProvider,
     ScenarioParseError,
     ScenarioProvider,
@@ -28,4 +30,6 @@ __all__ = [
     "ScenarioProviderError",
     "build_scenario_prompt",
     "create_scenario_generator",
+    "current_scenario_backend",
+    "llm_enabled",
 ]

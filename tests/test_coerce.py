@@ -12,16 +12,20 @@ blowing up mid-report. These tests pin that contract directly:
 * garbage -- any unparseable type returns ``default`` (never an exception);
 * the ``default`` itself is honoured verbatim (including ``None``).
 
-The two genuinely-overflowing inputs the source does *not* swallow
-(``int(float('inf'))`` and ``float(10**1000)``, both ``OverflowError``) are
-deliberately excluded from the "never raises" sweep: the helpers only guard
-``TypeError`` / ``ValueError`` -- matching the pre-refactor PDF coercion --
-so asserting otherwise would test behaviour the module never promised.
+The two genuinely-overflowing inputs (``int(float('inf'))`` and
+``float(10**1000)``, both ``OverflowError``) were previously *excluded* from the
+"never raises" sweep on the grounds that the module only promised to guard
+``TypeError`` / ``ValueError``. That exclusion was wrong: ``OverflowError`` is
+not a programming error here, it is simply another shape of bad data, and it
+escaped the documented contract all the way to a public entry point -- see
+``TestOverflowIsAlsoTolerated`` below and the ``detect_anomalies`` crash pinned
+in ``tests/test_anomaly.py``.
 """
 
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -263,7 +267,9 @@ class TestAsIntOutOfRange:
 
 
 class TestNeverRaises:
-    @pytest.mark.parametrize("value", [*UNPARSEABLE, *NUMERICISH, "3.5", "1e400", math.nan, math.inf])
+    @pytest.mark.parametrize(
+        "value", [*UNPARSEABLE, *NUMERICISH, "3.5", "1e400", math.nan, math.inf]
+    )
     def test_as_float_never_raises(self, value: Any) -> None:
         # Whatever the input, as_float must return a float (or the default) --
         # it must never propagate an exception to the report renderer.
@@ -280,3 +286,70 @@ class TestNeverRaises:
         # A single sweep proving neither helper explodes on any junk value.
         assert as_float(value, default=0.0) == 0.0
         assert as_int(value, default=0) == 0
+
+
+# ---------------------------------------------------------------------------
+# OverflowError is bad *data*, not a programming error
+# ---------------------------------------------------------------------------
+
+#: Inputs that overflow ``int()``. ``int(inf)`` raises ``OverflowError`` --
+#: neither ``TypeError`` nor ``ValueError`` -- and therefore escaped the
+#: helpers' except clause. Note ``int(10 ** 400)`` does *not* appear here:
+#: Python ints are arbitrary precision, so that conversion succeeds and the
+#: value must be preserved (see the control test below).
+INT_OVERFLOWING: list[Any] = [math.inf, -math.inf, float("nan")]
+
+#: Inputs that overflow ``float()``. ``float(10 ** 400)`` raises
+#: ``OverflowError`` ("int too large to convert to float"). ``inf`` and
+#: ``Decimal("1e400")`` are *not* here -- ``float(inf)`` succeeds and must
+#: keep passing through.
+FLOAT_OVERFLOWING: list[Any] = [10 ** 400]
+
+
+class TestOverflowIsAlsoTolerated:
+    @pytest.mark.parametrize("value", INT_OVERFLOWING)
+    def test_as_int_overflow_returns_default(self, value: Any) -> None:
+        # ``int(inf)`` -> OverflowError. An episode count of "infinity" is a
+        # corrupt record, so the caller's default (0) is the correct degrade:
+        # it makes the run look empty, which every reader already handles.
+        assert as_int(value) == 0
+        assert as_int(value, default=-1) == -1
+        assert as_int(value, default=None) is None
+
+    @pytest.mark.parametrize("value", FLOAT_OVERFLOWING)
+    def test_as_float_overflow_returns_default(self, value: Any) -> None:
+        # ``float(10 ** 400)`` -> OverflowError. The helper must swallow it
+        # rather than letting a 400-digit integer blow up a report renderer.
+        assert as_float(value) == 0.0
+        assert as_float(value, default=99.0) == 99.0
+        assert as_float(value, default=None) is None
+
+    def test_overflow_inputs_join_the_never_raises_sweep(self) -> None:
+        """The sweep itself must now cover them, not carve them out."""
+        for value in INT_OVERFLOWING:
+            assert isinstance(as_int(value, default=0), int)
+        for value in FLOAT_OVERFLOWING:
+            assert as_float(value, default=None) is None
+
+    def test_infinity_is_still_parsed_by_as_float(self) -> None:
+        """CONTROL: a float input that fits is returned, not defaulted.
+
+        Only the *conversion overflow* is swallowed. ``as_float(math.inf)``
+        succeeds and must keep returning ``inf`` -- the existing
+        ``TestAsFloatOutOfRange`` contract is unchanged. A helper that
+        defaulted ``inf`` would corrupt every legitimate infinity in a report.
+        """
+        assert as_float(math.inf) == math.inf
+        assert as_float("-1e400") == -math.inf
+        assert as_float(Decimal("1e400")) == math.inf
+
+    def test_finite_large_int_still_parsed_by_as_int(self) -> None:
+        """CONTROL: big ints are exact in Python and must not be defaulted.
+
+        ``as_int("9" * 50)`` -- and even ``as_int(10 ** 400)`` -- are legal
+        episode counts that convert cleanly. Only values that genuinely do not
+        fit are degraded, so the fix cannot be mistaken for a range clamp.
+        """
+        assert as_int("9" * 50) == int("9" * 50)
+        assert as_int(10 ** 20) == 10 ** 20
+        assert as_int(10 ** 400) == 10 ** 400

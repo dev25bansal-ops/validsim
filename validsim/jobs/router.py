@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from validsim.jobs.models import JobRecord, JobSpec, JobStatus
+from validsim.jobs.models import TERMINAL_STATUSES, JobRecord, JobSpec
 from validsim.jobs.queue import JobQueue, QueueFullError, create_job_queue
 
 __all__ = ["router", "EnqueueJobRequest", "get_queue"]
@@ -62,12 +62,35 @@ def _validate_job_id(job_id: str) -> str:
 
 
 class EnqueueJobRequest(BaseModel):
-    """Body for POST /jobs — enqueue one asynchronous validation job."""
+    """Body for POST /jobs — enqueue one asynchronous validation job.
+
+    ``threshold`` and ``baseline_run_id`` mirror the fields of the synchronous
+    :class:`~validsim.config.ValidationRequest`, bounds included, so a client can
+    move a validation between the two paths without changing what it asks for.
+    Without them the async path had no way to express either, and silently used
+    the worker's default gate of 85 with no regression comparison — which made
+    the same checkpoint come back ``APPROVE`` here and ``BLOCK`` from
+    ``POST /validations``, and (since notification severity is read off the
+    scorecard's ``threshold``/``deploy_decision`` pair) fire the wrong hooks.
+    ``threshold=None`` keeps the engine default rather than pinning 85.0, so the
+    stored spec stays honest about whether a gate was actually requested.
+    """
 
     checkpoint_id: str = Field(..., min_length=1, description="Checkpoint to validate.")
     task_id: str = Field(..., min_length=1, description="Task to execute.")
     episodes: int = Field(1000, ge=1, le=100000, description="Nominal episodes.")
     adversarial: int = Field(0, ge=0, le=1000, description="Adversarial episodes.")
+    threshold: float | None = Field(
+        None,
+        ge=0.0,
+        le=100.0,
+        description="Composite score (0-100) required to approve; defaults to 85.0.",
+    )
+    baseline_run_id: str | None = Field(
+        None,
+        min_length=1,
+        description="Run id to compare against for regressions.",
+    )
 
 
 def get_queue(request: Request) -> JobQueue:
@@ -111,6 +134,8 @@ def enqueue_job(
         task_id=body.task_id,
         episodes=body.episodes,
         adversarial=body.adversarial,
+        threshold=body.threshold,
+        baseline_run_id=body.baseline_run_id,
     )
     try:
         record = queue.enqueue(spec)
@@ -265,7 +290,11 @@ def _event_stream(
             "updated_at": _updated_at(record),
         }
         yield f"data: {json.dumps(frame)}\n\n"
-        if record.status in (JobStatus.DONE, JobStatus.FAILED):
+        if record.status in TERMINAL_STATUSES:
+            # Keyed off the shared terminal set rather than an explicit
+            # done/failed pair: a job dead-lettered by the retry policy is just
+            # as final, and reporting it as a stream timeout would tell the
+            # client the opposite of what happened.
             yield "event: end\n\n"
             return
         polls += 1

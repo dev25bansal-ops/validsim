@@ -10,13 +10,13 @@ This repository contains the ValidSim MVP codebase, the founding blueprint, and 
 |---|---|
 | `project.docx` | Confidential founding document (19-section startup blueprint) |
 | `vault/` | Obsidian vault — the full blueprint as interconnected notes (open this folder in Obsidian) |
-| `validsim/` | Python platform MVP: config models, simulation runner (mock Isaac backend), adversarial scenarios (difficulty bias + `coverage()`), evaluation/safety/regression/scorecard/benchmark/trends/anomaly engines, async job queue (in-memory + Redis, depth-bounded), FastAPI API (API-key auth + CORS + rate limiting + Prometheus `/metrics` + structured JSON logging + `X-Request-ID` tracing), Typer CLI, Slack webhook + SMTP email dispatchers |
-| `tests/` | pytest suite covering every module — 1242 passed / 2 skipped (1244 total); ~95% line/branch coverage, gated at a 90% floor in CI |
+| `validsim/` | Python platform MVP: config models, simulation runner (mock Isaac backend), adversarial scenarios (difficulty bias + `coverage()`), evaluation/safety/regression/scorecard/benchmark/trends/anomaly engines, async job queue (in-memory + Redis, depth-bounded), FastAPI API (API-key auth + CORS + rate limiting + Prometheus `/metrics` + structured JSON logging + `X-Request-ID` tracing), Typer CLI, and a Slack webhook + SMTP email dispatcher that is **configured but never dispatched** (see [Notification dispatch](#notification-dispatch-configurable-not-yet-dispatched) — no shipped entrypoint calls it) |
+| `tests/` | pytest suite covering every module. **No test count is quoted here on purpose** — a hand-copied number goes stale on the next commit, and the figure has already contradicted itself across this repo's docs four separate times (338 / 601 / 1,230 / 1,274 / 1,328 / 1,330). `python -m pytest tests/` prints the current totals; `python -m pytest tests/ --collect-only -q` counts collected tests without running any, and a collection count is not a pass count (skipped and xfailed tests are collected but never pass). Coverage is gated at a 90% floor in CI (`fail_under` in `pyproject.toml`) — treat 90% as the gate and the current `TOTAL` line as the number to keep near, not a fixed target |
 | `scripts/build.ps1` | Continuous build entrypoint: venv bootstrap, deps, tests, publishes status to the vault |
 | `.github/workflows/` | CI (on push/PR) + nightly validation pipeline |
 | `Dockerfile`, `docker-compose.yml` | Container runtime: multi-stage build (slim runtime, non-root, healthcheck) + API + Redis + PostgreSQL + CPU job `worker` service (GPU Isaac worker placeholder) |
 | `.env.example` | Environment template (store / job-queue / API / SMTP / LLM vars) — copy to `.env`; drives both the app and Compose |
-| `requirements.txt`, `requirements-dev.txt` | Runtime deps; dev/test deps (pytest, pytest-cov, ruff) split out (`pyproject.toml`'s `dev` extra carries pytest + ruff) |
+| `requirements.txt`, `requirements-dev.txt` | Runtime deps; dev/test deps (pytest, pytest-cov, ruff, PyYAML) split out (`pyproject.toml`'s `dev` extra carries pytest + ruff + PyYAML) |
 | `builds/` | Local build artifacts (log CSV, JUnit XML) — gitignored |
 
 ## Quick Start
@@ -46,18 +46,79 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 docker compose up --build
 ```
 
+### Validation store
+
+Local library and CLI runs use the in-memory store when `VALIDSIM_STORE` is
+unset. It preserves the zero-config promise, but its data disappears when the
+process exits; the configured backend and durability are visible in both
+`validsim health` and `GET /api/v1/health`.
+
+For durable local history, set one variable before the run and gate commands:
+
+```powershell
+$env:VALIDSIM_STORE = "sqlite"
+```
+
+SQLite then creates `validsim.db` in the current directory; set
+`VALIDSIM_SQLITE_PATH` to choose another location. `VALIDSIM_STORE=postgres`
+uses the durable PostgreSQL store when `VALIDSIM_PG_URL` is configured. The
+local `actions/validate` action already selects SQLite automatically.
+
+`validsim gate` refuses the memory backend and exits `2` rather than making a
+deploy decision from process-local data. For the one-line local fix, run
+`$env:VALIDSIM_STORE = "sqlite"` before the earlier `validsim run` and
+`validsim gate`; for CI, `actions/validate` sets the same option for you.
+
 ### API Hardening & Pagination
 
 The API is deployment-hardened via environment variables, read at `create_app()` time:
 
 - `VALIDSIM_API_KEY` — when set, every `/api/v1` route requires a matching `X-API-Key` header (constant-time comparison, uniform 401). Unset = auth disabled (local dev / tests).
 - `VALIDSIM_CORS_ORIGINS` — comma-separated CORS origin allow-list (default `*`).
-- `VALIDSIM_RATE_LIMIT` / `VALIDSIM_RATE_WINDOW_SECONDS` — per-client sliding-window budget for write/sensitive routes (`0` disables, the default).
+- `VALIDSIM_RATE_LIMIT` / `VALIDSIM_RATE_WINDOW_SECONDS` — per-client sliding-window budget for write/sensitive routes (default `60` per `60`s; set `VALIDSIM_RATE_LIMIT=0` to disable).
 
 List endpoints are paginated with `limit` (1–500, default 100) and `offset`:
 
 - `GET /api/v1/validations?limit&offset` — newest-first summaries with `{"total", "limit", "offset", "items"}`.
 - `GET /api/v1/models?limit&offset` — model registry (one row per checkpoint, latest composite/decision).
+
+### Notification dispatch (configurable, not yet dispatched)
+
+`validsim/notify/` implements two complete, tested channels — `WebhookDispatcher`
+(`notify/dispatcher.py`: Slack Block Kit or raw JSON, optional HMAC-SHA256 body
+signing via `X-ValidSim-Signature`, severity routing, retry with exponential
+backoff) and `EmailNotifier` (`notify/email.py`: SMTP, multipart HTML+text
+scorecard bodies, header-injection guards).
+
+**Neither channel is dispatched by a validation run today.** The configuration
+surface exists and is documented below, but `run_and_score` — the one function
+the API, CLI and job worker all funnel through — does not import `validsim.notify`
+and never calls a dispatcher. There is also no `POST /api/v1/webhooks` route and
+no CLI flag. So setting any of the variables below configures the layer without
+activating it: nothing is sent, and no run is affected.
+
+Once dispatch is wired, the design is fail-closed on two independent switches,
+and **both** must be set:
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `VALIDSIM_NOTIFY_ENABLED` | Master switch. Only an explicitly truthy value turns dispatch on; absent, blank, `0`, `false` or an unrecognised value like `maybe` means **off**. | off |
+| `VALIDSIM_WEBHOOK_URLS` | Comma-separated destination URLs. Configuring a destination is deliberately *not* consent to send. | none — no hooks |
+| `VALIDSIM_WEBHOOK_SECRETS` | HMAC-SHA256 shared secret per URL (a secret, so it is masked in `validsim config show` and support bundles). | none — unsigned |
+| `VALIDSIM_WEBHOOK_FORMATS` | `json` or `slack` per URL. | `json` |
+| `VALIDSIM_WEBHOOK_MIN_SEVERITY` | `info` / `warn` / `critical` routing threshold per URL. | `info` (receives everything) |
+| `VALIDSIM_WEBHOOKS_LIVE` | `1` switches the dispatcher from dry-run to real HTTP POSTs. | dry-run (records, sends nothing) |
+| `VALIDSIM_SMTP_HOST/PORT/USER/PASSWORD/FROM/TLS` | SMTP connection for `EmailNotifier(dry_run=False)`. | — |
+
+The three companion lists pair by index, and a shorter list **pads with the safe
+default** rather than shifting values, so a single-URL setup cannot accidentally
+sign with a neighbour's key. Blank or unparseable entries are dropped, not
+fatal.
+
+Because the default is dry-run *and* the master switch is off, the correct way
+to prove a configuration works is a dry run: a recorded delivery always reports
+`ok=True`, so a "successful" delivery that nobody received almost always means
+either the switch is off or the dispatcher is still in dry-run.
 
 ### Async Job Queue
 
@@ -87,20 +148,59 @@ The API is instrumented for production operation:
 - **Structured JSON logging** — `validsim.logging.configure_logging()` (called at `create_app()` time, idempotent) attaches exactly one handler that emits a single JSON object per record (`timestamp`, `level`, `logger`, `message` plus any structured `extra` fields); the level is controlled by `VALIDSIM_LOG_LEVEL`.
 - **Request tracing** — the outermost ASGI middleware reuses an inbound `X-Request-ID` or mints a `uuid4`, echoes it on every response, and logs one structured `http_request` line (`method`, `path`, `status`, `duration_ms`, `request_id`) while bumping the HTTP counter — so 401/429 produced by inner auth/rate-limit layers are still observed.
 
-## The 24/7 Continuous Build Process
+## The Continuous Build Process
 
-1. **Local/agent pipeline** — a CodeBuddy automation runs `scripts/build.ps1` **every hour, 24/7**: it bootstraps the environment, installs dependencies, runs the full test suite, and regenerates `vault/00 - Dashboard/Build Status.md` (linked from the vault Home as `[[Build Status]]`). Failures are diagnosed and fixed by the automation agent, then re-verified.
+1. **Local/agent pipeline** — `scripts/build.ps1` bootstraps the environment,
+   installs dependencies, runs the full test suite, and regenerates
+   `vault/00 - Dashboard/Build Status.md` (linked from the vault Home as
+   `[[Build Status]]`). Run it on demand, or let an agent run it as part of a
+   work loop. **There is no scheduler in this repository** — nothing here fires
+   hourly by itself, and earlier text on this page claiming a 24/7 hourly
+   automation was wrong (see `docs/ISSUE_CATALOG.md` item 17).
 2. **Remote CI** — `.github/workflows/ci.yml` runs lint + tests (under `pytest-cov`, publishing a `coverage.xml` artifact) + Docker build on every push/PR to `main`; `.github/workflows/nightly.yml` runs a deep validation suite at 03:00 UTC daily.
-3. **History** — every run is appended to `builds/build-log.csv`; the vault note shows the last 15 runs and pass-rate.
+3. **History** — every `build.ps1` run is appended to `builds/build-log.csv`; the vault note shows the last 15 runs and pass-rate.
 
 ## Product Pipeline (what the code does)
 
 ```
-submit checkpoint → simulate (parallel episodes + domain randomization)
-→ adversarial scenarios (12 categories) → evaluate (success, safety, robustness)
-→ regression test vs baseline (bootstrap CI) → scorecard (composite = 0.4·success
-+ 0.3·safety + 0.2·robustness + 0.1·regression) → APPROVE / BLOCK deploy
+submit checkpoint → simulate (episodes + a single domain-randomization level)
+→ adversarial scenarios (12 categories, deterministic rule-based generator)
+→ evaluate (success, safety, robustness) → regression test vs baseline
+(bootstrap CI) → scorecard (weighted mean of the *measured* components:
+0.4·success + 0.3·safety + 0.2·robustness + 0.1·regression) → APPROVE / BLOCK
 ```
+
+**Unmeasured components abstain.** Two of the four terms often cannot be
+measured at all, and they are excluded from the composite's denominator rather
+than counted as a perfect score (see `validsim/engine/scorecard.py`):
+
+- **Robustness** is the dispersion of success rate *across randomization
+  groups*, but `run_validation` applies one `task.randomization` level to every
+  episode, so there is exactly one group and the metric is unmeasured. The
+  scorecard records `robustness_measured: false` and
+  `randomization_group_count: 1`; the component then reports `0.0` and its 0.2
+  weight leaves the denominator.
+- **Regression** is unmeasured when no baseline was supplied
+  (`regression_baseline_available: false`) — nothing was compared, so its 0.1
+  weight leaves the denominator too.
+
+This matters because the previous flat sum awarded those 30 points
+unconditionally. A run in which **every episode failed** (`success_rate = 0.0`)
+scored 60.0 and was **APPROVED at threshold 60** — a gate that certified a model
+which never completed the task. The same run now scores **42.86 → BLOCK at any
+threshold**. A flawless run still reaches 100.0, and the ordering stays
+monotonic.
+
+Because abstention changes the denominator, composite values are **comparable
+only across runs with the same evidence coverage**; read
+`robustness_measured` and `regression_baseline_available` alongside the score.
+The full rationale and measured before/after table are in
+[`docs/adr/0002`](docs/adr/0002-scorecard-composite-gate.md).
+
+Additionally, a run is `BLOCK`ed when it delivered fewer episodes than requested
+or recorded no success at all (`block_reasons`), and — separately from the
+composite — when a sufficiently large adversarial segment (**≥ 30 episodes**)
+fails a one-sided binomial test against a 60% success floor.
 
 This runs **synchronously** (`POST /api/v1/validations`) or **asynchronously** —
 enqueue a job (`POST /api/v1/jobs` / `validsim job enqueue`), let a `worker`
@@ -110,9 +210,10 @@ drain the queue, and stream progress over SSE until the run is persisted.
 
 - [x] Week 1: repo, Docker, CI/CD pipeline
 - [x] Weeks 2–5 skeleton: episode runner (mock), randomization, evaluation, safety, regression, scorecard
-- [x] Weeks 4/6: scenario generator, API, CLI, SQLite persistent store, scorecard Markdown/HTML exports, webhook dispatcher
+- [x] Weeks 4/6: scenario generator, API, CLI, SQLite persistent store, scorecard Markdown/HTML exports
+- [~] **Webhook dispatcher** (`notify/dispatcher.py` + `notify/config.py`) — implemented, tested and now *configurable* via `VALIDSIM_NOTIFY_ENABLED` + `VALIDSIM_WEBHOOK_URLS`, but **still not dispatched**: `run_and_score` does not import `validsim.notify`, so no run sends a scorecard. See [Notification dispatch](#notification-dispatch-configurable-not-yet-dispatched).
 - [x] Week 6: **GitHub Actions plugin prototype** (`actions/validate`, `actions/scorecard`, `examples/robot-validation.yml`, `docs/github-actions.md`)
-- [x] Week 4 upgrade: **LLM adversarial scenario generator** (`scenarios/llm_generator.py` — OpenAI-compatible provider, strict schema validation, deterministic rule-based fallback)
+- [~] **LLM adversarial scenario generator** (`scenarios/llm_generator.py` — OpenAI-compatible provider, strict schema validation, deterministic rule-based fallback, env-driven factory `create_scenario_generator()`). **Implemented and tested, but not reachable from a validation run**: `engine/pipeline.py:131` hardcodes `ScenarioGenerator(seed=seed).generate(...)`, so scenario generation is deterministic and rule-based on every shipped path (API, CLI, job worker). Setting `VALIDSIM_LLM_ENABLED` + `VALIDSIM_LLM_API_KEY` changes nothing until the pipeline routes through the factory.
 - [x] Week 5 upgrade: **PostgreSQL store** (`store/postgres.py` — JSONB + indexed columns, `VALIDSIM_STORE=postgres`)
 - [x] Week 7: **Dashboard v0** — dark-theme scorecard/history/failed-mode charts served by FastAPI at `/` (design system: `design-system/validsim/MASTER.md`)
 - [x] **Isaac worker adapter** — `sim/isaac_worker.py` HTTP client + `docs/isaac-worker.md` worker contract (`VALIDSIM_BACKEND=isaac`); GPU worker image awaits DGX credits
@@ -122,8 +223,8 @@ drain the queue, and stream progress over SSE until the run is persisted.
 - [x] **API hardening** — env-driven API-key auth (`VALIDSIM_API_KEY` → `X-API-Key`) + configurable CORS (`VALIDSIM_CORS_ORIGINS`)
 - [x] **Paginated list endpoints** — `GET /api/v1/validations` and `GET /api/v1/models` with `limit`/`offset`
 - [x] **CLI `report` command** — `validsim report --latest --format markdown|html`; `run` gains `--environment` (scene profile)
-- [x] **Slack webhooks** — Block Kit payloads, optional HMAC-SHA256 signing (`X-ValidSim-Signature`), retry with exponential backoff
-- [x] **LLM scenario category-coverage guarantee** — missing adversarial categories are auto-topped-up from the deterministic fallback
+- [~] **Slack webhooks** — Block Kit payloads, optional HMAC-SHA256 signing (`X-ValidSim-Signature`), retry with exponential backoff, severity routing, plus an operator-facing config surface. **Not dispatched by any run** — the dispatcher is dry-run by default and nothing in the run path calls it (see [Notification dispatch](#notification-dispatch-configurable-not-yet-dispatched)).
+- [~] **LLM scenario category-coverage guarantee** — missing adversarial categories are auto-topped-up from the deterministic fallback. Implemented on the `LLMScenarioGenerator` path, which no run takes; the rule-based generator guarantees full category coverage by construction (it cycles categories by index), so any `n ≥ 12` is already complete.
 - [x] **Postgres store full-detail parity** — `VALIDSIM_STORE=postgres` now matches the SQLite store's full-detail output (drop-in replacement)
 - [x] **Multi-stage Dockerfile + `requirements-dev.txt`** — slim non-root runtime image; dev deps (pytest, ruff, pytest-cov) split out of the runtime image
 - [x] **Async job queue** — `jobs/` package with in-memory and Redis backends (`VALIDSIM_JOB_QUEUE`, `VALIDSIM_REDIS_URL`); CLI `validsim job enqueue` / `jobs` / `worker`, REST `/api/v1/jobs` (enqueue/list/get/status) + SSE progress at `/api/v1/jobs/{id}/events`, and a `JobWorker` that drains the queue and persists finished runs
@@ -132,8 +233,8 @@ drain the queue, and stream progress over SSE until the run is persisted.
 - [x] **Dashboard Job Queue panel** — SPA polls `/api/v1/jobs` every 3s with an inline enqueue form
 - [x] **Scenario difficulty bias + `coverage()`** — `ScenarioGenerator(difficulty_bias=…)` eases/hardens sampled difficulty without perturbing the RNG stream; `coverage()` returns per-category counts for a batch
 - [x] **Benchmark `compare_scorecards`** — `engine/benchmark.py` head-to-head comparison of two scorecards (composite/success/safety/robustness deltas + winners, overall verdict by composite), exported from the `validsim.engine` facade
-- [x] **Email notification channel** — `notify/email.py` `EmailNotifier` (SMTP, dry-run by default, multipart HTML+text scorecard bodies) alongside the Slack webhook dispatcher
-- [x] **Coverage gate in CI** — the suite runs under `pytest-cov` on every push/PR, publishes `coverage.xml`, and fails the build below 90% line/branch coverage (baseline ≈95%)
+- [~] **Email notification channel** — `notify/email.py` `EmailNotifier` (SMTP, dry-run by default, multipart HTML+text scorecard bodies). Implemented and tested, but like the webhook dispatcher it has **no production caller**; live delivery additionally requires `EmailNotifier(dry_run=False)` plus `VALIDSIM_SMTP_*`, which no shipped surface sets.
+- [x] **Coverage gate in CI** — the suite runs under `pytest-cov` on every push/PR, publishes `coverage.xml`, and fails the build below 90% line/branch coverage. (The previously quoted "baseline ≈95%" was an undated snapshot; the enforced number is the 90% floor — read the current `TOTAL` line for the real figure.)
 - [x] **`.env.example` + Docker `worker` service** — committed environment template; `docker-compose.yml` adds a CPU job worker that drains the Redis queue into the shared store
 - [x] **CLI `delete` command** — `validsim delete --run-id … | --latest` removes a stored run from the configured store (exit `0` on success, `2` when absent), giving the destructive `DELETE` endpoint full CLI parity
 - [x] **Observability** — Prometheus `/metrics` (store-derived run/approval/block/composite gauges + in-process `validsim_http_requests_total` counters), idempotent structured JSON logging (`validsim.logging`, `VALIDSIM_LOG_LEVEL`), and `X-Request-ID` correlation echoed on every response via the outermost ASGI middleware

@@ -1,0 +1,78 @@
+---
+/** Pricing as a ruled row, not four boxes. Labelled a hypothesis, per the vault. */
+import { pricing } from '../data/content';
+---
+
+<section class="band" id="pricing">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <p class="fig-label">Fig 0.6 — pricing</p>
+      <h2>Priced below what validation costs to build</h2>
+      <p>
+        A lab that builds this in-house spends roughly $200K–$500K and six months. These numbers are
+        a hypothesis until real customers disagree with them.
+      </p>
+    </div>
+
+    <div class="tiers reveal">
+      {
+        pricing.map((tier) => (
+          <div class="tier">
+            <span class="name">{tier.name}</span>
+            <span class="price">
+              {tier.price}
+              {tier.suffix && <small>{tier.suffix}</small>}
+            </span>
+            <p>{tier.body}</p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .tiers {
+    display: grid;
+  }
+  @media (width > 44rem) {
+    .tiers {
+      grid-template-columns: repeat(4, 1fr);
+    }
+  }
+  .tier {
+    padding: 1.75rem 1.5rem 1.75rem 0;
+    border-block-start: 1px solid var(--rule);
+  }
+  @media (width > 44rem) {
+    .tier + .tier {
+      padding-inline-start: 1.5rem;
+    }
+  }
+  .name {
+    display: block;
+    font-size: var(--t-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin-block-end: 0.75rem;
+  }
+  .price {
+    display: block;
+    font-size: var(--t-xl);
+    font-weight: 300;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+  .price small {
+    font-size: var(--t-sm);
+    font-weight: 400;
+    color: var(--ink-dim);
+    letter-spacing: 0;
+  }
+  p {
+    margin-block-start: 0.9rem;
+    font-size: var(--t-sm);
+    color: var(--ink-mid);
+  }
+</style>

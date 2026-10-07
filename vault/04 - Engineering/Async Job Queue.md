@@ -9,7 +9,10 @@ area: "04 - Engineering"
 
 # 🗂️ Async Job Queue
 
-Decouples validation submission from execution. Jobs are enqueued via Redis (with an in-memory fallback for local/dev) and consumed asynchronously, so `POST /validations` stops blocking the caller and becomes fire-and-forget. Lives inside M1 Ingestion & Orchestration ([[Module Specs]]), extends the REST surface in [[API Design]], and rewrites Step 2 of [[Data Flow]].
+Decouples validation submission from execution through the separate `POST /api/v1/jobs` path. Jobs use Redis (with an in-memory fallback for local/dev) and are consumed by `validsim worker`; the existing synchronous `POST /api/v1/validations` remains synchronous. The shipped FIFO, `queued/running/done/failed` contract is documented in [[Job Queue Worker]].
+
+> [!important] Blueprint status — 2026-09-21
+> The priority queue, dead-letter queue, `evaluating/reported` states, webhooks, K8s/Argo scheduling, and S3-backed specs below are target-state design. The current implementation is bounded FIFO memory/Redis; the current request and record shapes are in [[API Design]].
 
 ## Why async (the problem it unblocks)
 
@@ -24,7 +27,11 @@ Today `POST /api/v1/validations` is **synchronous**: the request stays open thro
 
 The queue turns submission into a `202 Accepted` + `job_id`, and the lifecycle is polled via `/jobs/{id}` instead of held open on the socket.
 
-## Architecture
+## Shipped request and record shape
+
+The current API accepts `{checkpoint_id, task_id, episodes, adversarial}` and returns a frozen `JobRecord` whose `spec` also carries `run_id`. The actual enum is only `queued`, `running`, `done`, `failed` ([[Job Queue Worker]]). The richer code below is a historical design sketch, not the current contract.
+
+## Architecture (target topology)
 
 ```
 POST /validations ─▶ Pydantic parse ─▶ JobSpec ─▶ enqueue ─▶ 202 {job_id}
@@ -35,14 +42,14 @@ POST /validations ─▶ Pydantic parse ─▶ JobSpec ─▶ enqueue ─▶ 202
                                    │ (in-proc │  │  (VALIDSIM_    │
                                    │  queue)  │  │   REDIS_URL)   │
                                    └────┬─────┘  └────────┬───────┘
-                                        └────▶ worker pool ──▶ K8s/Argo
+                                        └────▶ CPU/mock worker now ──▶ K8s/Argo target
                                                               │
                                                               ▼
                                               JobRecord.status updates
                                               (queued → running → ...)
 ```
 
-- **Redis backend** — durable, multi-worker, survives restarts; the production path ([[Module Specs]] M1 already names Redis 7.x).
+- **Redis backend** — supports multiple API/worker processes and configured persistence in Compose; it is not the durable validation store.
 - **In-memory fallback** — zero-dependency queue for local/dev/CI; drops jobs on process exit, which is acceptable because no GPU workload is lost mid-flight in that context.
 
 ## Dataclasses
@@ -84,10 +91,10 @@ class JobRecord:
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/api/v1/jobs` | Enqueue a `JobSpec`; returns `202 {job_id}` immediately |
-| `GET` | `/api/v1/jobs` | List jobs, filterable by `?status=queued|running|...` |
+| `GET` | `/api/v1/jobs` | List jobs; current pagination accepts `limit` / `offset`, not `?status=` |
 | `GET` | `/api/v1/jobs/{id}` | Poll one `JobRecord` (status + result/error) |
 
-Request shape — `POST /api/v1/jobs` (same body as `POST /validations`, re-keyed as a job):
+Historical request sketch — not the shipped `POST /api/v1/jobs` body:
 
 ```json
 {
@@ -110,15 +117,15 @@ Request shape — `POST /api/v1/jobs` (same body as `POST /validations`, re-keye
 > [!tip]
 > Keep `memory` the default so `validsim run` works out of the box on a laptop with no infrastructure. Flip to `redis` only when `VALIDSIM_REDIS_URL` is set — mirroring the MVP vs post-MVP split in [[API Design]] Auth & tenancy.
 
-## Non-blocking validation (before/after)
+## Non-blocking validation (current surfaces)
 
-| | Synchronous (today) | Async (this design) |
+| | Synchronous (today) | Async (shipped) |
 |---|---|---|
 | Submission | Blocks until reported | `202 Accepted` + `job_id` |
-| Caller contract | Socket held open | Poll `GET /jobs/{id}` or webhook |
+| Caller contract | Socket held open | Poll `GET /jobs/{id}` or bounded SSE; webhook is future |
 | Scaling | Head-of-line blocking | Worker pool drains independently |
 | Failure surface | Lost on timeout | `JobRecord.error` + `FAILED` status |
 
-The change is additive: `POST /validations` keeps working, but now stubs a `JobSpec` onto the queue and returns `202` instead of holding the connection — the `validation_id` still keys history and comparability per [[API Design]] principle #1 ("runs are resources, jobs are side effects").
+The async change is additive: `POST /api/v1/jobs` returns `202`; the synchronous `POST /api/v1/validations` remains available. The shared `vrun-<8 hex>` id keys both queue state and persisted history.
 
 Links: [[Solution Architecture]] · [[Module Specs]] · [[API Design]] · [[Data Flow]] · [[Home]]

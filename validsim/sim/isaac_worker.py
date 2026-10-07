@@ -515,11 +515,20 @@ class IsaacWorkerBackend:
         ``episodes + len(scenarios)`` results, nominal first (see
         ``docs/isaac-worker.md``). ``episodes: 0`` is therefore valid and means
         "run only the injected scenarios".
+
+        ``checkpoint_id`` identifies the policy artifact under test and is
+        ``null`` when the caller did not supply one. It is the field a worker
+        needs to know *which policy to load* -- without it a conformant worker
+        can only ever run a default policy, and every scorecard it produced
+        would be a statement about that default rather than about the
+        checkpoint. A worker should echo it back on each episode so the client
+        can verify the right artifact was loaded.
         """
         return {
             "task_id": task.task_id,
             "robot": task.robot.model_dump(),
             "environment": task.environment.model_dump(),
+            "checkpoint_id": task.checkpoint_id,
             "seed": seed,
             "episodes": episodes,
             "randomization_level": randomization_level,

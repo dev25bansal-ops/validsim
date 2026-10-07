@@ -15,12 +15,15 @@ implicit:
    *name* is matched case-insensitively (correct value via ``x-api-key`` -> 200).
 5. A CORS preflight (OPTIONS) bypasses the auth dependency but still receives
    the CORS response headers.
-6. ``VALIDSIM_API_KEY=""`` is treated as *enabled* (not disabled): the effective
-   key is the empty string, so a missing/empty header passes while any
-   non-empty header is rejected -- the opposite of leaving the variable unset.
+6. ``VALIDSIM_API_KEY`` set to an empty or whitespace value is treated as *not
+   configured* — auth off, reported as such by ``/api/v1/health`` — and is a
+   startup failure when ``VALIDSIM_ENV=production`` asks for protection.
 7. The included ``/api/v1/jobs`` router inherits the same gate (401 without a
    key, 200/202 with one); auth even runs before per-route 404/422 logic.
 8. A 401 body is uniform and never reveals whether a key exists or matched.
+9. ``/api/v1/health`` is the one ``/api/v1`` route exempt from the gate, because
+   the container healthcheck cannot present a credential; it reports the
+   effective ``auth_enabled`` instead.
 
 Auth/CORS/job-queue env is read at :func:`create_app` time, so every case sets
 the environment, builds a fresh app, and restores it via ``clean_env``.
@@ -40,12 +43,19 @@ from validsim.store.memory import ValidationStore
 
 ENV_KEY = "VALIDSIM_API_KEY"
 ENV_ORIGINS = "VALIDSIM_CORS_ORIGINS"
+#: Deployment mode; `production` refuses to start without a key.
+ENV_ENV = "VALIDSIM_ENV"
 #: Cleared so the wired jobs queue is always in-memory (never Redis).
 ENV_JOB_QUEUE = "VALIDSIM_JOB_QUEUE"
 ENV_REDIS_URL = "VALIDSIM_REDIS_URL"
 
 #: Env vars this suite owns; popped before each test and restored afterwards.
-_MANAGED_ENV = (ENV_KEY, ENV_ORIGINS, ENV_JOB_QUEUE, ENV_REDIS_URL)
+_MANAGED_ENV = (ENV_KEY, ENV_ORIGINS, ENV_ENV, ENV_JOB_QUEUE, ENV_REDIS_URL)
+
+#: A route that is always auth-gated while a key is configured.
+PROTECTED = "/api/v1/jobs"
+#: The one /api/v1 route deliberately left open for container healthchecks.
+HEALTH = "/api/v1/health"
 
 #: The single, uniform 401 detail every rejection must carry.
 UNIFORM_DETAIL = "Missing or invalid API key"
@@ -89,21 +99,21 @@ class TestEmptyAndBlankHeaders:
         """An explicitly empty ``X-API-Key`` is rejected when a key is set."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        response = client.get("/api/v1/health", headers={API_KEY_HEADER: ""})
+        response = client.get(PROTECTED, headers={API_KEY_HEADER: ""})
         assert response.status_code == 401
 
     def test_whitespace_only_header_401(self, clean_env: None) -> None:
         """A whitespace-only header is rejected (no trimming happens)."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        response = client.get("/api/v1/health", headers={API_KEY_HEADER: "    "})
+        response = client.get(PROTECTED, headers={API_KEY_HEADER: "    "})
         assert response.status_code == 401
 
     def test_padded_correct_key_still_401(self, clean_env: None) -> None:
         """The value is compared verbatim: surrounding whitespace is NOT stripped."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        padded = client.get("/api/v1/health", headers={API_KEY_HEADER: " secret-key "})
+        padded = client.get(PROTECTED, headers={API_KEY_HEADER: " secret-key "})
         assert padded.status_code == 401
 
 
@@ -114,30 +124,30 @@ class TestWrongLengthAndCasing:
         """A strict prefix of the real key (same chars, wrong length) fails."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        response = client.get("/api/v1/health", headers={API_KEY_HEADER: "secret-ke"})
+        response = client.get(PROTECTED, headers={API_KEY_HEADER: "secret-ke"})
         assert response.status_code == 401
 
     def test_longer_key_401(self, clean_env: None) -> None:
         """The real key with extra characters appended fails."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        response = client.get("/api/v1/health", headers={API_KEY_HEADER: "secret-key-EXTRA"})
+        response = client.get(PROTECTED, headers={API_KEY_HEADER: "secret-key-EXTRA"})
         assert response.status_code == 401
 
     def test_wrong_cased_value_401(self, clean_env: None) -> None:
         """Key comparison is case-sensitive; only the exact casing passes."""
         os.environ[ENV_KEY] = "Secret-Key"
         client = _client()
-        assert client.get("/api/v1/health", headers={API_KEY_HEADER: "secret-key"}).status_code == 401
-        assert client.get("/api/v1/health", headers={API_KEY_HEADER: "SECRET-KEY"}).status_code == 401
-        assert client.get("/api/v1/health", headers={API_KEY_HEADER: "Secret-Key"}).status_code == 200
+        assert client.get(PROTECTED, headers={API_KEY_HEADER: "secret-key"}).status_code == 401
+        assert client.get(PROTECTED, headers={API_KEY_HEADER: "SECRET-KEY"}).status_code == 401
+        assert client.get(PROTECTED, headers={API_KEY_HEADER: "Secret-Key"}).status_code == 200
 
     def test_header_name_is_case_insensitive(self, clean_env: None) -> None:
         """HTTP header names are case-insensitive: ``x-api-key`` still authenticates."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        assert client.get("/api/v1/health", headers={"x-api-key": "secret-key"}).status_code == 200
-        assert client.get("/api/v1/health", headers={"X-API-KEY": "secret-key"}).status_code == 200
+        assert client.get(PROTECTED, headers={"x-api-key": "secret-key"}).status_code == 200
+        assert client.get(PROTECTED, headers={"X-API-KEY": "secret-key"}).status_code == 200
 
 
 class TestPreflightBypassesAuth:
@@ -173,31 +183,89 @@ class TestPreflightBypassesAuth:
         assert client.get("/api/v1/jobs").status_code == 401
 
 
-class TestEmptyStringKeyIsEnabled:
-    """``VALIDSIM_API_KEY=""`` is *enabled*, unlike leaving it unset."""
+class TestBlankKeyMeansAuthDisabled:
+    """``VALIDSIM_API_KEY=""`` is auth *off*, and says so.
 
-    def test_empty_string_key_marks_auth_enabled(self, clean_env: None) -> None:
+    It used to be auth "on" with an empty key, which made the missing header
+    compare equal to the configured value: every protected route opened, while
+    ``/api/v1/health`` reported ``auth_enabled: true``.
+    """
+
+    def test_empty_string_key_marks_auth_disabled(self, clean_env: None) -> None:
         os.environ[ENV_KEY] = ""
         app = _app()
-        assert app.state.api_key_enabled is True
+        assert app.state.api_key_enabled is False
+
+    def test_whitespace_key_marks_auth_disabled(self, clean_env: None) -> None:
+        os.environ[ENV_KEY] = "   "
+        app = _app()
+        assert app.state.api_key_enabled is False
+
+    def test_health_agrees_with_the_resolved_policy(self, clean_env: None) -> None:
+        os.environ[ENV_KEY] = ""
+        client = _client()
+        assert client.get(HEALTH).json()["auth_enabled"] is False
 
     def test_unset_key_marks_auth_disabled(self, clean_env: None) -> None:
         # clean_env popped the var, so it is genuinely unset here.
         app = _app()
         assert app.state.api_key_enabled is False
 
-    def test_missing_header_passes_against_empty_key(self, clean_env: None) -> None:
-        """With an empty key the empty/missing header is the only match."""
+    def test_blank_key_grants_nothing_that_unset_does_not(self, clean_env: None) -> None:
+        """Empty and unset behave identically: no key configured, routes open."""
         os.environ[ENV_KEY] = ""
         client = _client()
-        assert client.get("/api/v1/health").status_code == 200
+        assert client.get(PROTECTED).status_code == 200
+        assert client.get(HEALTH).status_code == 200
 
-    def test_nonempty_header_rejected_against_empty_key(self, clean_env: None) -> None:
-        """Any non-empty header fails against the empty configured key."""
+
+class TestProductionRefusesToStartUnauthenticated:
+    """With ``VALIDSIM_ENV=production`` a missing key is a startup failure."""
+
+    def test_empty_key_in_production_raises(self, clean_env: None) -> None:
+        os.environ[ENV_ENV] = "production"
         os.environ[ENV_KEY] = ""
+        with pytest.raises(RuntimeError, match="VALIDSIM_API_KEY"):
+            _app()
+
+    def test_unset_key_in_production_raises(self, clean_env: None) -> None:
+        os.environ[ENV_ENV] = "production"
+        with pytest.raises(RuntimeError, match="VALIDSIM_API_KEY"):
+            _app()
+
+    def test_configured_key_in_production_starts(self, clean_env: None) -> None:
+        os.environ[ENV_ENV] = "production"
+        os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        response = client.get("/api/v1/health", headers={API_KEY_HEADER: "anything"})
-        assert response.status_code == 401
+        assert client.get(PROTECTED).status_code == 401
+        assert client.get(PROTECTED, headers={API_KEY_HEADER: "secret-key"}).status_code == 200
+
+    def test_development_stays_open_without_a_key(self, clean_env: None) -> None:
+        os.environ[ENV_ENV] = "development"
+        assert _app().state.api_key_enabled is False
+
+
+class TestHealthRouteStaysReachable:
+    """``/api/v1/health`` backs the container healthcheck, which has no key."""
+
+    def test_health_open_when_auth_enabled(self, clean_env: None) -> None:
+        os.environ[ENV_KEY] = "secret-key"
+        client = _client()
+        response = client.get(HEALTH)
+        assert response.status_code == 200
+        assert response.json()["auth_enabled"] is True
+
+    def test_protected_sibling_still_401_on_the_same_client(self, clean_env: None) -> None:
+        os.environ[ENV_KEY] = "secret-key"
+        client = _client()
+        assert client.get(HEALTH).status_code == 200
+        assert client.get(PROTECTED).status_code == 401
+
+    def test_health_ignores_a_supplied_wrong_key(self, clean_env: None) -> None:
+        """Exempt means exempt: a wrong header must not fail the probe."""
+        os.environ[ENV_KEY] = "secret-key"
+        client = _client()
+        assert client.get(HEALTH, headers={API_KEY_HEADER: "wrong"}).status_code == 200
 
 
 class TestJobsRouterInheritsAuth:
@@ -233,8 +301,8 @@ class TestNoKeyStateLeakage:
     def test_missing_and_wrong_share_identical_body(self, clean_env: None) -> None:
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        missing = client.get("/api/v1/health")
-        wrong = client.get("/api/v1/health", headers={API_KEY_HEADER: "nope"})
+        missing = client.get(PROTECTED)
+        wrong = client.get(PROTECTED, headers={API_KEY_HEADER: "nope"})
         assert missing.status_code == wrong.status_code == 401
         assert missing.json() == wrong.json()
         assert missing.json()["detail"] == UNIFORM_DETAIL
@@ -244,18 +312,17 @@ class TestNoKeyStateLeakage:
         secret = "super-secret-token-123"
         os.environ[ENV_KEY] = secret
         client = _client()
-        response = client.get("/api/v1/health", headers={API_KEY_HEADER: "wrong-value"})
+        response = client.get(PROTECTED, headers={API_KEY_HEADER: "wrong-value"})
         assert secret.lower() not in response.text.lower()
         assert str(len(secret)) not in response.text
         assert response.json()["detail"] == UNIFORM_DETAIL
 
     def test_same_detail_across_all_protected_surfaces(self, clean_env: None) -> None:
-        """health, dashboard, validations and jobs all return the identical 401."""
+        """Dashboard, validations and jobs all return the identical 401."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
         details: set[str] = set()
         for method, path in (
-            ("GET", "/api/v1/health"),
             ("GET", "/api/v1/dashboard/summary"),
             ("POST", "/api/v1/validations"),
             ("GET", "/api/v1/jobs"),
@@ -269,6 +336,6 @@ class TestNoKeyStateLeakage:
         """Rejections carry the ``WWW-Authenticate: ApiKey`` hint (no key state)."""
         os.environ[ENV_KEY] = "secret-key"
         client = _client()
-        response = client.get("/api/v1/health")
+        response = client.get(PROTECTED)
         assert response.status_code == 401
         assert response.headers.get("www-authenticate") == "ApiKey"

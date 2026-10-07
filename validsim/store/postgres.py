@@ -38,13 +38,23 @@ Security rules baked into the SQL layer:
 * All *values* travel exclusively through ``%s`` placeholders; no value
   is ever formatted into a SQL string.
 
-``save`` uses ``ON CONFLICT (run_id) DO NOTHING``: the first write for a
-run id wins, making the deployed verdict log append-only. The full run
-detail (evaluation, safety, raw episodes, baseline id and regression
-report) is persisted alongside the scorecard in JSONB detail columns
-that are ``ALTER``-ed onto the schema on first use, so rows written
-before those columns existed remain readable through the same fallback
-the SQLite backend applies to legacy rows.
+``save`` uses ``ON CONFLICT (run_id) DO NOTHING``, so the first write for a run
+id wins: the verdict log is **append-only**. That is the contract declared once
+on :class:`~validsim.store.memory.ValidationStore` and now implemented
+identically by every backend -- the SQLite backend previously used ``INSERT OR
+REPLACE`` (last-write-wins), which made the meaning of a stored verdict depend
+on the configured backend. See that class docstring for why a duplicate must
+never rewrite a signed-off verdict, and why the sanctioned correction is
+``delete`` followed by a fresh ``save``. The full run detail (evaluation,
+safety, raw episodes, baseline id and regression report) is persisted
+alongside the scorecard in JSONB detail columns that are ``ALTER``-ed onto the
+schema on first use, so rows written before those columns existed remain
+readable through the same fallback the SQLite backend applies to legacy rows.
+Scorecard reconstruction is shared with SQLite via
+:func:`~validsim.store.memory.reconstruct_kwargs`, which derives its fields from
+the dataclass so a newly added :class:`Scorecard` field is covered without
+editing this module, and which falls back to dataclass defaults for rows
+written before that field existed.
 """
 
 from __future__ import annotations
@@ -61,7 +71,12 @@ from validsim.engine.regression import RegressionItem, RegressionReport
 from validsim.engine.safety import SafetyResult
 from validsim.engine.scorecard import Scorecard
 from validsim.sim.runner import EpisodeResult
-from validsim.store.memory import StoredRun, ValidationStore
+from validsim.store.memory import (
+    StoredRun,
+    ValidationStore,
+    rebind_row_identity,
+    reconstruct_kwargs,
+)
 
 __all__ = ["PostgresValidationStore"]
 
@@ -71,7 +86,7 @@ _PG_URL_ENV = "VALIDSIM_PG_URL"
 #: Whitelist for the table identifier. SQL identifiers cannot be sent as
 #: query parameters, so the name is validated against this strict pattern
 #: before ever being interpolated into a statement (security rule).
-_TABLE_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_TABLE_NAME_RE = re.compile(r"\A[a-z_][a-z0-9_]*\Z")
 
 #: Schema DDL templates; ``{table}`` is substituted only after the
 #: whitelist check above. Statement list (not a script) because psycopg 3
@@ -106,7 +121,7 @@ _MIGRATION_COLUMNS: dict[str, str] = {
 
 #: Projection used by every read path; ``scorecard`` always comes first,
 #: followed by the detail columns in the fixed order :func:`_run_from_row`
-#: expects.
+#: expects, then the indexed identity columns that outrank the blob's.
 _DETAIL_COLUMNS: tuple[str, ...] = (
     "scorecard",
     "baseline_run_id",
@@ -114,6 +129,10 @@ _DETAIL_COLUMNS: tuple[str, ...] = (
     "safety_json",
     "episodes_json",
     "regression_json",
+    "run_id",
+    "checkpoint_id",
+    "task_id",
+    "created_at",
 )
 _DETAIL_SELECT: str = ", ".join(_DETAIL_COLUMNS)
 
@@ -166,27 +185,16 @@ def _validate_table(table: str) -> str:
 def _scorecard_from_dict(data: dict[str, Any]) -> Scorecard:
     """Rebuild a frozen :class:`Scorecard` from its ``to_dict`` mapping.
 
-    Mirrors the SQLite backend's restore logic: JSON has no tuple type, so
-    ``confidence_interval`` is restored from the serialized list back to a
-    ``(low, high)`` tuple to preserve equality with the stored object.
+    Delegates to the shared :func:`~validsim.store.memory.reconstruct_kwargs`
+    -- the same call the SQLite backend makes -- so the two read paths cannot
+    drift and a field added to :class:`Scorecard` needs no edit here. This
+    function used to enumerate fields by hand, which is how the
+    measurement-provenance fields came to be written to JSONB but silently reset
+    to their defaults on every read. Rows written before a field existed still
+    load via the dataclass default; see
+    :func:`~validsim.store.memory.reconstruct_kwargs` for the rationale.
     """
-    ci = data.get("confidence_interval")
-    return Scorecard(
-        run_id=data["run_id"],
-        checkpoint_id=data["checkpoint_id"],
-        task_id=data["task_id"],
-        composite_score=data["composite_score"],
-        success_rate=data["success_rate"],
-        safety_score=data["safety_score"],
-        robustness_score=data["robustness_score"],
-        regression_delta=data["regression_delta"],
-        confidence_interval=tuple(ci) if ci is not None else None,
-        deploy_decision=data["deploy_decision"],
-        threshold=data["threshold"],
-        created_at=data["created_at"],
-        episode_count=data["episode_count"],
-        failure_taxonomy=dict(data.get("failure_taxonomy", {})),
-    )
+    return Scorecard(**reconstruct_kwargs(Scorecard, data))
 
 
 def _jsonb_load(blob: Any) -> Any:
@@ -221,19 +229,112 @@ def _regression_to_json(report: RegressionReport | None) -> str | None:
     return json.dumps([asdict(i) for i in report.items])
 
 
+def card_params(run: StoredRun) -> tuple[Any, ...]:
+    """The twelve column values for ``run``, in :data:`_INSERT_COLUMNS` order.
+
+    Shared by :meth:`PostgresValidationStore.save` and
+    :meth:`PostgresValidationStore.save_exists` so the two statements cannot
+    drift apart in *what* they write -- only in whether they ask for a
+    ``RETURNING`` row. Every value travels as a parameter; none is ever
+    formatted into the SQL.
+    """
+    card = run.scorecard
+    return (
+        run.run_id,
+        run.checkpoint_id,
+        run.task_id,
+        card.composite_score,
+        card.deploy_decision,
+        run.created_at,
+        card.to_json(),
+        run.baseline_run_id,
+        json.dumps(run.evaluation.to_dict()),
+        json.dumps(run.safety.to_dict()),
+        _episodes_to_json(run.episodes),
+        _regression_to_json(run.regression),
+    )
+
+
+#: Column list of the single INSERT every write path uses. Split out so
+#: ``save`` and ``save_exists`` are provably writing the same twelve columns.
+_INSERT_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "checkpoint_id",
+    "task_id",
+    "composite_score",
+    "deploy_decision",
+    "created_at",
+    "scorecard",
+    "baseline_run_id",
+    "evaluation_json",
+    "safety_json",
+    "episodes_json",
+    "regression_json",
+)
+#: JSONB columns need an explicit cast: psycopg sends the bound text as
+#: ``unknown`` and PostgreSQL will not resolve it to ``jsonb`` implicitly.
+_JSONB_CAST_COLUMNS: frozenset[str] = frozenset(
+    {"scorecard", "evaluation_json", "safety_json", "episodes_json", "regression_json"}
+)
+
+
+def _insert_statement(table: str, returning: bool = False) -> str:
+    """Build the append-only INSERT for the whitelisted ``table`` identifier.
+
+    Kept separate from the callers so both write paths share one statement
+    shape. The result is ``ON CONFLICT (run_id) DO NOTHING`` -- the contract
+    declared on :class:`ValidationStore`; ``DO UPDATE`` here would silently
+    reintroduce last-write-wins, and ``tests/test_store_postgres.py`` pins the
+    clause against that. ``table`` is interpolated only after the
+    :func:`_validate_table` whitelist check; every *value* travels as a
+    ``%s`` parameter (see :func:`card_params`).
+
+    Args:
+        table: The already-whitelisted table identifier.
+        returning: Append ``RETURNING run_id`` so the caller can tell an
+            applied insert from a rejected duplicate in the same round trip.
+
+    Returns:
+        The SQL text, with ``%s`` markers in :data:`_INSERT_COLUMNS` order.
+    """
+    placeholders = ", ".join(
+        "%s::jsonb" if name in _JSONB_CAST_COLUMNS else "%s" for name in _INSERT_COLUMNS
+    )
+    tail = " RETURNING run_id" if returning else ""
+    return (
+        f"INSERT INTO {table} ({', '.join(_INSERT_COLUMNS)})"
+        f" VALUES ({placeholders})"
+        " ON CONFLICT (run_id) DO NOTHING" + tail
+    )
+
+
 def _run_from_row(row: Any) -> StoredRun:
     """Reconstruct a :class:`StoredRun` from a persisted ``validations`` row.
 
-    ``row[0]`` is the scorecard blob; the remaining elements are nullable
-    and follow the :data:`_DETAIL_COLUMNS` order (``baseline_run_id``,
+    ``row[0]`` is the scorecard blob; the next elements are nullable and
+    follow the :data:`_DETAIL_COLUMNS` order (``baseline_run_id``,
     ``evaluation_json``, ``safety_json``, ``episodes_json``,
-    ``regression_json``). Full detail is restored exactly when present;
-    legacy rows (or a single-column test double) fall back to an
-    approximate evaluation/safety rebuilt from the scorecard, empty
-    episodes and no regression — the same fallback SQLite applies to
-    pre-detail rows.
+    ``regression_json``), then the four indexed identity columns
+    (``run_id``, ``checkpoint_id``, ``task_id``, ``created_at``). Full
+    detail is restored exactly when present; legacy rows (or a shorter
+    test double) fall back to an approximate evaluation/safety rebuilt
+    from the scorecard, empty episodes and no regression — the same
+    fallback SQLite applies to pre-detail rows.
+
+    The trailing identity columns are what make a read self-consistent:
+    a row shorter than ten elements has no columns to prefer, so the
+    scorecard's own copy is kept. See
+    :func:`~validsim.store.memory.rebind_row_identity`.
     """
     scorecard = _scorecard_from_dict(_blob_to_dict(row[0]))
+    if len(row) > 9:
+        scorecard = rebind_row_identity(
+            scorecard,
+            run_id=row[6],
+            checkpoint_id=row[7],
+            task_id=row[8],
+            created_at=row[9],
+        )
     baseline_run_id = row[1] if len(row) > 1 else None
 
     evaluation_data = _jsonb_load(row[2]) if len(row) > 2 else None
@@ -294,6 +395,11 @@ class PostgresValidationStore(ValidationStore):
 
     Connection and schema setup are deferred to first use — see the
     module docstring for the design rationale.
+
+    **Write semantics are append-only**, as the contract on
+    :class:`ValidationStore` requires; this backend is the reference
+    implementation of the ``ON CONFLICT (run_id) DO NOTHING`` clause that the
+    SQLite backend now matches.
     """
 
     def __init__(
@@ -399,37 +505,37 @@ class PostgresValidationStore(ValidationStore):
     def save(self, run: StoredRun) -> StoredRun:
         """Insert ``run``'s full-detail row; the first write for a run id wins.
 
-        Uses ``INSERT ... ON CONFLICT (run_id) DO NOTHING`` (append-only
-        verdict log), which differs from the in-memory/SQLite backends
-        where re-saving overwrites. Returns the run unchanged either way.
+        Uses ``INSERT ... ON CONFLICT (run_id) DO NOTHING``, the append-only
+        verdict log required by the contract on :class:`ValidationStore` and
+        matched byte-for-byte by the SQLite backend. (This backend was the only
+        one that already behaved this way; the divergence was that the others
+        did not.) Returns the ``run`` argument unchanged either way -- including
+        after a rejected duplicate, where it is *not* what is stored. Use
+        :meth:`save_exists` to detect that case.
         """
-        card = run.scorecard
-        sql = (
-            f"INSERT INTO {self._table} ("
-            " run_id, checkpoint_id, task_id, composite_score,"
-            " deploy_decision, created_at, scorecard, baseline_run_id,"
-            " evaluation_json, safety_json, episodes_json, regression_json)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::jsonb,"
-            " %s::jsonb, %s::jsonb, %s::jsonb)"
-            " ON CONFLICT (run_id) DO NOTHING"
-        )
-        params = (
-            run.run_id,
-            run.checkpoint_id,
-            run.task_id,
-            card.composite_score,
-            card.deploy_decision,
-            run.created_at,
-            card.to_json(),
-            run.baseline_run_id,
-            json.dumps(run.evaluation.to_dict()),
-            json.dumps(run.safety.to_dict()),
-            _episodes_to_json(run.episodes),
-            _regression_to_json(run.regression),
-        )
         with self._lock:
-            self._ensure_ready().execute(sql, params)
+            self._ensure_ready().execute(
+                _insert_statement(self._table), card_params(run)
+            )
         return run
+
+    def save_exists(self, run: StoredRun) -> bool:
+        """Insert unless the id is taken; return whether the row was new.
+
+        ``ON CONFLICT (run_id) DO NOTHING RETURNING run_id`` yields a row
+        exactly when the insert happened, so the check rides on the same
+        statement :meth:`save` issues -- no second round trip and no window in
+        which another writer could claim the id between the two.
+
+        Returns:
+            ``True`` if ``run`` was recorded, ``False`` if the id was already
+            taken and the stored record is unchanged.
+        """
+        with self._lock:
+            row = self._ensure_ready().execute(
+                _insert_statement(self._table, returning=True), card_params(run)
+            ).fetchone()
+        return row is not None
 
     def get(self, run_id: str) -> StoredRun | None:
         """Return the reconstructed run for ``run_id`` or ``None`` if unknown."""

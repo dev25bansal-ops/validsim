@@ -204,7 +204,11 @@ class TestPersistence:
     def test_run_is_retrievable_from_store(self, store: ValidationStore) -> None:
         run = run_and_score(_task(), "ckpt-persist", store, backend=_mock_backend())
         fetched = store.get(run.run_id)
-        assert fetched is run  # the exact object handed to store.save
+        # The store snapshots on write, so the record is equal but detached --
+        # handing back the caller's own object would let a later mutation of
+        # its episode list rewrite what was stored.
+        assert fetched == run
+        assert fetched.run_id == run.run_id
 
     def test_store_count_increments(self, store: ValidationStore) -> None:
         assert store.count() == 0

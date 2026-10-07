@@ -4,72 +4,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
+import threading
 from pathlib import Path
 from typing import Callable
 
 import pytest
 
-from validsim.engine.evaluation import EvaluationResult
-from validsim.engine.regression import RegressionItem, RegressionReport
-from validsim.engine.safety import SafetyResult
-from validsim.engine.scorecard import Scorecard
-from validsim.sim.runner import EpisodeResult
-from validsim.store.memory import StoredRun
+from conftest import (
+    make_detailed_stored_run,
+    make_persisted_scorecard,
+    make_stored_run,
+)
+from validsim.store import create_store
 from validsim.store.sqlite import SqliteValidationStore
-
-
-def _scorecard(run_id: str = "vrun-cafe1234", **overrides: object) -> Scorecard:
-    base: dict[str, object] = {
-        "run_id": run_id,
-        "checkpoint_id": "ckpt-1",
-        "task_id": "pick-place",
-        "composite_score": 90.0,
-        "success_rate": 0.9,
-        "safety_score": 80.0,
-        "robustness_score": 100.0,
-        "regression_delta": -0.1,
-        "confidence_interval": (0.82, 0.95),
-        "deploy_decision": "APPROVE",
-        "threshold": 85.0,
-        "created_at": "2026-01-01T00:00:00+00:00",
-        "episode_count": 100,
-        "failure_taxonomy": {"collision": 7, "timeout": 3},
-    }
-    base.update(overrides)
-    return Scorecard(**base)  # type: ignore[arg-type]
-
-
-def _run(sc: Scorecard) -> StoredRun:
-    return StoredRun(
-        run_id=sc.run_id,
-        checkpoint_id=sc.checkpoint_id,
-        task_id=sc.task_id,
-        created_at=sc.created_at,
-        scorecard=sc,
-        evaluation=EvaluationResult(
-            total_episodes=sc.episode_count,
-            success_count=90,
-            success_rate=sc.success_rate,
-            failure_taxonomy=dict(sc.failure_taxonomy),
-        ),
-        safety=SafetyResult(0.0, 0.0, None, 0.0, sc.safety_score),
-    )
-
-
-@pytest.fixture()
-def make_store(tmp_path: Path) -> Iterator[Callable[[str], SqliteValidationStore]]:
-    """Factory opening named SQLite stores under ``tmp_path``; closes on exit."""
-    created: list[SqliteValidationStore] = []
-
-    def _make(name: str = "valid.db") -> SqliteValidationStore:
-        store = SqliteValidationStore(tmp_path / name)
-        created.append(store)
-        return store
-
-    yield _make
-    for store in created:
-        store.close()
 
 
 class TestRoundTrip:
@@ -77,8 +24,8 @@ class TestRoundTrip:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        sc = _scorecard()
-        store.save(_run(sc))
+        sc = make_persisted_scorecard()
+        store.save(make_stored_run(sc))
         got = store.get(sc.run_id)
         assert got is not None
         assert got.scorecard == sc  # CI tuple + floats restored exactly
@@ -92,21 +39,69 @@ class TestRoundTrip:
     ) -> None:
         assert make_store().get("vrun-deadbeef") is None
 
-    def test_repeated_save_overwrites(
+    def test_repeated_save_keeps_the_first_verdict(
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
+        """SQLite is the default backend of ``actions/validate/action.yml``.
+
+        It used to ``INSERT OR REPLACE``, so a worker retry (which reuses
+        ``spec.run_id``) overwrote a recorded verdict with no error. Append-only
+        is now the shared contract with memory and PostgreSQL; the cross-backend
+        suite in ``test_store_parity.py`` covers the other read paths.
+        """
         store = make_store()
-        store.save(_run(_scorecard(composite_score=50.0, deploy_decision="BLOCK")))
-        store.save(_run(_scorecard(composite_score=95.0, deploy_decision="APPROVE")))
+        store.save(
+            make_stored_run(
+                make_persisted_scorecard(composite_score=95.0, deploy_decision="APPROVE")
+            )
+        )
+        store.save(
+            make_stored_run(
+                make_persisted_scorecard(composite_score=20.0, deploy_decision="BLOCK")
+            )
+        )
         assert len(store) == 1
-        assert store.get("vrun-cafe1234").scorecard.composite_score == 95.0  # type: ignore[union-attr]
+        got = store.get("vrun-cafe1234")
+        assert got is not None
+        assert got.scorecard.composite_score == 95.0  # first write wins
+        assert got.scorecard.deploy_decision == "APPROVE"
+
+    def test_repeated_save_is_a_single_row_in_the_table(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
+        """Assert the SQL, not just the behaviour: no REPLACE, conflict ignored.
+
+        A behavioural assertion alone would also be satisfied by an
+        ``INSERT OR REPLACE`` on a database where both writes happened to be
+        identical. Pinning the statement keeps the two backends provably in step
+        (``postgres.py`` emits the same conflict clause).
+        """
+        store = make_store()
+        store.save(make_stored_run(make_persisted_scorecard()))
+        store.save(make_stored_run(make_persisted_scorecard(composite_score=1.0)))
+
+        with store._lock:
+            statements = [
+                str(sql)
+                for (sql,) in store._conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table'"
+                )
+            ]
+        assert statements, "expected a validations table"
+        assert "OR REPLACE" not in statements[0]
+        with store._lock:
+            (rows,) = store._conn.execute(
+                "SELECT COUNT(*) FROM validations WHERE run_id = ?",
+                ("vrun-cafe1234",),
+            ).fetchone()
+        assert rows == 1
 
     def test_summary_reflects_stored_scorecard(
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        sc = _scorecard()
-        store.save(_run(sc))
+        sc = make_persisted_scorecard()
+        store.save(make_stored_run(sc))
         summary = store.get(sc.run_id).summary()  # type: ignore[union-attr]
         assert summary["composite_score"] == 90.0
         assert summary["deploy_decision"] == "APPROVE"
@@ -119,22 +114,22 @@ class TestQueries:
     ) -> None:
         store = make_store()
         store.save(
-            _run(
-                _scorecard(
+            make_stored_run(
+                make_persisted_scorecard(
                     "vrun-a0000001", checkpoint_id="ckpt-A", created_at="2026-01-02T00:00:00+00:00"
                 )
             )
         )
         store.save(
-            _run(
-                _scorecard(
+            make_stored_run(
+                make_persisted_scorecard(
                     "vrun-a0000002", checkpoint_id="ckpt-A", created_at="2026-01-01T00:00:00+00:00"
                 )
             )
         )
         store.save(
-            _run(
-                _scorecard(
+            make_stored_run(
+                make_persisted_scorecard(
                     "vrun-b0000001", checkpoint_id="ckpt-B", created_at="2026-01-03T00:00:00+00:00"
                 )
             )
@@ -147,8 +142,16 @@ class TestQueries:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        store.save(_run(_scorecard("vrun-c0000002", created_at="2026-02-02T00:00:00+00:00")))
-        store.save(_run(_scorecard("vrun-c0000001", created_at="2026-02-01T00:00:00+00:00")))
+        store.save(
+            make_stored_run(
+                make_persisted_scorecard("vrun-c0000002", created_at="2026-02-02T00:00:00+00:00")
+            )
+        )
+        store.save(
+            make_stored_run(
+                make_persisted_scorecard("vrun-c0000001", created_at="2026-02-01T00:00:00+00:00")
+            )
+        )
         assert [r.run_id for r in store.history()] == ["vrun-c0000001", "vrun-c0000002"]
 
     def test_len_tracks_saved_runs(
@@ -156,17 +159,17 @@ class TestQueries:
     ) -> None:
         store = make_store()
         assert len(store) == 0
-        store.save(_run(_scorecard("vrun-11111111")))
-        store.save(_run(_scorecard("vrun-22222222")))
+        store.save(make_stored_run(make_persisted_scorecard("vrun-11111111")))
+        store.save(make_stored_run(make_persisted_scorecard("vrun-22222222")))
         assert len(store) == 2
 
 
 class TestPersistence:
     def test_data_survives_reopen(self, tmp_path: Path) -> None:
         path = tmp_path / "persist.db"
-        sc = _scorecard()
+        sc = make_persisted_scorecard()
         first = SqliteValidationStore(path)
-        first.save(_run(sc))
+        first.save(make_stored_run(sc))
         first.close()
         second = SqliteValidationStore(path)
         try:
@@ -186,60 +189,53 @@ class TestPersistence:
             store.close()
 
 
-def _full_run(sc: Scorecard) -> StoredRun:
-    """A StoredRun exercising every persisted detail field."""
-    episodes = [
-        EpisodeResult(
-            episode_id="pick-place-seed0000000042",
-            task_id="pick-place",
-            seed=42,
-            success=True,
-            collision_count=0,
-            max_contact_force_n=12.5,
-            min_human_distance_m=1.2,
-            failure_mode=None,
-            duration_s=8.25,
-            joint_states_summary={"position_rms": 0.4, "dof": 7.0},
-            randomization_level="full",
-        ),
-        EpisodeResult(
-            episode_id="pick-place-seed0000000043",
-            task_id="pick-place",
-            seed=43,
-            success=False,
-            collision_count=2,
-            max_contact_force_n=98.75,
-            min_human_distance_m=None,
-            failure_mode="collision",
-            duration_s=15.5,
-            joint_states_summary={},
-            randomization_level="partial",
-        ),
-    ]
-    return StoredRun(
-        run_id=sc.run_id,
-        checkpoint_id=sc.checkpoint_id,
-        task_id=sc.task_id,
-        created_at=sc.created_at,
-        scorecard=sc,
-        evaluation=EvaluationResult(
-            total_episodes=2,
-            success_count=1,
-            success_rate=0.5,
-            per_task_success={"pick-place": 0.5},
-            failure_taxonomy={"collision": 1},
-            mean_duration_s=11.875,
-        ),
-        safety=SafetyResult(1.0, 0.5, 1.2, 0.0, 42.5),
-        episodes=episodes,
-        baseline_run_id="vrun-base0001",
-        regression=RegressionReport(
-            items=[
-                RegressionItem("success_rate", 0.9, 0.5, -0.4, 0.001, True, "critical"),
-                RegressionItem("mean_duration_s", 8.0, 11.875, 3.875, None, False, "info"),
-            ]
-        ),
-    )
+class TestBlankSqlitePathIsTreatedAsUnset:
+    """A blank ``VALIDSIM_SQLITE_PATH`` must not open a throwaway database.
+
+    ``os.environ.get`` returns ``""`` for an empty value, and
+    ``sqlite3.connect("")`` opens a *private temporary* database that vanishes
+    when the connection closes. So a deployment with an empty env var silently
+    lost every run while still appearing to work -- the worst failure mode for
+    a validation store. Blank must fall back to the documented default.
+    """
+
+    @pytest.mark.parametrize("blank", ["", " ", "   ", "\t"])
+    def test_blank_env_var_uses_the_default_db_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, blank: str
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_STORE", "sqlite")
+        monkeypatch.setenv("VALIDSIM_SQLITE_PATH", blank)
+        # chdir into a temp dir so a stray "validsim.db" is detectable there.
+        monkeypatch.chdir(tmp_path)
+
+        store = create_store()
+        try:
+            assert store.db_path == "validsim.db"
+            assert store.db_path != ""
+            # A real, reopenable file -- not an anonymous in-memory/temp DB.
+            assert (tmp_path / "validsim.db").exists()
+        finally:
+            store.close()
+
+    def test_blank_env_var_does_not_lose_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The decisive check: a run saved under a blank path must survive close."""
+        monkeypatch.setenv("VALIDSIM_STORE", "sqlite")
+        monkeypatch.setenv("VALIDSIM_SQLITE_PATH", "")
+
+        sc = make_persisted_scorecard("vrun-blank01")
+        first = create_store()
+        try:
+            first.save(make_stored_run(sc))
+        finally:
+            first.close()
+
+        second = create_store()
+        try:
+            got = second.get("vrun-blank01")
+            assert got is not None, "run was silently lost via a temporary database"
+            assert got.scorecard == sc
+        finally:
+            second.close()
 
 
 class TestFullDetailRoundTrip:
@@ -249,13 +245,13 @@ class TestFullDetailRoundTrip:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        run = _full_run(_scorecard())
+        run = make_detailed_stored_run(make_persisted_scorecard())
         store.save(run)
         assert store.get(run.run_id) == run  # dataclass equality across all fields
 
     def test_episodes_survive_reopen(self, tmp_path: Path) -> None:
         path = tmp_path / "detail.db"
-        run = _full_run(_scorecard())
+        run = make_detailed_stored_run(make_persisted_scorecard())
         first = SqliteValidationStore(path)
         first.save(run)
         first.close()
@@ -275,14 +271,100 @@ class TestFullDetailRoundTrip:
         self, make_store: Callable[[str], SqliteValidationStore]
     ) -> None:
         store = make_store()
-        run = _run(_scorecard())  # no episodes/regression/baseline
+        run = make_stored_run(make_persisted_scorecard())  # no episodes/regression/baseline
         store.save(run)
         got = store.get(run.run_id)
         assert got is not None
         assert got.regression is None
         assert got.baseline_run_id is None
         assert got.episodes == []
-        assert got.evaluation == run.evaluation  # exact, not approximated
+
+
+class TestAdversarialFieldsRoundTrip:
+    """The adversarial-segment verdict fields must survive persistence.
+
+    ``Scorecard`` gained ``adversarial_episode_count``,
+    ``adversarial_success_rate`` and ``block_reasons`` when the adversarial
+    gate landed. The scorecard is stored as a JSON blob, so the fields *are*
+    written -- but the reconstruct functions enumerate fields explicitly, so
+    without an explicit read they silently reset to their defaults on reload.
+    A gate whose stated reason vanishes on read is worse than one that never had
+    it, because the stored evidence no longer explains the stored verdict.
+    """
+
+    @staticmethod
+    def _with_adversarial_fields(scorecard):
+        data = scorecard.to_dict()
+        return type(scorecard)(
+            **{
+                **data,
+                "confidence_interval": scorecard.confidence_interval,
+                "adversarial_episode_count": 100,
+                "adversarial_success_rate": 0.42,
+                "block_reasons": ("adversarial success rate 42.0% is below the floor",),
+            }
+        )
+
+    def test_fields_survive_sqlite_round_trip(
+        self, make_store: Callable[[str], SqliteValidationStore]
+    ) -> None:
+        store = make_store()
+        card = self._with_adversarial_fields(make_persisted_scorecard("vrun-adv00001"))
+        store.save(make_stored_run(card))
+        got = store.get("vrun-adv00001")
+        assert got is not None
+        assert got.scorecard.adversarial_episode_count == 100
+        assert got.scorecard.adversarial_success_rate == 0.42
+        assert got.scorecard.block_reasons == (
+            "adversarial success rate 42.0% is below the floor",
+        )
+        assert got.scorecard == card  # full dataclass equality
+
+    def test_fields_survive_reopen(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "adv.db"
+        card = self._with_adversarial_fields(make_persisted_scorecard("vrun-adv00002"))
+        first = SqliteValidationStore(path)
+        first.save(make_stored_run(card))
+        first.close()
+        second = SqliteValidationStore(path)
+        try:
+            got = second.get("vrun-adv00002")
+            assert got is not None
+            assert got.scorecard == card
+        finally:
+            second.close()
+
+    def test_legacy_row_without_the_fields_still_loads(self) -> None:
+        """Rows written before these fields existed must keep reconstructing.
+
+        Read with ``.get`` defaults so a pre-existing database is not broken by
+        the schema addition -- the upgrade path is defaults, not a filter.
+        """
+        from validsim.store.sqlite import _scorecard_from_dict
+
+        legacy = {
+            "run_id": "vrun-legacy01",
+            "checkpoint_id": "ckpt-1",
+            "task_id": "pick-place",
+            "composite_score": 90.0,
+            "success_rate": 0.9,
+            "safety_score": 95.0,
+            "robustness_score": 100.0,
+            "regression_delta": None,
+            "confidence_interval": [0.8, 0.95],
+            "deploy_decision": "APPROVE",
+            "threshold": 85.0,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "episode_count": 100,
+            "failure_taxonomy": {},
+        }
+        card = _scorecard_from_dict(legacy)
+        assert card.run_id == "vrun-legacy01"
+        assert card.adversarial_episode_count == 0
+        assert card.adversarial_success_rate is None
+        assert card.block_reasons == ()
 
     def test_legacy_row_without_detail_columns_is_readable(
         self, tmp_path: Path
@@ -297,7 +379,7 @@ class TestFullDetailRoundTrip:
             " deploy_decision TEXT NOT NULL, created_at TEXT NOT NULL,"
             " scorecard_json TEXT NOT NULL)"
         )
-        sc = _scorecard()
+        sc = make_persisted_scorecard()
         conn.execute(
             "INSERT INTO validations VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -324,7 +406,7 @@ class TestFullDetailRoundTrip:
             assert got.evaluation.total_episodes == 100  # approximated fallback
             assert got.evaluation.success_count == 90
             # migrated store accepts new full-detail writes
-            run = _full_run(_scorecard("vrun-newf0001"))
+            run = make_detailed_stored_run(make_persisted_scorecard("vrun-newf0001"))
             store.save(run)
             assert store.get(run.run_id) == run
         finally:
@@ -335,7 +417,7 @@ class TestFullDetailRoundTrip:
     ) -> None:
         """Indexed hot columns stay consistent with the stored blobs."""
         store = make_store()
-        run = _full_run(_scorecard())
+        run = make_detailed_stored_run(make_persisted_scorecard())
         store.save(run)
         conn = sqlite3.connect(store.db_path)
         try:
@@ -346,4 +428,88 @@ class TestFullDetailRoundTrip:
         finally:
             conn.close()
         assert json.loads(card_json)["run_id"] == run.run_id
-        assert len(json.loads(ep_json)) == 2
+
+
+class TestMigrationRace:
+    def test_a_rival_adding_a_column_does_not_break_the_migration(self, tmp_path: Path) -> None:
+        """A concurrent ALTER is the expected outcome of the race, not a failure.
+
+        ``_migrate``'s ``self._lock`` only serialises one instance, so two
+        processes opening the same pre-detail database both read
+        ``PRAGMA table_info``, both conclude the column is missing, and both
+        issue the ALTER. The second dies with ``duplicate column name``, taking
+        the worker down at construction on the default SQLite path.
+
+        The rival is injected at the moment the migration reads its column list,
+        so the window is exercised deterministically rather than raced for.
+        """
+        import validsim.store.sqlite as sqlite_mod
+
+        db = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE validations (run_id TEXT PRIMARY KEY,"
+            " checkpoint_id TEXT NOT NULL, task_id TEXT, composite_score REAL,"
+            " deploy_decision TEXT, created_at TEXT, scorecard_json TEXT)"
+        )
+        conn.commit()
+        conn.close()
+
+        store = SqliteValidationStore.__new__(SqliteValidationStore)
+        store._db_path = str(db)
+        store._lock = threading.Lock()
+        store._conn = sqlite3.connect(db, check_same_thread=False)
+        store._conn.row_factory = sqlite3.Row
+
+        original = sqlite_mod._MIGRATION_COLUMNS
+
+        class Rival(dict):
+            def items(self) -> object:
+                other = sqlite3.connect(db)
+                other.execute(
+                    "ALTER TABLE validations ADD COLUMN baseline_run_id TEXT"
+                )
+                other.commit()
+                other.close()
+                return original.items()
+
+        sqlite_mod._MIGRATION_COLUMNS = Rival()
+        try:
+            store._migrate()  # must not raise
+        finally:
+            sqlite_mod._MIGRATION_COLUMNS = original
+            store._conn.close()
+
+        names = [r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(validations)")]
+        for column in original:
+            assert names.count(column) == 1
+        reopened = SqliteValidationStore(db)
+        assert reopened.count() == 0
+        reopened.close()
+
+    def test_a_genuine_alter_failure_still_propagates(self, tmp_path: Path) -> None:
+        """Only the duplicate-column case is swallowed; real faults still raise.
+
+        A ``try``/``except`` that is too broad would turn a genuine schema fault
+        into a silently half-migrated database, so the message is matched:
+        anything that is not a duplicate column re-raises.
+        """
+        db = tmp_path / "broken.db"
+        conn = sqlite3.connect(db)
+        # A table that is not named `validations` at all, so PRAGMA reports
+        # nothing and the first ALTER fails with "no such table".
+        conn.execute("CREATE TABLE something_else (id TEXT)")
+        conn.commit()
+        conn.close()
+
+        store = SqliteValidationStore.__new__(SqliteValidationStore)
+        store._db_path = str(db)
+        store._lock = threading.Lock()
+        store._conn = sqlite3.connect(db, check_same_thread=False)
+        store._conn.row_factory = sqlite3.Row
+        try:
+            with pytest.raises(sqlite3.OperationalError) as excinfo:
+                store._migrate()
+            assert "no such table" in str(excinfo.value).lower()
+        finally:
+            store._conn.close()

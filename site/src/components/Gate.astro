@@ -1,0 +1,261 @@
+---
+/**
+ * The gate axis — the one figure the page is remembered by.
+ *
+ * A scorecard is not two numbers printed side by side. It is a measurement
+ * against a threshold, and the finding is the DISTANCE between them: 72.7 beside
+ * 85.0 is a fact a reader has to compute, while a composite sitting below a
+ * dashed rule is one they see before they finish reading the label.
+ *
+ * So the figure draws the relationship. The track is the score range, the rule
+ * is the configured gate, and the marker is where this run actually landed. The
+ * gap between rule and marker is the whole argument of the site in one glance:
+ * an instrument that disagreed with the model, and said so.
+ *
+ * This is the one component that opts into JavaScript, to tie the marker's
+ * count to scroll position. It enhances and never gates — the composite is
+ * already in the markup, so a failed script, a blocked bundle, or
+ * `prefers-reduced-motion` all leave a complete, readable figure behind.
+ */
+import { readout } from '../data/content';
+
+const composite = Number(readout.composite);
+const threshold = Number(readout.threshold);
+
+/* The track shows the last 30 points of the scale, not all 100. A 0-100 axis
+   would squash a 12-point miss into the bottom eighth of a tall box and hide
+   exactly the distance this figure exists to show. The baseline is real and
+   stated on the axis, so the zoom costs the reader nothing: the floor is the
+   lowest score the gate can be configured to. */
+const SCALE_MIN = 70;
+const SCALE_MAX = 100;
+
+/* Rounded because the raw quotient carries float noise (72.7 on a 70-100
+   scale came out as 9.000000000000009%), which then lands in the emitted
+   inline style where anyone reading the HTML would wonder what it meant. */
+const asPercent = (score: number) =>
+  Math.round(((score - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * 100);
+const markerAt = asPercent(composite);
+const ruleAt = asPercent(threshold);
+const deficit = (threshold - composite).toFixed(1);
+---
+
+<figure class="gate" data-scrub data-scale-min={SCALE_MIN} aria-labelledby="gate-cap">
+  <div class="gate-figure">
+    <div class="track">
+      <div class="track-rule" style={`inset-block-start: ${ruleAt}%`}>
+        <span class="track-rule-label">
+          <b>Gate</b>
+          {readout.threshold}
+        </span>
+      </div>
+
+      <div class="track-marker" style={`inset-block-start: ${markerAt}%`}>
+        <span class="track-marker-value">{readout.composite}</span>
+        <span class="track-marker-verdict">{readout.verdict}</span>
+      </div>
+
+      <span class="track-cap track-cap-top">{SCALE_MAX}</span>
+      <span class="track-cap track-cap-floor">{SCALE_MIN}</span>
+    </div>
+
+    <p class="gate-deficit">
+      <span class="gate-deficit-num">{deficit}</span> points short of the gate. It failed on the
+      adversarial floor first — 34% adversarial success against a 60% floor — and the composite
+      never recovered.
+    </p>
+  </div>
+
+  <div class="gate-detail">
+    <dl>
+      {
+        readout.rows.map((row) => (
+          <div>
+            <dt>{row.label}</dt>
+            <dd class={row.tone === 'default' ? undefined : `v-${row.tone}`}>{row.value}</dd>
+          </div>
+        ))
+      }
+      <div>
+        <dt>Run</dt>
+        <dd>{readout.runId}</dd>
+      </div>
+    </dl>
+    <figcaption id="gate-cap">
+      Composite score and verdict from one real run of <code>{readout.command}</code>. Published
+      because it is the result we got, not the result we wanted.
+    </figcaption>
+  </div>
+</figure>
+
+<style>
+  .gate {
+    margin-block: clamp(3rem, 6vw, 4.5rem) 0;
+    padding-block: clamp(2rem, 4vw, 3rem);
+    border-block: 1px solid var(--rule);
+    display: grid;
+    gap: clamp(2rem, 5vw, 3.5rem);
+    align-items: start;
+  }
+  @media (width > 52rem) {
+    .gate {
+      /* The track is a narrow instrument beside its own readout, so the
+         scorecard stays one object rather than splitting across the fold. */
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    }
+  }
+
+  .gate-figure {
+    /* Room for the scale caps, which hang off the spine's left edge. */
+    padding-inline-start: 2.25rem;
+  }
+
+  /* -- the axis ------------------------------------------------------------ */
+
+  .track {
+    position: relative;
+    block-size: var(--gate-track);
+    /* A vertical axis, because the score is read off it. The rule at the foot
+       is the floor of the scale; the spine on the left is what the marker and
+       the threshold are both measured against, and without it the two float
+       with no shared reference. */
+    border-inline-start: 1px solid var(--rule);
+    border-block-end: 1px solid var(--rule);
+    margin-block-end: 2.25rem;
+    max-inline-size: 30rem;
+  }
+
+  /* Scale endpoints, pinned to the spine rather than floated: the top label
+     sits at 0 and the floor label at 100% of the track, so they mark the ends
+     of the axis itself. Positioned from the inline-start so neither can collide
+     with the marker, which hangs off the same side as the value. */
+  .track-cap {
+    position: absolute;
+    inset-inline-start: -1.85rem;
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    line-height: 1;
+    color: var(--ink-dim);
+  }
+  .track-cap-top { inset-block-start: -0.4rem; }
+  .track-cap-floor { inset-block-end: -0.4rem; }
+
+  .track-rule {
+    position: absolute;
+    inset-inline: 0;
+    border-block-start: 1px dashed var(--ink-dim);
+    translate: 0 -0.5px;
+  }
+  .track-rule-label {
+    /* Sits above its own rule, so the eye reads "gate, then the number below
+       it" rather than hunting for which line the caption belongs to. */
+    position: absolute;
+    inset-block-end: 0.45rem;
+    inset-inline-start: 0.9rem;
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    line-height: 1;
+    color: var(--ink-dim);
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+  .track-rule-label b {
+    font-weight: 400;
+    opacity: 0.7;
+  }
+
+  .track-marker {
+    position: absolute;
+    inset-inline: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    /* Centred on the disc. Because the track is a vertical axis, the value is
+       offset to the right of it so the reading is value-against-line. */
+    translate: 0 -50%;
+  }
+  /* The marker is a filled disc ON the axis, with its number hung off it. The
+     disc is what makes this a measurement; the number alone is just a caption. */
+  .track-marker::before {
+    content: '';
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-start: 0;
+    inline-size: 0.7rem;
+    block-size: 0.7rem;
+    border-radius: 50%;
+    background: var(--block);
+    translate: -0.35rem -50%;
+  }
+  .track-marker-value {
+    margin-inline-start: 1.4rem;
+    font-size: clamp(2.25rem, 1rem + 5vw, 4rem);
+    font-weight: 300;
+    letter-spacing: -0.05em;
+    line-height: 0.85;
+    font-variant-numeric: tabular-nums;
+    color: var(--block);
+  }
+  .track-marker-verdict {
+    font-family: var(--mono);
+    font-size: var(--t-sm);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--block);
+    border: 2px solid currentColor;
+    padding: 0.15rem 0.45rem;
+    border-radius: 2px;
+    align-self: center;
+  }
+
+  /* The deficit is drawn, not just spoken: a filled span from the marker back
+     to the rule is the gap that caused the block. */
+  .gate-deficit {
+    margin-block-start: 0;
+    font-size: var(--t-sm);
+    color: var(--ink-mid);
+    max-width: 46ch;
+  }
+  .gate-deficit-num {
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--block);
+    margin-inline-end: 0.35rem;
+  }
+
+  /* -- the readout --------------------------------------------------------- */
+
+  .gate-detail dl {
+    display: grid;
+    gap: 0.65rem;
+    font-size: var(--t-sm);
+  }
+  .gate-detail dl > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1.5rem;
+    border-block-end: 1px dotted var(--rule);
+    padding-block-end: 0.65rem;
+  }
+  .gate-detail dt {
+    color: var(--ink-dim);
+  }
+  .gate-detail dd {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  figcaption {
+    font-size: var(--t-xs);
+    color: var(--ink-dim);
+    margin-block-start: 1rem;
+    max-width: 52ch;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.95em;
+    color: var(--ink-mid);
+  }
+</style>

@@ -4,3 +4,13 @@
 pytest>=8.0
 pytest-cov>=5.0
 ruff>=0.5
+PyYAML>=6.0
+#
+# Redis-backend and property-based test tooling. These look optional but are
+# not: without fakeredis/lupa the entire Redis queue cohort silently skips,
+# so a critical bug in the Redis job queue shipped with the suite green. The
+# skip is silent because the tests are parameterised over whichever backends
+# are importable, and an empty parameter list reports as SKIP, not a failure.
+fakeredis>=2.20
+lupa>=2.0
+hypothesis>=6.100

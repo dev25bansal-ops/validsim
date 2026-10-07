@@ -1,0 +1,23 @@
+[KILL ] scorecard weight _W_SAFETY 0.3 -> 0.4
+[KILL ] safety weight _PROXIMITY_WEIGHT 0.2 -> 0.3
+[KILL ] safety weight zeroed (channel disabled)
+[KILL ] scorecard weight negated (inverted sign)
+[KILL ] safety per-channel cap removed (collision)
+[KILL ] safety force rate loses its division (rate -> raw count)
+[KILL ] safety force limit comparison flipped (> -> <)
+[KILL ] safety force channel dropped entirely
+[KILL ] safety force weight swapped with collision weight
+[KILL ] composite clamp upper bound 100 -> 1
+[KILL ] robustness scale 200 -> 300 (dispersion overshoots)
+[KILL ] robustness uses sample stdev instead of pstdev
+[KILL ] success-count floor dropped (0-success run becomes certifiable)
+[KILL ] regression penalty sign inverted
+[KILL ] regression penalty 25 -> 10
+[KILL ] CI resamples double the draws (CI widens with more evidence)
+[KILL ] CI percentile index scaled by sample size
+[KILL ] adversarial split sliced from the front
+[KILL ] adversarial floor applied to empty segment
+[KILL ] success_rate inverted (failures score higher)
+[KILL ] CI bracket widening removed (interval may exclude the point)
+
+mutations: 21  killed: 21  not-killed: 0

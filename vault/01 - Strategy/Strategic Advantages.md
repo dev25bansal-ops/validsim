@@ -9,6 +9,9 @@ area: "01 - Strategy"
 
 # 🏆 Strategic Advantages — Why This Scores 8.7/10
 
+> [!warning] Internal scoring — 2026-09-21
+> The scores and “white space” assessments are founder judgments, not independently verified market facts. Inception credits and founder/team capabilities require evidence before external use.
+
 Highest composite of **seven evaluated frontier bets** (Seven Frontier Bets Report, September 2026).
 
 ## 1.3 Why this scores 8.7/10
@@ -17,16 +20,16 @@ Highest composite of **seven evaluated frontier bets** (Seven Frontier Bets Repo
 |---|---|---|
 | Market Size | 7/10 | Robot software/validation tooling rides the humanoid market to **$40.5B by 2033** |
 | Urgency | 9/10 | Foundation model companies shipping continuously NOW; humanoid deployments 2026–2027 ([[Why Now (2026)]]) |
-| White Space | 9/10 | Almost-empty competitive field; no productized CI/CD for robots exists ([[Competitive Landscape]]) |
+| White Space | 9/10 internal estimate | Competitive field **appears** sparse in our desk research; validate with a current landscape/customer scan before claiming no product exists ([[Competitive Landscape]]) |
 | Feasibility (2 founders) | 8/10 | Pure software, open-source Isaac stack, no hardware, both ML skills apply directly ([[Founding Team]]) |
 | YC Fit | 9/10 | Devtools for the defining technology wave of the decade ([[YC Application]]) |
-| NVIDIA Inception Fit | 10/10 | Native Isaac/Omniverse use case; DGX credits offset compute-heavy simulation ([[NVIDIA Inception]]) |
+| NVIDIA Inception Fit | 10/10 internal plan | Intended Isaac/Omniverse workload; DGX credits are conditional, not booked ([[NVIDIA Inception]]) |
 | **Composite** | **8.7/10** | **Highest of all seven evaluated ideas** |
 
 ## The seven key strategic advantages
 
 1. **Almost-empty competitive field** — no one sells "submit a checkpoint → receive a safety-and-success scorecard" as a product ([[Problem Statement]], [[Scorecard UX]])
-2. **Perfect NVIDIA ecosystem fit** — native Isaac Sim/Omniverse integration; **$100K+** in free DGX credits via Inception ([[NVIDIA Inception]], [[Tech Stack]])
+2. **Intended NVIDIA ecosystem fit** — target Isaac Sim/Omniverse integration; potential Inception credits must be applied for, accepted and verified before use. This does not prove current NVIDIA-native execution ([[NVIDIA Inception]], [[Tech Stack]])
 3. **Devtools narrative YC consistently funds** — "GitHub Actions for X" is a proven YC pattern ([[YC Application]])
 4. **Pure software** — no hardware risk, no manufacturing, no supply chain for a 2-founder team ([[MVP Scope]])
 5. **Recurring revenue model** — every model update = new validation run = recurring spend ([[Business Model]], [[Unit Economics]])

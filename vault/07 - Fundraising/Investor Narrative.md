@@ -11,9 +11,12 @@ area: "07 - Fundraising"
 
 §13.2. Three stories — market, traction, team — each with a one-line thesis and the exact numbers that carry it. All figures traceable to [[Key Figures]] / [[Sources]].
 
+> [!warning] Verify before external send — 2026-09-21
+> The traction bullets below are targets/draft claims, not verified outcomes. The repository contains the deterministic mock and optional HTTP worker client, not evidence of 25+ conversations, 2–3 signed LOIs, public benchmark results, NVIDIA Inception membership, or DGX credits. Replace or remove each claim unless a dated external artifact is attached.
+
 ## Story 1 · The market story
 
-**Thesis:** *Cloud spend created the CI/CD industry; robot fleet spend is creating the robot CI/CD industry — at $0 today.*
+**Thesis:** *Cloud spend created the software CI/CD industry; a robot-validation software category may emerge as robot fleets standardize. Treat today's $0 category claim as an unverified market hypothesis, not revenue data.*
 
 - **$27.6B** VC into robotics in 2025; **$18.8B** in H1 2026
 - **$3.92B** into robot FM companies across **9 deals** in 2026
@@ -21,33 +24,36 @@ area: "07 - Fundraising"
 - Every deployed robot = recurring validation spend
 - Analogous to how cloud spend created the CI/CD industry
 
-Supporting frame: software CI/CD went **$0 (2010) → $10B+ category (today)**; robot validation/tooling TAM **$300M–$640M by 2033** with SAM reaching **$300M–$1B+ by 2030** ([[Market Sizing (TAM SAM SOM)]]).
+Supporting frame: software CI/CD grew from a **$0 (2010) → $10B+ category**; the robot validation/tooling estimates in [[Market Sizing (TAM SAM SOM)]] require independent source validation.
 
 ## Story 2 · The traction story
 
-**Thesis:** *We are the only vendor labs will name unprompted, because we started before the category had a name.*
+**Thesis (unverified):** *If discovery calls confirm that labs repeatedly name the same missing layer, we may be the first vendor they encounter.*
 
-- **25+ discovery conversations** with named robotics labs
-- **2–3 signed LOIs**
-- **Working MVP** with public benchmark results
-- **NVIDIA Inception member** with DGX credits
+- **[Verify]** discovery conversations with named robotics labs
+- **[Verify]** signed LOIs
+- **[Verify]** working MVP with public benchmark results
+- **[Verify]** NVIDIA Inception membership and DGX credits (the application checklist is not evidence of acceptance)
 
-Each bullet maps to a checklist item with a verification artifact in [[YC Countdown]] — investors (like YC reviewers) weigh evidence, not adjectives ([[Moat]] first-mover window: 12–18 months).
+Each bullet maps to a required evidence artifact in [[YC Countdown]]. Until attached and dated, they are not investor-verifiable claims ([[Moat]] first-mover window: 12–18 months is a planning assumption).
 
 ## Story 3 · The team story
 
-**Thesis:** *Two ML founders who both ship — simulation depth plus platform depth, at startup velocity.*
+> [!warning] Verify founder evidence
+> Founder names, biographies, Isaac/Kubernetes/Next.js experience and weekly-demo/call cadence are not verified by the repository. Confirm them before external use; keep the current-prototype role split separate from aspirational technical ownership.
+
+**Thesis:** *Two founders whose relevant product, simulation and platform experience must be evidenced.*
 
 - Two ML/AI founders with direct experience in the problem space
 - Technical depth in simulation, evaluation, and ML infrastructure
 - **Speed: 8-week MVP, weekly demo cadence, 10 calls/week**
 
-Role split: Founder 1 (ML/Robotics: Isaac, VLA, adversarial) × Founder 2 (Platform: K8s, FastAPI, Next.js, CI) — the pairing *is* the architecture ([[Founding Team]], [[Solution Architecture]]).
+Role split: Founder 1 (ML/Robotics: Isaac, VLA, adversarial) × Founder 2 (Platform: FastAPI/Typer, static dashboard, CI/Docker Compose) — this is the current prototype split; Kubernetes/Next.js remain target skills ([[Founding Team]], [[Solution Architecture]]).
 
 ## Narrative assembly — 90-second pitch
 
 > [!quote] Put it together
-> "Robot foundation model companies — Physical Intelligence at **$5.6B**, Skild AI at **$14–15B** — ship policy updates weekly, but validate them with hand-built test scenes and judgment calls, because a bad deploy drops a $50K part or injures a worker. The CI/CD layer between 'checkpoint' and 'fleet' doesn't exist. Software CI/CD was a $0 market in 2010 and is $10B+ today. We run 1,000–100,000 parallel physics-accurate sim episodes, catch regressions with 95% confidence intervals, and output a safety scorecard that gates deployment and satisfies insurers. We're two ML founders who built the MVP in 8 weeks, logged 25+ lab conversations, signed 2–3 LOIs, and got into NVIDIA Inception on a native Isaac workload. We're building GitHub Actions for robots — before the first major deployment failure makes it mandatory."
+> "Robot foundation model companies — Physical Intelligence at **$5.6B**, Skild AI at **$14–15B** — ship policy updates weekly, but validate them with hand-built test scenes and judgment calls, because a bad deploy drops a $50K part or injures a worker. The CI/CD layer between 'checkpoint' and 'fleet' is the problem we are building. Software CI/CD went from $0 in 2010 to a $10B+ category. Our current prototype runs deterministic mock episodes, regression statistics, and an APPROVE/BLOCK scorecard through a CLI/API; the real Isaac/GPU workload and published integrations remain roadmap work. We have not yet verified the traction numbers in this draft."
 
 ## Objection handling index
 

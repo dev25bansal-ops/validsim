@@ -1,0 +1,97 @@
+{
+  "name": "docs",
+  "mainConversationId": "d2653e6a9c474de7a74ef78b37343e1b",
+  "workspacePath": "d:/SIM-TO-REAL",
+  "createdAt": "2026-10-03T11:47:41.429Z",
+  "options": {
+    "workspacePath": "d:/SIM-TO-REAL",
+    "isAutoTeam": false
+  },
+  "isAutoTeam": false,
+  "members": [
+    {
+      "memberId": "engine-audit@docs",
+      "name": "engine-audit",
+      "role": "Core engine auditor",
+      "sessionId": "3abfea14086948b584a01d2df0100f4f",
+      "status": "running"
+    },
+    {
+      "memberId": "store-config@docs",
+      "name": "store-config",
+      "role": "Store and config auditor",
+      "sessionId": "d60603e8f5d04b32820a6e040cb87718",
+      "status": "running"
+    },
+    {
+      "memberId": "api-surface@docs",
+      "name": "api-surface",
+      "role": "API surface auditor",
+      "sessionId": "c039f1da235546c5bdf4d88cc54a43d5",
+      "status": "completed"
+    },
+    {
+      "memberId": "jobs-queue@docs",
+      "name": "jobs-queue",
+      "role": "Jobs worker auditor",
+      "sessionId": "81dec2b84a53445a89092600bc9b3293",
+      "status": "running"
+    },
+    {
+      "memberId": "sim-runtime@docs",
+      "name": "sim-runtime",
+      "role": "Simulation backend auditor",
+      "sessionId": "b2f31aaec1af422c92173d344d51f13b",
+      "status": "waiting_user_input"
+    },
+    {
+      "memberId": "tests-guard@docs",
+      "name": "tests-guard",
+      "role": "Test suite guardian",
+      "sessionId": "1206d28d25c04a05bf53e096dcddfeaa",
+      "status": "running"
+    },
+    {
+      "memberId": "notify-sec@docs",
+      "name": "notify-sec",
+      "role": "Notification layer auditor",
+      "sessionId": "357b7a85fed045d097d390d088280843",
+      "status": "completed"
+    },
+    {
+      "memberId": "site-astro@docs",
+      "name": "site-astro",
+      "role": "Documentation site maintainer",
+      "sessionId": "7055ae8a4fe64d47b14807da4d3e1e30",
+      "status": "completed"
+    },
+    {
+      "memberId": "docs-truth@docs",
+      "name": "docs-truth",
+      "role": "Docs and vault truth keeper",
+      "sessionId": "e1f4359fea4749fabbecdea076dfe368",
+      "status": "running"
+    },
+    {
+      "memberId": "infra-ci@docs",
+      "name": "infra-ci",
+      "role": "CI and packaging maintainer",
+      "sessionId": "a107157ffeca4ae8a7884608cc1aacb5",
+      "status": "waiting_user_input"
+    },
+    {
+      "memberId": "engine-audit-2@docs",
+      "name": "engine-audit-2",
+      "role": "Engine lane replacement audit",
+      "sessionId": "df7325723a7d45ac91abd36eab6e6240",
+      "status": "running"
+    },
+    {
+      "memberId": "store-config-2@docs",
+      "name": "store-config-2",
+      "role": "Store and config lane replacement",
+      "sessionId": "c2471327e3eb4edca5c9084d2a44ad7f",
+      "status": "running"
+    }
+  ]
+}

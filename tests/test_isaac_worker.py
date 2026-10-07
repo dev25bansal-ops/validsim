@@ -160,7 +160,7 @@ class TestHappyPath:
         assert request.headers["content-type"] == "application/json"
         body = _body(request)
         assert set(body) == {
-            "task_id", "robot", "environment", "seed", "episodes",
+            "task_id", "robot", "environment", "checkpoint_id", "seed", "episodes",
             "randomization_level", "scenarios",
         }
         assert body["task_id"] == "pick-place"

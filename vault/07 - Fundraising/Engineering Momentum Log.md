@@ -14,10 +14,10 @@ area: "07 - Fundraising"
 > [!quote] The thesis this log proves
 > *"Investors don't buy a slide deck — they buy a team that ships on a cadence. This log is the receipt."*
 
-A running record of build momentum for investors. Every line below is a **shipped artifact plus a measured number**, not an adjective — because a W27 reviewer and a seed investor weigh exactly the same evidence ([[YC Application Answers]] traction checklist, [[Investor Narrative]] Story 3 "team story").
+A running record of build momentum for investors. It preserves dated history, but only rows that still match source/verified artifacts may be used externally ([[YC Application Answers]], [[Investor Narrative]]).
 
-> [!info] Sourcing
-> Numbers in this log trace to [[Build Status]] (CI-generated, read-only) and the engineering notes each row links to. No tests were re-run to produce this note.
+> [!warning] Verify before external send — 2026-09-21
+> This is a historical snapshot. Test totals, `100%` pass-rate, subagent counts, 4× A100 timing, nightly real-Isaac execution, Inception status, and external-user assertions are not verified by the repository. Use [[Build Status]] for the latest test count, attach logs for benchmarks, and remove unsupported investor claims. HMAC signing protects webhook delivery; it is not an immutable audit trail.
 
 ## Why this matters now
 
@@ -27,35 +27,39 @@ A running record of build momentum for investors. Every line below is a **shippe
 
 | Capability | What it proves |
 |---|---|
-| **338 tests green** | Full suite passing — 100% pass rate across the last 11 runs. Engineering discipline, not demo luck |
-| **Security hardening** | API key auth (`VALIDSIM_API_KEY`, constant-time compare) + HMAC-signed webhooks (`X-ValidSim-Signature`) — the audit trail insurers will require ([[Security Hardening]], [[Moat]] compliance moat) |
-| **Async job queue + Redis** | `POST /validations` is fire-and-forget: jobs decouple from execution on Redis 7.x with an in-memory dev fallback ([[Async Job Queue]]) |
+| **Historical test snapshot** | 338 was a dated milestone, not the current source of truth; use [[Build Status]] and do not infer a 100% pass rate |
+| **Security hardening** | API key auth (`VALIDSIM_API_KEY`, constant-time compare) + HMAC-signing capability in the webhook dispatcher; **that dispatcher has no production caller** (no run sends a scorecard anywhere), and neither the signing nor public webhook registration is an immutable audit trail, and public webhook registration is not implemented ([[Security Hardening]]) |
+| **Async job queue + Redis** | `POST /api/v1/jobs` is fire-and-forget on Redis/memory; synchronous `POST /api/v1/validations` remains available ([[Async Job Queue]]) |
 | **Trend analytics** | Regression timeline over successive runs — the *"did it get worse?"* question answered per checkpoint |
 | **Pagination + report CLI** | List endpoints paginate; `validsim report` generates run reports from the terminal |
 | **Multi-stage Docker** | Slimmer runtime image, faster CI cycles |
-| **Nightly adversarial sweep** | 12-category adversarial taxonomy runs every night against the deep-validation suite — failures repro before a customer ever sees them |
+| **Nightly adversarial workflow** | Repository workflow exists; real Isaac/4× A100 throughput and customer-facing runs are unverified |
 
 ## 📊 Metrics that matter
 
 | Metric | Value | Signal |
 |---|---|---|
-| **Test count growth** | **190 → 250 → 338 → 601** (Sep 18 → Sep 19 → Sep 19 → Sep 20 UTC) | Coverage **>3×** in ~2 days |
-| **Current suite** | **601 passed**, 2 skipped · 95% line/branch coverage (90% enforced CI floor) · **0.2.0** | Full pipeline green |
-| **Pass rate (every run)** | **100%** | Every push/PR verified |
-| **Agent-assisted parallel build** | **~75 subagents across 7 waves** | A 2-founder team shipping at a 10-engineer cadence |
+| **Historical test count growth** | 190 → 250 → 338 → 601 (dated milestones) | Use only with their source logs; [[Build Status]] is current |
+| **Current suite** | See latest generated row in [[Build Status]] | The earlier 601/95% values are stale |
+| **Pass rate** | **Unverified** — the recorded history includes failures; do not claim 100% |
+| **Agent-assisted build** | Historical agent/wave counts are unverified | Do not present as investor evidence without run records |
 
-Why the last row matters: two founders can't hand-write 601 tests and a dozen platform features in a weekend. **Agent-assisted parallel build** is the operating leverage that makes the 8-week MVP credible — role split mirrors the architecture, but the fleet multiplies it ([[Founding Team]]).
+The historical rows preserve momentum, not current proof. Re-check source, generated build records, and dated run logs before quoting any number.
 
 ## What this reads as, to an investor
 
-1. **Velocity, measured.** 190 → 338 tests in under a day; features land in waves, not one-by-one.
-2. **Maturity, in the right order.** Hardening (auth + signed webhooks) shipped *before* the first external pilot — the "audit trail" moat is being built now, not promised.
-3. **Infrastructure, not demo-ware.** Redis job queue, multi-stage Docker, nightly sweeps — this is a control plane, not a notebook.
+1. **Velocity is testable.** Use the current generated count, not this snapshot's historical numbers.
+2. **Security is partial.** Auth exists and outbound webhook signing is *implemented but never invoked by a run*; immutable audit/compliance retention is future work.
+3. **Infrastructure is real but local.** Memory/Redis jobs, Postgres, and Docker Compose ship; Kubernetes/Argo and the GPU worker are not part of the current stack.
+
+## ## Historical snapshot boundary
+
+Everything above reflects the repository state on 2026-09-20, before the later catalog pass. It is retained to preserve the founding team's history, not to certify today's suite or customer evidence.
 
 ## Next up
 
-- GPU worker shadow-run ([[MVP Success Metrics]] — 5,000 episodes < 30 min on 4× A100)
-- Rate limiting ([[Security Hardening]] roadmap)
+- GPU worker shadow-run — 5,000 episodes under 30 minutes on 4× A100 is an unverified target ([[MVP Success Metrics]])
+- Configure and test production rate limiting; the process-local limiter is off by default ([[Security Hardening]])
 - YC application draft v2 ([[YC Application Answers]])
 
 Links: [[YC Application Answers]] · [[Investor Narrative]] · [[NVIDIA Inception]] · [[Home]] · [[YC Countdown]] · [[Build Status]]

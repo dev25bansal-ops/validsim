@@ -13,6 +13,12 @@
 # .env file (see .env.example; never commit real ones); compose aborts with
 # "set POSTGRES_PASSWORD" if it is unset or empty.
 #
+# Both api and worker set VALIDSIM_JOB_QUEUE=redis, so a job enqueued through
+# the API is drained by the worker. All three published ports bind to
+# 127.0.0.1: the API is unauthenticated unless VALIDSIM_API_KEY is set in the
+# environment, and /api/v1/health stays open so the healthcheck works with a
+# key configured.
+#
 # NOTE: The `worker` service above is the CPU (mock-backend) job worker that
 # drains the Redis queue. The GPU Isaac Sim validation worker is still
 # intentionally NOT part of this stack — this repo has no GPU host in the loop.
@@ -31,10 +37,23 @@ services:
     container_name: validsim-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Loopback-published, matching redis/postgres below. The API is
+      # unauthenticated unless VALIDSIM_API_KEY is set, so it must not reach
+      # beyond the host by default; republish on a specific interface if a
+      # deployment genuinely needs it (with a key configured).
+      - "127.0.0.1:8000:8000"
     environment:
-      VALIDSIM_ENV: development
+      VALIDSIM_ENV: "${VALIDSIM_ENV:-development}"
+      # Empty means "no key configured" (auth off, reported honestly by
+      # /api/v1/health). Set it in .env to protect this stack; with
+      # VALIDSIM_ENV=production an unset key aborts the container at startup.
+      VALIDSIM_API_KEY: "${VALIDSIM_API_KEY:-}"
       VALIDSIM_STORE: "${VALIDSIM_STORE:-postgres}"
+      # Both services must name the same queue backend. The worker sets
+      # `redis`; without it here too, `POST /api/v1/jobs` would enqueue into
+      # the API process' private in-memory queue and the job would stay
+      # `queued` forever with no error.
+      VALIDSIM_JOB_QUEUE: redis
       VALIDSIM_REDIS_URL: "redis://redis:6379/0"
       # NOTE on TLS: the postgres:16-alpine image ships with SSL disabled by
       # default, so appending `?sslmode=require` to this DSN would make every
@@ -108,7 +127,7 @@ services:
     command: ["python", "-m", "validsim.cli", "worker"]
     restart: unless-stopped
     environment:
-      VALIDSIM_ENV: development
+      VALIDSIM_ENV: "${VALIDSIM_ENV:-development}"
       # Same store/queue wiring as the api: jobs enqueued through the API are
       # claimed here and their results land in the same system-of-record.
       VALIDSIM_STORE: "${VALIDSIM_STORE:-postgres}"
@@ -124,12 +143,12 @@ services:
         condition: service_healthy
     # Lightweight liveness probe for a non-HTTP process: the worker serves no
     # port, so the base image's HTTP :8000 check can never pass here. Instead we
-    # confirm the worker can still reach the Redis queue it drains. redis-py is
-    # not installed in the slim runtime image and redis-cli is not on PATH, so
-    # we speak the Redis PING/PONG handshake over a raw stdlib socket. This is a
-    # liveness proxy: no queue reachability means the worker cannot make
-    # progress. If the worker process itself dies, PID 1 exits and the container
-    # is reported stopped rather than unhealthy.
+    # confirm the worker can still reach the Redis queue it drains, speaking the
+    # PING/PONG handshake over a raw stdlib socket so the probe adds no
+    # dependency to the healthcheck itself. This is a liveness proxy: no queue
+    # reachability means the worker cannot make progress. If the worker process
+    # itself dies, PID 1 exits and the container is reported stopped rather
+    # than unhealthy.
     healthcheck:
       test:
         - CMD

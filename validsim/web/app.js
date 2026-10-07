@@ -1,14 +1,23 @@
 /* ValidSim Dashboard v0 — SPA logic (vanilla JS, no build step).
  *
  * Talks to the existing FastAPI app:
- *   POST /api/v1/validations            run a fresh validation
- *   GET  /api/v1/validations/{id}/scorecard  reload a historical scorecard
- *   GET  /api/v1/dashboard/history      newest-first run list
- *   GET  /api/v1/dashboard/summary      gate KPI counts
+ *   GET  /api/v1/health                        public probe (reports auth_enabled)
+ *   POST /api/v1/validations                   run a fresh validation
+ *   GET  /api/v1/validations/{id}/scorecard    reload a historical scorecard
+ *   GET  /api/v1/dashboard/history             newest-first run list
+ *   GET  /api/v1/dashboard/summary             gate KPI counts
+ *   GET  /api/v1/jobs                          job queue (polled every 3s)
  *
- * Chart.js is loaded from a CDN; if it is missing (offline) or its init
- * throws, the failure taxonomy degrades to the HTML table, which doubles
- * as the accessible alternative for the canvas.
+ * This file is DOM wiring only. Every formatting and coercion decision lives in
+ * view-core.js as a pure function over the API's JSON, so what an operator
+ * actually sees is unit-testable without a browser (tests/test_web_*
+ * _agent.py runs that same file under Node). If view-core.js fails to load
+ * there is nothing left that can format a scorecard, so the page shows a fatal
+ * panel rather than throwing.
+ *
+ * Chart.js is loaded from a CDN; if it is missing (offline) or its init throws,
+ * the failure taxonomy degrades to the HTML table, which doubles as the
+ * accessible alternative for the canvas.
  *
  * Accessibility contract (WCAG 2.1 AA):
  *   - every dynamic message goes through a polite live region, never a
@@ -16,14 +25,33 @@
  *   - row actions are native <button>s, so name/role/value and Enter/Space
  *     come for free and focus is never lost;
  *   - the taxonomy table is always in the accessibility tree, and can be
- *     revealed for everyone with the "Show data table" button.
+ *     revealed for everyone with the "Show data table" button;
+ *   - async buttons follow the APG loading-button pattern: the control is NEVER
+ *     disabled while its own request is in flight. A disabled control that
+ *     holds focus drops it to <body>, throwing keyboard users to the top of the
+ *     page (WCAG 2.4.3). Instead the button takes aria-busy="true" and a
+ *     re-entrant submit is ignored rather than queued;
+ *   - no verdict, badge or metric is signalled by colour alone: each pairs its
+ *     hue with an inline icon and a literal word (WCAG 1.4.1), matching the PDF
+ *     exporter's colour+text verdict banner.
  */
 "use strict";
 
 (() => {
   const $ = (id) => document.getElementById(id);
+  const V = window.ValidSimView;
 
   const els = {
+    fatal: $("app-fatal"),
+    fatalDetail: $("app-fatal-detail"),
+    body: $("app-body"),
+    authPanel: $("auth-panel"),
+    authDetail: $("auth-detail"),
+    authForm: $("auth-form"),
+    authBtn: $("auth-btn"),
+    authBtnLabel: $("auth-btn-label"),
+    authStatus: $("auth-status"),
+    apiKey: $("api-key"),
     main: $("main-content"),
     skipLink: document.querySelector(".skip-link"),
     announcer: $("a11y-announcer"),
@@ -32,6 +60,9 @@
     runBtnLabel: $("run-btn-label"),
     status: $("run-status"),
     runMeta: $("scorecard-run-meta"),
+    blockReasons: $("block-reasons"),
+    blockReasonsCount: $("block-reasons-count"),
+    blockReasonsList: $("block-reasons-list"),
     composite: $("sc-composite"),
     gate: $("sc-gate"),
     verdict: $("sc-verdict"),
@@ -42,6 +73,8 @@
     ci: $("m-ci"),
     episodes: $("m-episodes"),
     duration: $("m-duration"),
+    adversarialCount: $("m-adversarial-count"),
+    adversarialRate: $("m-adversarial-rate"),
     chartWrap: $("taxonomy-chart-wrap"),
     chartCanvas: $("taxonomy-chart"),
     taxonomyTable: $("taxonomy-table"),
@@ -67,6 +100,27 @@
     themeToggle: $("theme-toggle"),
     themeToggleText: $("theme-toggle-text"),
   };
+
+  /* ------------------------------------------------------------------ */
+  /* Fatal bootstrap failure                                            */
+  /* ------------------------------------------------------------------ */
+  /* view-core.js is a separate <script>. If the static mount 404s it, or it
+   * is edited into a syntax error, no formatter survives and every render path
+   * would throw on first use. Say so plainly and stop. */
+  function fatal(message) {
+    if (els.fatalDetail) els.fatalDetail.textContent = message;
+    if (els.fatal) els.fatal.hidden = false;
+    if (els.body) els.body.hidden = true;
+    if (els.authPanel) els.authPanel.hidden = true;
+  }
+
+  if (window.__vsViewCoreFailed || !V || typeof V.scorecardView !== "function") {
+    fatal(
+      "The dashboard's presentation module (view-core.js) failed to load, so scorecards cannot " +
+      "be rendered. Reload the page; if it persists, that asset is missing from the deployment."
+    );
+    return;
+  }
 
   /* Inline SVG icons (Heroicons outline, 24x24) — no emoji anywhere.
      All are aria-hidden: the adjacent literal status word carries the meaning,
@@ -96,8 +150,6 @@
 
   const reducedMotion = () =>
     window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  const pct = (x, digits = 1) => (x * 100).toFixed(digits) + "%";
 
   /* ------------------------------------------------------------------ */
   /* Theme control (light / dark)                                        */
@@ -189,23 +241,106 @@
     els.status.className = "run-status" + (kind ? " is-" + kind : "");
   }
 
-  /* Focus hygiene: disabling the control that holds focus drops it to
-   * <body>, which throws keyboard users to the top of the page (WCAG 2.4.3).
-   * Remember the origin, and reclaim it only if focus actually fell out. */
-  function rememberFocus(container) {
-    const active = document.activeElement;
-    return active && container.contains(active) ? active : null;
-  }
+  /* ------------------------------------------------------------------ */
+  /* API key: header injection, session storage, and 401 degradation      */
+  /* ------------------------------------------------------------------ */
+  /* With VALIDSIM_API_KEY configured, the API's router-level dependency covers
+   * every /api/v1 route and the document route at "/" is registered on the
+   * same app, so an anonymous browser receives {"detail":"Missing or invalid API
+   * key"} as application/json — the dashboard never loads. That is a real
+   * deployment state, so the UI absorbs it:
+   *   - /api/v1/health is in PUBLIC_PATHS and reports `auth_enabled`, which is
+   *     how the client tells "this deployment wants a key" apart from "the API
+   *     is down";
+   *   - a 401 on any dashboard request raises AuthRequired, which swaps the body
+   *     for the auth panel — never for the raw JSON body;
+   *   - the key lives in sessionStorage only (gone when the tab closes; never a
+   *     cookie, never a URL query parameter) and rides in the X-API-Key header. */
+  const API_KEY_HEADER = "X-API-Key";
+  const API_KEY_STORE = "vs-api-key";
 
-  function restoreFocus(target) {
-    if (!target || !target.isConnected) return;
-    if (document.activeElement === document.body || document.activeElement === null) {
-      target.focus({ preventScroll: true });
+  class AuthRequired extends Error {
+    constructor() {
+      super("This deployment requires an API key.");
+      this.name = "AuthRequired";
     }
   }
 
+  function readApiKey() {
+    try {
+      return sessionStorage.getItem(API_KEY_STORE) || "";
+    } catch (e) {
+      return ""; // storage disabled (private mode / policy): treat as "no key"
+    }
+  }
+
+  function writeApiKey(value) {
+    try {
+      if (value) sessionStorage.setItem(API_KEY_STORE, value);
+      else sessionStorage.removeItem(API_KEY_STORE);
+    } catch (e) { /* best effort — the key still works for this page load */ }
+  }
+
+  function authHeaders() {
+    const key = readApiKey();
+    return key ? { [API_KEY_HEADER]: key } : {};
+  }
+
+  /* Best-effort policy probe. The health route is deliberately reachable
+   * without a credential (a container probe has none to present), so this
+   * answers even on a fully locked-down deployment. */
+  async function probeAuthPolicy() {
+    try {
+      const response = await fetch("/api/v1/health", { headers: authHeaders() });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data && typeof data === "object" ? data : null;
+    } catch (err) {
+      return null; // offline, or not a ValidSim backend
+    }
+  }
+
+  function showAuthStatus(message, kind) {
+    if (!els.authStatus) return;
+    els.authStatus.hidden = false;
+    els.authStatus.textContent = message;
+    els.authStatus.className = "run-status" + (kind ? " is-" + kind : "");
+  }
+
+  function focusQuietly(target) {
+    if (!target || !target.isConnected) return;
+    try { target.focus({ preventScroll: false }); } catch (e) { /* ignore */ }
+  }
+
+  /* The single state flip. Idempotent, and callable from any request that
+   * discovers the key is missing or rejected. */
+  function showAuthRequired(detail) {
+    stopJobsPolling();
+    if (els.body) els.body.hidden = true;
+    if (els.authPanel) {
+      els.authPanel.hidden = false;
+      if (detail && els.authDetail) els.authDetail.textContent = detail;
+    }
+    if (els.apiKey) els.apiKey.value = "";
+    showAuthStatus("The dashboard needs a valid API key before it can load any data.", "error");
+    focusQuietly(els.apiKey);
+  }
+
+  function showDashboard() {
+    if (els.authPanel) els.authPanel.hidden = true;
+    if (els.body) els.body.hidden = false;
+  }
+
   async function fetchJSON(url, options) {
-    const response = await fetch(url, options);
+    const opts = Object.assign({}, options);
+    opts.headers = Object.assign({}, authHeaders(), opts.headers || {});
+    const response = await fetch(url, opts);
+    if (response.status === 401 || response.status === 403) {
+      // Discard the credential: a rejected key will not start working, and
+      // leaving it would fail every subsequent request with no way forward.
+      writeApiKey("");
+      throw new AuthRequired();
+    }
     if (!response.ok) {
       let detail = "HTTP " + response.status;
       try {
@@ -223,8 +358,8 @@
   /* Scorecard rendering                                                  */
   /* ------------------------------------------------------------------ */
 
-  function renderVerdict(decision) {
-    const safe = decision === "APPROVE" || decision === "BLOCK" ? decision : "PENDING";
+  function renderVerdict(decision, word) {
+    const safe = V.safeDecision(decision);
     const cls = safe === "APPROVE" ? "verdict--approve" : safe === "BLOCK" ? "verdict--block" : "verdict--pending";
     const icon = safe === "APPROVE" ? ICONS.approve : safe === "BLOCK" ? ICONS.block : ICONS.pending;
     els.verdict.className = "verdict " + cls;
@@ -232,39 +367,88 @@
     els.verdict.innerHTML = icon +
       '<span class="is-visually-hidden">Deploy decision:\u00a0</span>' +
       "<span>" + safe + "</span>";
+    // aria-label restates the verdict as a sentence so it is intelligible out
+    // of context and carries the word as well as the hue (WCAG 1.4.1).
+    els.verdict.setAttribute("aria-label", "Deploy decision: " + safe + ", " + word + ".");
     return safe;
   }
 
+  /* Renders the engine's block_reasons verbatim as <li> text nodes.
+   *
+   * textContent, never innerHTML: a reason may quote a caller-supplied
+   * checkpoint or task id, so markup arriving in the payload has to render as
+   * characters rather than become an element. */
+  function renderBlockReasons(view) {
+    if (!els.blockReasons) return;
+    const reasons = view.blockReasons;
+    if (reasons.length === 0) {
+      els.blockReasons.hidden = true;
+      els.blockReasonsList.textContent = "";
+      els.blockReasonsCount.textContent = "";
+      return;
+    }
+    els.blockReasonsList.textContent = "";
+    for (const reason of reasons) {
+      const li = document.createElement("li");
+      li.className = "block-reason";
+      li.textContent = reason;
+      els.blockReasonsList.appendChild(li);
+    }
+    // Counted in words in the visible header, so it is not read as a bare digit.
+    els.blockReasonsCount.textContent = reasons.length === 1
+      ? "Blocked for 1 reason"
+      : "Blocked for " + reasons.length + " reasons";
+    els.blockReasons.hidden = false;
+  }
+
   function renderScorecard(card, durationLabel) {
-    els.composite.textContent = Number(card.composite_score).toFixed(2);
-    els.gate.textContent = "gate \u2265 " + Number(card.threshold).toFixed(1);
-    const decision = renderVerdict(card.deploy_decision);
+    const view = V.scorecardView(card, durationLabel);
+    const decision = renderVerdict(view.decision, view.decisionWord);
 
-    els.success.textContent = pct(Number(card.success_rate));
-    els.safety.textContent = Number(card.safety_score).toFixed(1) + " / 100";
-    els.robustness.textContent = Number(card.robustness_score).toFixed(1) + " / 100";
+    els.composite.textContent = view.composite;
+    els.gate.textContent = view.gate;
+    // The gate line is a terse visual label; the accessible name states the
+    // comparison in words, so "gate \u2265 85.00" is not the only way to read it.
+    els.gate.setAttribute("aria-label", view.gateSentence);
+    els.gate.title = view.gateSentence;
 
-    if (card.regression_delta === null || card.regression_delta === undefined) {
-      els.regression.textContent = "no baseline";
-      els.regression.className = "metric-value";
+    els.success.textContent = view.success;
+    els.safety.textContent = view.safety;
+    els.robustness.textContent = view.robustness;
+
+    els.regression.textContent = view.regression;
+    if (view.regressionHasBaseline) {
+      // Signed colour only where there is a signed delta to colour; the
+      // U+2212 MINUS SIGN prefix is what marks a fall.
+      els.regression.className = "metric-value " +
+        (view.regression.indexOf("\u2212") === 0 ? "negative" : "positive");
     } else {
-      const pp = Number(card.regression_delta) * 100;
-      els.regression.textContent = (pp >= 0 ? "+" : "\u2212") + Math.abs(pp).toFixed(1) + " pp";
-      els.regression.className = "metric-value " + (pp >= 0 ? "positive" : "negative");
+      els.regression.className = "metric-value";
     }
 
-    els.ci.textContent = Array.isArray(card.confidence_interval) && card.confidence_interval.length === 2
-      ? pct(card.confidence_interval[0]) + " \u2013 " + pct(card.confidence_interval[1])
-      : "\u2014";
-    els.episodes.textContent = String(card.episode_count);
-    els.duration.textContent = durationLabel || "\u2014";
-    els.runMeta.textContent =
-      card.run_id + " \u00b7 " + card.checkpoint_id + " \u00b7 " + card.task_id + " \u00b7 " + card.created_at;
+    els.ci.textContent = view.ci;
+    els.episodes.textContent = view.episodes;
+    els.duration.textContent = view.duration;
 
-    currentRunId = card.run_id;
-    renderTaxonomy(card.failure_taxonomy || {});
+    // Previously fetched by the API and silently discarded: the adversarial
+    // segment is the one part of the run the engine gates separately from the
+    // weighted composite, so its count and rate belong beside the verdict.
+    els.adversarialCount.textContent = view.adversarialCount;
+    els.adversarialRate.textContent = view.adversarialRate === null
+      ? (view.adversarialText === "none" ? "no segment" : V.UNKNOWN_TEXT)
+      : view.adversarialRate;
+    // An absent rate is stated in words rather than left blank, keeping it
+    // distinct from a segment that genuinely scored 0%.
+    els.adversarialRate.className = "metric-value" +
+      (view.adversarialRate === null ? " is-unmeasured" : "");
+
+    renderBlockReasons(view);
+    els.runMeta.textContent = view.meta;
+
+    currentRunId = V.text(card && card.run_id);
+    renderTaxonomy(view.taxonomyRows);
     highlightHistoryRow(currentRunId);
-    return decision;
+    return view;
   }
 
   /* ------------------------------------------------------------------ */
@@ -405,13 +589,14 @@
     }
   }
 
-  function renderTaxonomy(taxonomy) {
+  /* `entries` arrive already normalised by view-core's taxonomyEntries():
+   * every count is a finite positive number, the list is sorted descending, and
+   * a malformed payload yields []. That is why the chart and the table can never
+   * disagree, and why neither can receive a NaN bar. */
+  function renderTaxonomy(entries) {
     if (chart) { chart.destroy(); chart = null; }
     chartDrawn = false;
     els.taxonomyBody.textContent = "";
-    const entries = Object.entries(taxonomy)
-      .filter(([, n]) => Number(n) > 0)
-      .sort((a, b) => b[1] - a[1]);
 
     if (entries.length === 0) {
       els.taxonomyEmpty.hidden = false;
@@ -424,19 +609,19 @@
     }
 
     els.taxonomyEmpty.hidden = true;
-    const total = entries.reduce((sum, [, n]) => sum + n, 0);
+    const total = entries.reduce((sum, pair) => sum + pair[1], 0);
     els.taxonomyMeta.textContent = total + " failed episodes \u00b7 " + entries.length + " modes";
 
-    for (const [mode, count] of entries) {
+    for (const pair of entries) {
       const tr = document.createElement("tr");
       const name = document.createElement("td");
-      name.textContent = mode.replaceAll("_", " ");
+      name.textContent = pair[0].replaceAll("_", " ");
       const num = document.createElement("td");
       num.className = "num";
-      num.textContent = String(count);
+      num.textContent = String(pair[1]);
       const share = document.createElement("td");
       share.className = "num";
-      share.textContent = pct(count / total);
+      share.textContent = V.pct(pair[1] / total);
       tr.append(name, num, share);
       els.taxonomyBody.appendChild(tr);
     }
@@ -459,63 +644,12 @@
   /* ------------------------------------------------------------------ */
 
   function renderStats(summary) {
-    const avg = (summary.avg_composite === null || summary.avg_composite === undefined)
-      ? "\u2014"
-      : Number(summary.avg_composite).toFixed(2);
-    els.historyStats.textContent =
-      "Runs " + summary.total_runs +
-      " \u00b7 Approved " + summary.approvals +
-      " \u00b7 Blocked " + summary.blocks +
-      " \u00b7 Avg composite " + avg;
+    els.historyStats.textContent = V.summaryText(summary);
   }
 
   /* ------------------------------------------------------------------ */
-  /* Trends (computed client-side from /dashboard/history)               */
+  /* Trends (client-side, mirroring validsim/engine/trends.py)               */
   /* ------------------------------------------------------------------ */
-
-  function round4(x) {
-    return Math.round(x * 10000) / 10000;
-  }
-
-  function byCreatedAtAsc(a, b) {
-    const at = Date.parse(a.created_at);
-    const bt = Date.parse(b.created_at);
-    if (!Number.isNaN(at) && !Number.isNaN(bt)) return at - bt;
-    // Non-standard timestamps: fall back to lexicographic ISO ordering.
-    return String(a.created_at).localeCompare(String(b.created_at));
-  }
-
-  // Mirrors validsim/engine/trends.py. The endpoint returns newest-first, but
-  // trends.py expects oldest-first, so re-sort by created_at before applying
-  // the same math: latest composite, delta vs the previous run (0 for <2
-  // runs), a 3-run moving average, and the 10-run approval rate.
-  function computeTrends(rows) {
-    if (!rows.length) return null;
-    const sorted = [...rows].sort(byCreatedAtAsc);
-
-    const scores = sorted.map((r) => Number(r.composite_score));
-    const n = scores.length;
-    const latest = scores[n - 1];
-    const delta = n >= 2 ? latest - scores[n - 2] : 0.0;
-
-    const maWindow = scores.slice(Math.max(0, n - 3));
-    const ma3 = round4(maWindow.reduce((sum, s) => sum + s, 0) / maWindow.length);
-
-    const approvalWindow = sorted.slice(Math.max(0, n - 10));
-    const approvals = approvalWindow.filter((r) => r.deploy_decision === "APPROVE").length;
-    const approvalRate = round4(approvals / approvalWindow.length);
-
-    return {
-      latestScore: latest,
-      delta: round4(delta),
-      ma3: ma3,
-      approvalRate: approvalRate,
-      totalRuns: n,
-      window3Size: maWindow.length,
-      window10Size: approvalWindow.length,
-      newestCheckpoint: sorted[n - 1].checkpoint_id,
-    };
-  }
 
   function renderTrendsEmpty(meta) {
     els.trendsMeta.textContent = meta;
@@ -527,12 +661,14 @@
   }
 
   function renderTrends(rows) {
-    const t = computeTrends(rows);
+    // The math lives in view-core so it can be asserted against the engine's
+    // trends.py in a test rather than trusted by inspection.
+    const t = V.computeTrends(rows);
     if (!t) { renderTrendsEmpty("No runs yet"); return; }
 
     els.trendLatest.textContent = t.latestScore.toFixed(2);
     els.trendMa3.textContent = t.ma3.toFixed(2);
-    els.trendApproval.textContent = pct(t.approvalRate);
+    els.trendApproval.textContent = V.pct(t.approvalRate);
 
     const dir = t.delta > 0 ? "up" : t.delta < 0 ? "down" : "flat";
     const icon = dir === "up" ? ICONS.trendUp : dir === "down" ? ICONS.trendDown : ICONS.trendFlat;
@@ -556,11 +692,13 @@
   }
 
   function decisionBadge(decision) {
-    const safe = decision === "APPROVE" || decision === "BLOCK" ? decision : "PENDING";
+    const safe = V.safeDecision(decision);
     const span = document.createElement("span");
     span.className = "badge-sm badge-sm--" + safe.toLowerCase();
+    // Icon + literal word, so the badge never relies on hue alone (WCAG 1.4.1).
     span.innerHTML = (safe === "APPROVE" ? ICONS.approve : safe === "BLOCK" ? ICONS.block : ICONS.pending) +
       "<span>" + safe + "</span>";
+    span.setAttribute("aria-label", "Decision " + safe + ", " + V.decisionWord(decision) + ".");
     return span;
   }
 
@@ -574,6 +712,9 @@
   }
 
   function renderHistory(rows) {
+    // Malformed entries are dropped by view-core rather than throwing mid-render
+    // and leaving a half-built table.
+    rows = V.normaliseHistory(rows);
     els.historyBody.textContent = "";
     if (!rows.length) {
       const tr = document.createElement("tr");
@@ -599,8 +740,8 @@
         "Load scorecard for run " + row.run_id +
         ", checkpoint " + row.checkpoint_id +
         ", task " + row.task_id +
-        ", composite " + Number(row.composite_score).toFixed(2) +
-        ", decision " + (row.deploy_decision || "PENDING") + ".");
+        ", composite " + V.score2(row.composite_score) +
+        ", decision " + V.safeDecision(row.deploy_decision) + ".");
       activate.addEventListener("click", () => loadRun(row.run_id));
 
       const run = document.createElement("td");
@@ -616,7 +757,7 @@
 
       const comp = document.createElement("td");
       comp.className = "num";
-      comp.textContent = Number(row.composite_score).toFixed(2);
+      comp.textContent = V.score2(row.composite_score);
 
       const decision = document.createElement("td");
       decision.appendChild(decisionBadge(row.deploy_decision));
@@ -624,8 +765,8 @@
       const created = document.createElement("td");
       created.className = "cell-created";
       const stamp = document.createElement("time");
-      stamp.dateTime = String(row.created_at);
-      stamp.textContent = String(row.created_at).replace("T", " ").replace("+00:00", "");
+      stamp.dateTime = row.created_at;
+      stamp.textContent = row.created_at.replace("T", " ").replace("+00:00", "");
       created.appendChild(stamp);
 
       tr.append(run, ckpt, task, comp, decision, created);
@@ -650,6 +791,7 @@
       renderStats(summary);
       renderTrends(rows);
     } catch (err) {
+      if (err instanceof AuthRequired) { showAuthRequired(); return; }
       els.historyStats.textContent = "History unavailable: " + err.message;
       renderTrendsError(err.message);
     }
@@ -659,12 +801,13 @@
     try {
       setStatus("Loading scorecard for " + runId + " \u2026", "busy");
       const card = await fetchJSON("/api/v1/validations/" + encodeURIComponent(runId) + "/scorecard");
-      const decision = renderScorecard(card, null); // duration unknown from history
+      const view = renderScorecard(card, null); // duration unknown from history
       setStatus(
-        "Loaded " + runId + " \u2014 composite " + Number(card.composite_score).toFixed(2) +
-        ", decision " + decision + ".",
-        decision === "APPROVE" ? "ok" : "block");
+        "Loaded " + runId + " — composite " + view.composite +
+        ", decision " + view.decision + " (" + view.decisionWord + ").",
+        view.decision === "APPROVE" ? "ok" : "block");
     } catch (err) {
+      if (err instanceof AuthRequired) { showAuthRequired(); return; }
       setStatus("Failed to load run " + runId + ": " + err.message, "error");
     }
   }
@@ -673,21 +816,33 @@
   /* Run form                                                             */
   /* ------------------------------------------------------------------ */
 
-  let runFocusReturn = null;
+  /* APG loading-button pattern.
+   *
+   * The previous implementation set `button.disabled = true` and disabled the
+   * inputs while a run was in flight. That is the standard "prevent double
+   * submit" advice and it is wrong for accessibility: disabling the control
+   * that currently holds focus drops focus to <body>, so a keyboard user who
+   * activates Run has their focus thrown to the top of the page when the run
+   * finishes and they try to tab onward (WCAG 2.4.3 Focus Order), and the
+   * disabled state is announced but the reason is not.
+   *
+   * Instead: the button keeps focus and stays operable, carries
+   * aria-busy="true" for the duration, and a re-entrant submit is ignored by
+   * the `running` guard rather than by the browser. The inputs stay editable
+   * so the form is never locked out mid-run; their values are already captured
+   * in `body` before the request goes out. */
+  let runInFlight = false;
 
   function setRunning(isRunning) {
-    if (isRunning) runFocusReturn = rememberFocus(els.form) || els.runBtn;
-    els.runBtn.disabled = isRunning; // loading-buttons rule: disable while running
     els.runBtn.classList.toggle("is-loading", isRunning);
     els.runBtn.setAttribute("aria-busy", String(isRunning));
     els.runBtnLabel.textContent = isRunning ? "Running\u2026" : "Run Validation";
-    for (const input of els.form.querySelectorAll("input")) input.disabled = isRunning;
-    if (!isRunning) restoreFocus(runFocusReturn);
   }
 
   els.form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!els.form.reportValidity()) return; // native 100–5000 / required checks
+    if (runInFlight) return; // ignore a re-entrant activation, keep focus put
+    if (!els.form.reportValidity()) return; // native 100\u20135000 / required checks
 
     const checkpoint = els.form.elements.checkpoint_id.value.trim();
     const task = els.form.elements.task_id.value.trim();
@@ -696,7 +851,9 @@
 
     const body = {
       checkpoint_id: checkpoint,
-      // Forward-compatible gate knob; the v0 API ignores unknown fields.
+      // Gate knob. Honoured end-to-end: POST /api/v1/validations accepts a
+      // `threshold` and scores against it, so the verdict shown here reflects
+      // the value entered rather than a fixed 85.0.
       threshold,
       task: {
         task_id: task,
@@ -708,6 +865,7 @@
       },
     };
 
+    runInFlight = true;
     setRunning(true);
     setStatus("Running " + episodes + " episodes for " + checkpoint + " \u2026", "busy");
     const startedAt = performance.now();
@@ -718,15 +876,16 @@
         body: JSON.stringify(body),
       });
       const seconds = (performance.now() - startedAt) / 1000;
-      const decision = renderScorecard(card, seconds.toFixed(1) + " s");
-      setStatus(
-        "Run " + card.run_id + " complete \u2014 composite " + Number(card.composite_score).toFixed(2) +
-        ", decision " + decision + ".",
-        decision === "APPROVE" ? "ok" : "block");
+      const view = renderScorecard(card, seconds.toFixed(1) + " s");
+      // The live-region sentence names the block reasons, so the answer to "why
+      // was this blocked?" reaches a screen reader without hunting the panel.
+      setStatus(V.runSummarySentence(view), view.decision === "APPROVE" ? "ok" : "block");
       await refreshPanels();
     } catch (err) {
+      if (err instanceof AuthRequired) { showAuthRequired(); return; }
       setStatus("Validation failed: " + err.message, "error");
     } finally {
+      runInFlight = false;
       setRunning(false);
     }
   });
@@ -884,16 +1043,14 @@
     else startJobsPolling();
   });
 
-  let enqueueFocusReturn = null;
+  /* Same APG loading-button contract as the run form: never disabled, so focus
+   * is never dropped mid-flight; aria-busy carries the state. */
+  let enqueueInFlight = false;
 
   function setEnqueueBusy(isBusy) {
-    if (isBusy) enqueueFocusReturn = rememberFocus(els.enqueueForm) || els.enqueueBtn;
-    els.enqueueBtn.disabled = isBusy;
     els.enqueueBtn.classList.toggle("is-loading", isBusy);
     els.enqueueBtn.setAttribute("aria-busy", String(isBusy));
     els.enqueueBtnLabel.textContent = isBusy ? "Enqueuing\u2026" : "Enqueue Job";
-    for (const input of els.enqueueForm.querySelectorAll("input")) input.disabled = isBusy;
-    if (!isBusy) restoreFocus(enqueueFocusReturn);
   }
 
   function showEnqueueStatus(message, kind) {
@@ -904,6 +1061,7 @@
 
   els.enqueueForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (enqueueInFlight) return;
     if (!els.enqueueForm.reportValidity()) return; // native required / min / max checks
 
     const body = {
@@ -913,6 +1071,7 @@
       adversarial: Number(els.enqueueForm.elements.adversarial.value),
     };
 
+    enqueueInFlight = true;
     setEnqueueBusy(true);
     showEnqueueStatus("Enqueuing job for " + body.checkpoint_id + " \u2026", "busy");
     try {
@@ -922,15 +1081,79 @@
         body: JSON.stringify(body),
       });
       showEnqueueStatus(
-        "Enqueued " + (res.job_id || "job") + " \u2014 status " + (res.status || "queued") + ".",
+        "Enqueued " + (res && res.job_id ? res.job_id : "job") +
+        " — status " + (res && res.status ? res.status : "queued") + ".",
         "ok");
       await refreshJobs(); // reflect the new job without waiting for the next tick
     } catch (err) {
+      if (err instanceof AuthRequired) { showAuthRequired(); return; }
       showEnqueueStatus("Failed to enqueue: " + err.message, "error");
     } finally {
+      enqueueInFlight = false;
       setEnqueueBusy(false);
     }
   });
+
+  /* ------------------------------------------------------------------ */
+  /* API-key form                                                         */
+  /* ------------------------------------------------------------------ */
+
+  let authInFlight = false;
+
+  function setAuthBusy(isBusy) {
+    els.authBtn.classList.toggle("is-loading", isBusy);
+    els.authBtn.setAttribute("aria-busy", String(isBusy));
+    els.authBtnLabel.textContent = isBusy ? "Connecting\u2026" : "Connect";
+  }
+
+  if (els.authForm) {
+    els.authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (authInFlight) return;
+      if (!els.authForm.reportValidity()) return;
+      const key = els.apiKey.value.trim();
+      if (!key) {
+        showAuthStatus("Enter the deployment's API key to continue.", "error");
+        focusQuietly(els.apiKey);
+        return;
+      }
+      authInFlight = true;
+      setAuthBusy(true);
+      showAuthStatus("Checking the API key\u2026", "busy");
+      writeApiKey(key);
+      try {
+        // /api/v1/dashboard/summary is the cheapest authenticated endpoint, so
+        // it is used as the credential check: a 401 here still raises
+        // AuthRequired, which is exactly the "wrong key" signal we want.
+        const summary = await fetchJSON("/api/v1/dashboard/summary");
+        showDashboard();
+        showAuthStatus("Connected. API key accepted.", "ok");
+        renderStats(summary);
+        await refreshPanels();
+        startJobsPolling();
+        announce("API key accepted. Dashboard loaded.");
+        focusQuietly(els.runBtn);
+      } catch (err) {
+        if (err instanceof AuthRequired) {
+          // Wrong key. fetchJSON has already discarded the stored credential;
+          // clear the visible field too, so a rejected secret is not left on
+          // screen or one Enter-press away from being re-submitted. (Without
+          // this the field kept the bad value while the comment claimed
+          // otherwise -- caught by
+          // tests/test_web_browser_agent.py::test_wrong_key_is_rejected_
+          // without_leaving_a_stale_credential.)
+          if (els.apiKey) els.apiKey.value = "";
+          showAuthStatus("That API key was rejected. Check the deployment's key and try again.", "error");
+          focusQuietly(els.apiKey);
+        } else {
+          showAuthStatus("Could not reach the API: " + err.message, "error");
+        }
+      } finally {
+        authInFlight = false;
+        setAuthBusy(false);
+      }
+    });
+  }
 
   /* ------------------------------------------------------------------ */
   /* Skip link: make sure focus actually lands on <main>                 */
@@ -945,7 +1168,46 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Bootstrap                                                            */
+  /* ------------------------------------------------------------------ */
 
-  refreshPanels();
-  startJobsPolling();
+  /* The dashboard body starts hidden so a protected deployment never flashes a
+   * half-populated panel before the first 401. /api/v1/health is public and
+   * reports `auth_enabled`, so the very first thing the page does is ask the
+   * server whether a key is expected:
+   *   - auth_enabled === true and no key is stored -> straight to the auth
+   *     panel, before any /api/v1 request is attempted;
+   *   - otherwise -> reveal the dashboard and load its panels;
+   *   - health unreachable or unparseable -> reveal the dashboard anyway and let
+   *     the normal error paths report the failure, rather than stranding the
+   *     user behind a gate screen that may not be needed. */
+  (async function boot() {
+    const storedKey = readApiKey();
+    let policy = null;
+    try {
+      policy = await probeAuthPolicy();
+    } catch (err) {
+      policy = null; // probeAuthPolicy already swallows; belt and braces
+    }
+
+    const serverWantsKey = policy !== null && policy.auth_enabled === true;
+    if (serverWantsKey && !storedKey) {
+      showAuthRequired(
+        "This ValidSim instance requires an X-API-Key header on every /api/v1 route, so the " +
+        "dashboard could not load its data. Paste the deployment's API key to continue."
+      );
+      announce("This ValidSim deployment requires an API key.");
+      return;
+    }
+
+    showDashboard();
+    await refreshPanels();
+    startJobsPolling();
+
+    if (serverWantsKey && storedKey) {
+      // A stored key on a key-protected deployment: the panels above either
+      // rendered (good) or already swapped us to the auth panel via 401.
+      showAuthStatus("Connected with the stored API key.", "ok");
+    }
+  })();
 })();

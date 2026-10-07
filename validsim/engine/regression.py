@@ -25,6 +25,12 @@ _WARNING_DROP = 0.02
 #: Relative duration increases that trigger each severity band.
 _DURATION_WARNING = 0.20
 _DURATION_CRITICAL = 0.50
+#: Absolute mean-duration increase (seconds) that escalates a slowdown measured
+#: from a baseline with no usable positive duration. A modest rise over a
+#: duration-less baseline is legitimate (a ``0.0`` baseline is also the
+#: ``EvaluationResult`` default, so a 0 -> few-seconds transition is ordinary
+#: for a newly populated baseline); an unbounded rise is a hang or a pathology.
+_DURATION_ZERO_TOLERANCE = 60.0
 
 
 @dataclass(frozen=True)
@@ -117,15 +123,43 @@ def _success_item(
 
 
 def _duration_item(current: EvaluationResult, baseline: EvaluationResult) -> RegressionItem:
-    """Compare mean durations descriptively (relative-change thresholds)."""
+    """Compare mean durations descriptively (relative-change thresholds).
+
+    A ``before`` of exactly ``0.0`` is a real shape -- a truncated, synthetic or
+    uninitialised baseline records no duration at all -- and it is also the
+    ``EvaluationResult`` default, so it is what a half-populated baseline looks
+    like in practice. Two facts follow, and they pull in opposite directions:
+
+    1. The relative change is *undefined* there (``delta / 0``), so it cannot
+       scale the comparison. Collapsing it to ``0.0`` is what made an unbounded
+       slowdown report as ``"info"``, i.e. the one comparison guaranteed to be
+       wrong reported clean. This path therefore uses an **absolute** threshold
+       instead of a relative one, so it is not merely a rescaled relative test.
+    2. A *small* positive delta is a legitimate, benign transition. A policy
+       that previously recorded no measurable time and now takes a few
+       milliseconds or seconds is behaving normally, not regressing; only a
+       lack of baseline should suppress the signal, never manufacture it. An
+       unbounded slowdown is still caught: the sibling suite in
+       ``tests/test_regression.py`` pins ``0.0 -> 100.0`` and above to
+       ``"critical"`` while holding ``0.0 -> 60.0`` at ``"info"``.
+
+    A negative delta is always an improvement, so it is never escalated.
+    """
     before, after = baseline.mean_duration_s, current.mean_duration_s
     delta = after - before
-    relative = delta / before if before > 0 else 0.0
-    severity: Severity = "info"
-    if relative > _DURATION_CRITICAL:
+    if before > 0:
+        relative = delta / before
+        severity: Severity = "info"
+        if relative > _DURATION_CRITICAL:
+            severity = "critical"
+        elif relative > _DURATION_WARNING:
+            severity = "warning"
+    elif delta > _DURATION_ZERO_TOLERANCE:
+        # Absolute-threshold rule: the positive-baseline bands are meaningless
+        # without a denominator, so a material absolute rise escalates instead.
         severity = "critical"
-    elif relative > _DURATION_WARNING:
-        severity = "warning"
+    else:
+        severity = "info"
     return RegressionItem(
         metric="mean_duration_s",
         before=before,

@@ -1,5 +1,28 @@
-"""Optional config-file override loader for ValidSim.
+"""Optional config-file override loader for ValidSim — **NOT WIRED**.
 
+.. warning::
+   **Status: no production caller.** Nothing in the shipped execution path
+   (CLI, API, job worker) imports this module. Its only importer is
+   ``tests/test_config_loader.py``. It is retained as tested groundwork, and
+   ``tests/test_wiring_reachability_agent.py`` tracks it on its
+   ``DEAD_BUT_ALLOWED`` list, which fails if it is ever wired without the
+   documentation being corrected.
+
+   ``VALIDSIM_CONFIG`` is therefore **not** advertised in ``.env.example``,
+   even though :data:`CONFIG_ENV` and :func:`discover_config_file` read it. An
+   operator who set that variable against the previous documentation would get
+   silently inert behaviour — the most expensive form of dead code, because it
+   looks like a working feature. ``tests/test_delivery_pipeline.py`` now asserts
+   that ``.env.example`` advertises no variable without a reader.
+
+   When a consumer does land, the merge policy is not a detail this module can
+   decide: it must be applied by the consumer (see
+   :mod:`validsim.project_config` for the policy/infra precedence table), and
+   :func:`load_config_file` must keep returning *overrides* rather than
+   mutating ``os.environ``.
+
+Purpose
+-------
 This module bridges ValidSim's flat, typed configuration surface with an
 optional on-disk override file so operators can tune a deployment (episode
 counts, thresholds, backend endpoints, ...) without editing code.
@@ -18,6 +41,10 @@ flat scalar entries (``str``/``int``/``float``/``bool``) and raises a clear
 error on nested maps/sequences, keeping the public :func:`load_config_file`
 contract stable so a fuller parser (PyYAML or ruamel) can be dropped in
 behind it without changing callers.
+
+Scope note: :mod:`validsim.project_config` is the newer, TOML-only reader and
+is the one to prefer for a future consumer — it supports nested tables and
+``[[tasks]]``, which the flat-YAML reader here structurally cannot.
 """
 
 from __future__ import annotations
@@ -41,6 +68,10 @@ DEFAULT_CONFIG_NAMES: tuple[str, ...] = (
 
 #: Environment variable carrying an explicit config path (CLI ``--config``
 #: equivalent). Checked before the default names above.
+#:
+#: .. warning:: Read only by :func:`discover_config_file`, which itself has no
+#:    production caller. This module is **not wired** — see the module
+#:    docstring — so the variable is intentionally absent from ``.env.example``.
 CONFIG_ENV = "VALIDSIM_CONFIG"
 
 _BOOL_TRUE = frozenset({"true", "yes", "on"})

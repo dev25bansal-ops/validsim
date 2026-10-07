@@ -9,6 +9,9 @@ area: "01 - Strategy"
 
 # 🪪 Company Identity
 
+> [!warning] Verify before external use — 2026-09-21
+> Founder identities, Delaware incorporation, domains, accelerator status and public product/action names are not established by this repository. Confirm each before using this page externally.
+
 ## Core facts
 
 | Field | Detail |
@@ -16,9 +19,9 @@ area: "01 - Strategy"
 | **Working name** | ValidSim *(alternatives: RoboCI, PolicyGate, CheckpointAI)* |
 | **One-liner** | "GitHub Actions for robots — continuous validation, regression testing, and safety scoring for robot foundation models before they touch the real world." |
 | **Category** | Developer Tools / Physical AI Infrastructure / DevOps for Robotics |
-| **Stage** | Pre-seed / idea stage |
-| **Team** | 2 founders (AI/ML) — see [[Founding Team]] |
-| **Incorporation** | Delaware C-Corp — see [[Corporate Structure]] |
+| **Stage** | Pre-seed / idea stage; an engineering prototype exists, so this is not a product-stage assertion |
+| **Team** | 2 founders (AI/ML) — roles require verification; see [[Founding Team]] |
+| **Incorporation** | Delaware C-Corp target — verify filing; see [[Corporate Structure]] |
 | **Geography** | US/Global from day one |
 | **Target accelerators** | Y Combinator W27 (deadline Nov 2, 2026) + NVIDIA Inception — see [[YC Countdown]] |
 
@@ -39,7 +42,7 @@ The CI/CD market for software was **$0 in 2010** and is now a **$10B+** category
 
 ## Name notes
 
-- **ValidSim** — used in all product surfaces: CLI (`validsim run`), GitHub Actions (`validsim/validate-action@v1`), domain `validsim.com`, docs `docs.validsim.com`.
+- **ValidSim** — used by the shipped CLI (`validsim run`) and local composite Actions (`actions/validate`, `actions/scorecard`). `validsim/validate-action@v1`, `validsim.com`, and `docs.validsim.com` are target/publication names, not verified live surfaces.
 - Alternatives kept alive until incorporation: RoboCI, PolicyGate, CheckpointAI.
 - Legal entity name TBD at Delaware filing ([[Corporate Structure]]).
 

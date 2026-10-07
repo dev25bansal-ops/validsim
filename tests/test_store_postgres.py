@@ -11,6 +11,7 @@ only when ``VALIDSIM_PG_URL`` points at a reachable PostgreSQL instance.
 from __future__ import annotations
 
 import builtins
+import inspect
 import json
 import os
 import subprocess
@@ -30,8 +31,14 @@ from validsim.sim.runner import EpisodeResult
 from validsim.store import ValidationStore, create_store
 from validsim.store.memory import StoredRun
 from validsim.store.postgres import PostgresValidationStore
+from validsim.store.sqlite import SqliteValidationStore
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PARITY_TABLE = "validations"
+_PARITY_CHECKPOINT = "ckpt-parity"
+_PARITY_START = "2026-01-01T00:00:00+00:00"
+_PARITY_MIDDLE = "2026-01-02T00:00:00+00:00"
+_PARITY_END = "2026-01-03T00:00:00+00:00"
 
 
 def _scorecard(run_id: str = "vrun-cafe1234", **overrides: object) -> Scorecard:
@@ -342,6 +349,19 @@ class TestSqlConstruction:
         assert params[3] == sc.composite_score
         assert json.loads(params[6])["run_id"] == sc.run_id  # scorecard JSONB blob
 
+    def test_save_does_not_use_a_last_write_wins_clause(self) -> None:
+        """Append-only is a shared contract, not a Postgres-only accident.
+
+        The divergence this pins (``DO NOTHING`` here vs ``INSERT OR REPLACE``
+        in SQLite) shipped for a long time unnoticed because each backend's
+        tests only asserted their own behaviour. ``DO UPDATE`` is the clause
+        that would reintroduce the bug, so it is rejected explicitly.
+        """
+        source = inspect.getsource(PostgresValidationStore.save)
+        assert "ON CONFLICT (run_id) DO NOTHING" in source
+        assert "DO UPDATE" not in source
+        assert "OR REPLACE" not in source
+
     def test_get_reconstructs_scorecard_from_decoded_jsonb(self) -> None:
         sc = _scorecard()
         store, conn = self._store(select_rows=[(sc.to_dict(),)])  # psycopg decodes JSONB to dict
@@ -402,6 +422,56 @@ class TestFullDetailRoundTrip:
         assert json.loads(params[9]) == run.safety.to_dict()
         assert json.loads(params[10]) == [asdict(e) for e in run.episodes]
         assert json.loads(params[11]) == [asdict(i) for i in run.regression.items]  # type: ignore[union-attr]
+
+    def test_save_binds_user_values_and_preserves_first_write_clause(self) -> None:
+        """Save keeps run fields out of SQL and pins the append-only contract."""
+        store, conn = self._store()
+        run = _full_run(_scorecard())
+        store.save(run)
+        sql, params = conn.find("INSERT")
+
+        assert "ON CONFLICT (run_id) DO NOTHING" in sql
+        assert params[0] == run.run_id
+        assert params[1] == run.checkpoint_id
+        assert params[2] == run.task_id
+        assert params[4] == run.scorecard.deploy_decision
+        assert params[5] == run.created_at
+        assert params[6] == run.scorecard.to_json()
+        for value in (
+            run.run_id,
+            run.checkpoint_id,
+            run.task_id,
+            run.scorecard.deploy_decision,
+            run.created_at,
+            run.baseline_run_id,
+        ):
+            if value is not None:
+                assert value not in sql
+
+    def test_close_releases_connection_and_reopens_on_next_query(self) -> None:
+        """Closing releases the connection; a later query gets a fresh one."""
+        connections = [
+            _FakeConnection(select_rows=[(1,)]),
+            _FakeConnection(select_rows=[(2,)]),
+        ]
+        opened: list[_FakeConnection] = []
+
+        def factory() -> _FakeConnection:
+            conn = connections.pop(0)
+            opened.append(conn)
+            return conn
+
+        store = PostgresValidationStore(_conn_factory=factory)
+        assert store.count() == 1
+        first = opened[0]
+        store.close()
+
+        assert first.closed
+        assert store._conn is None
+        assert store.count() == 2
+        assert len(opened) == 2
+        assert opened[1] is not first
+        store.close()
 
     def test_round_trip_preserves_entire_run(self) -> None:
         store, conn = self._store()
@@ -512,8 +582,91 @@ def _cleanup(store: PostgresValidationStore, run_id: str) -> None:
         )
 
 
-@pytest.mark.skipif(not os.environ.get("VALIDSIM_PG_URL"), reason="no postgres")
+def _postgres_is_configured() -> bool:
+    """Return whether this environment explicitly supplied a PostgreSQL DSN."""
+    return bool((os.environ.get("VALIDSIM_PG_URL") or "").strip())
+
+
+def _parity_run(run_id: str, checkpoint_id: str, created_at: str) -> StoredRun:
+    """Create one deliberately unsorted run for store parity checks."""
+    card = _scorecard(
+        run_id,
+        checkpoint_id=checkpoint_id,
+        composite_score=91.25,
+        deploy_decision="APPROVE",
+        created_at=created_at,
+    )
+    run = _full_run(card)
+    return StoredRun(
+        run_id=run.run_id,
+        checkpoint_id=run.checkpoint_id,
+        task_id=run.task_id,
+        created_at=run.created_at,
+        scorecard=run.scorecard,
+        evaluation=run.evaluation,
+        safety=run.safety,
+        episodes=run.episodes,
+        baseline_run_id=run.baseline_run_id,
+        regression=run.regression,
+    )
+
+
+class TestSqliteParityOracle:
+    """Verify the always-available oracle used by the live parity test."""
+
+    def test_sqlite_sequence_supports_live_comparison(self) -> None:
+        sqlite_store = SqliteValidationStore(":memory:")
+        run_id = "vrun-a0000001"
+        middle = _parity_run(run_id, _PARITY_CHECKPOINT, _PARITY_MIDDLE)
+        end = _parity_run("vrun-a0000002", _PARITY_CHECKPOINT, _PARITY_END)
+        start = _parity_run("vrun-b0000001", "ckpt-other", _PARITY_START)
+        try:
+            assert sqlite_store.get(run_id) is None
+            assert sqlite_store.delete(run_id) is False
+            for run in (middle, end, start):
+                sqlite_store.save(run)
+
+            expected = sqlite_store.get(run_id)
+            assert expected == middle
+            assert expected is not None
+            assert expected.run_id == middle.run_id
+            assert expected.checkpoint_id == middle.checkpoint_id
+            assert expected.scorecard.composite_score == middle.scorecard.composite_score
+            assert expected.scorecard.deploy_decision == middle.scorecard.deploy_decision
+            assert expected.created_at == middle.created_at
+            assert sqlite_store.count() == 3
+            assert len(sqlite_store) == 3
+            assert [run.run_id for run in sqlite_store.list_for_checkpoint(_PARITY_CHECKPOINT)] == [
+                run_id,
+                end.run_id,
+            ]
+            assert [run.run_id for run in sqlite_store.history()] == [
+                start.run_id,
+                run_id,
+                end.run_id,
+            ]
+            assert [run.run_id for run in sqlite_store.history(since=_PARITY_MIDDLE)] == [
+                run_id,
+                end.run_id,
+            ]
+            assert sqlite_store.delete(run_id) is True
+            assert sqlite_store.get(run_id) is None
+            assert sqlite_store.count() == 2
+            assert len(sqlite_store) == 2
+            assert sqlite_store.delete(run_id) is False
+        finally:
+            sqlite_store.close()
+
+
+@pytest.mark.skipif(not _postgres_is_configured(), reason="VALIDSIM_PG_URL is not set")
 class TestPostgresIntegration:
+    def test_configured_postgres_is_reachable(self) -> None:
+        store = PostgresValidationStore(table="validations")
+        try:
+            assert isinstance(store.history(), list)
+        finally:
+            store.close()
+
     def test_save_get_round_trip(self) -> None:
         store = PostgresValidationStore(table="validations")
         run_id = f"vrun-{uuid.uuid4().hex[:8]}"
@@ -541,3 +694,77 @@ class TestPostgresIntegration:
         finally:
             _cleanup(store, run_id)
             store.close()
+
+
+@pytest.mark.skipif(not _postgres_is_configured(), reason="VALIDSIM_PG_URL is not set")
+class TestSqlitePostgresParity:
+    """Use SQLite's returned records as the behavioral oracle for PostgreSQL."""
+
+    def test_postgres_routes_and_delete_match_sqlite(self) -> None:
+        sqlite_store = SqliteValidationStore(":memory:")
+        postgres_store = PostgresValidationStore(table=_PARITY_TABLE)
+        run_id = f"vrun-{uuid.uuid4().hex[:8]}"
+        middle = _parity_run(run_id, _PARITY_CHECKPOINT, _PARITY_MIDDLE)
+        end = _parity_run(f"vrun-{uuid.uuid4().hex[:8]}", _PARITY_CHECKPOINT, _PARITY_END)
+        start = _parity_run(f"vrun-{uuid.uuid4().hex[:8]}", "ckpt-other", _PARITY_START)
+        postgres_ready = False
+        try:
+            for store in (sqlite_store, postgres_store):
+                assert store.get(run_id) is None
+                assert store.delete(run_id) is False
+            postgres_ready = True
+            sqlite_store.save(middle)
+            postgres_store.save(middle)
+
+            assert postgres_store.get(run_id) == sqlite_store.get(run_id)
+            assert postgres_store.count() == sqlite_store.count() == 1
+            assert len(postgres_store) == len(sqlite_store)
+
+            for store in (sqlite_store, postgres_store):
+                store.save(end)
+                store.save(start)
+
+            expected = sqlite_store.get(run_id)
+            assert expected is not None
+            actual = postgres_store.get(run_id)
+            assert actual is not None
+            assert actual.run_id == expected.run_id
+            assert actual.checkpoint_id == expected.checkpoint_id
+            assert actual.scorecard.composite_score == expected.scorecard.composite_score
+            assert actual.scorecard.deploy_decision == expected.scorecard.deploy_decision
+            assert actual.created_at == expected.created_at
+            assert postgres_store.count() == sqlite_store.count() == 3
+            assert len(postgres_store) == len(sqlite_store)
+
+            expected_checkpoint = sqlite_store.list_for_checkpoint(_PARITY_CHECKPOINT)
+            assert postgres_store.list_for_checkpoint(_PARITY_CHECKPOINT) == expected_checkpoint
+            assert [run.run_id for run in expected_checkpoint] == [run_id, end.run_id]
+            assert postgres_store.list_for_checkpoint("ckpt-missing") == (
+                sqlite_store.list_for_checkpoint("ckpt-missing")
+            )
+
+            expected_history = sqlite_store.history()
+            assert postgres_store.history() == expected_history
+            assert [run.run_id for run in expected_history] == [start.run_id, run_id, end.run_id]
+            assert postgres_store.history(
+                since=_PARITY_MIDDLE, until=_PARITY_END
+            ) == sqlite_store.history(since=_PARITY_MIDDLE, until=_PARITY_END)
+
+            assert postgres_store.delete(run_id) == sqlite_store.delete(run_id) is True
+            assert postgres_store.get(run_id) == sqlite_store.get(run_id) is None
+            assert postgres_store.count() == sqlite_store.count() == 2
+            assert len(postgres_store) == len(sqlite_store)
+            assert postgres_store.list_for_checkpoint(_PARITY_CHECKPOINT) == (
+                sqlite_store.list_for_checkpoint(_PARITY_CHECKPOINT)
+            )
+            assert postgres_store.history() == sqlite_store.history()
+            assert postgres_store.delete(run_id) == sqlite_store.delete(run_id) is False
+        finally:
+            if postgres_ready:
+                try:
+                    for run in (start, middle, end):
+                        if postgres_store.get(run.run_id) is not None:
+                            _cleanup(postgres_store, run.run_id)
+                finally:
+                    postgres_store.close()
+            sqlite_store.close()

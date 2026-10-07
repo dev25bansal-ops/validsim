@@ -17,13 +17,19 @@ an ``event: timeout`` terminator instead.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from validsim.jobs import JobQueue, JobRecord, JobSpec, JobStatus, router
-from validsim.jobs.router import _DEFAULT_STREAM_TIMEOUT, _event_stream, _validate_job_id
+from validsim.jobs.router import (
+    _DEFAULT_STREAM_TIMEOUT,
+    EnqueueJobRequest,
+    _event_stream,
+    _validate_job_id,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -220,3 +226,136 @@ def test_events_route_times_out_for_never_finishing_job() -> None:
 def test_events_route_default_deadline_is_bounded() -> None:
     """The production default is a finite bound (never an infinite stream)."""
     assert _DEFAULT_STREAM_TIMEOUT > 0
+
+
+# ---------------------------------------------------------------------------
+# Terminal-state completeness: a dead job must terminate the SSE stream too
+# ---------------------------------------------------------------------------
+
+
+def test_event_stream_ends_cleanly_on_a_dead_job() -> None:
+    """``dead`` is terminal, so a client must not be left polling forever.
+
+    The stream only checked ``done``/``failed``. A job that exhausted its retry
+    budget would therefore stream until the request deadline and then report
+    ``timeout`` — indistinguishable, to a client, from a job that was merely
+    slow, which is precisely the signal an operator needs.
+    """
+    queue = JobQueue()
+    jid = queue.enqueue(_queued_record().spec).job_id
+    queue.update_status(jid, JobStatus.DEAD, error="retry budget exhausted")
+
+    frames = list(_event_stream(queue, jid, poll_interval=0.0, deadline=5.0))
+
+    assert frames[-1] == "event: end\n\n"
+    assert not any(frame.startswith("event: timeout") for frame in frames)
+    assert '"status": "dead"' in frames[0]
+
+
+def test_dead_job_status_endpoint_reports_the_terminal_state() -> None:
+    app = FastAPI()
+    app.state.job_queue = JobQueue()
+    app.include_router(router)
+    client = TestClient(app)
+    jid = client.post(
+        "/jobs", json={"checkpoint_id": "ckpt-a", "task_id": "pick", "episodes": 5}
+    ).json()["job_id"]
+    queue: JobQueue = client.app.state.job_queue  # type: ignore[assignment]
+    queue.update_status(jid, JobStatus.DEAD, error="retry budget exhausted")
+
+    body = client.get(f"/jobs/{jid}/status").json()
+
+    assert body["status"] == "dead"
+    assert body["updated_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# The async path must carry the same gate as the synchronous one
+# ---------------------------------------------------------------------------
+#
+# ``EnqueueJobRequest`` had no threshold field, so ``POST /jobs`` could not carry
+# one and every async run was gated at the worker's default 85. A checkpoint the
+# sync path blocks at 70 was approved on the async path — different verdicts for
+# the same checkpoint. Notification severity is derived from the scorecard's own
+# ``threshold``/``deploy_decision`` pair, so the wrong hooks fired as well. The
+# body now accepts the same knobs the sync endpoint does.
+
+
+class TestAsyncGateParity:
+    @pytest.fixture()
+    def client(self) -> TestClient:
+        app = FastAPI()
+        app.state.job_queue = JobQueue()
+        app.include_router(router)
+        return TestClient(app)
+
+    def _spec_of(self, client: TestClient, job_id: str) -> dict:
+        return client.get(f"/jobs/{job_id}").json()["spec"]
+
+    def test_threshold_is_accepted_and_persisted(self, client: TestClient) -> None:
+        response = client.post(
+            "/jobs",
+            json={
+                "checkpoint_id": "ckpt-a",
+                "task_id": "pick",
+                "episodes": 5,
+                "threshold": 70.5,
+            },
+        )
+        assert response.status_code == 202
+        spec = self._spec_of(client, response.json()["job_id"])
+        assert spec["threshold"] == pytest.approx(70.5)
+
+    def test_threshold_omitted_falls_back_to_the_engine_default(
+        self, client: TestClient
+    ) -> None:
+        """``None`` means "use the default", exactly as the sync path treats it.
+
+        Storing a concrete 85.0 instead would be indistinguishable from a caller
+        that explicitly asked for 85.0, and would drift the moment the engine
+        default changed.
+        """
+        response = client.post(
+            "/jobs", json={"checkpoint_id": "ckpt-a", "task_id": "pick", "episodes": 5}
+        )
+        spec = self._spec_of(client, response.json()["job_id"])
+        assert spec["threshold"] is None
+        assert spec["baseline_run_id"] is None
+
+    @pytest.mark.parametrize("bad", [-0.1, 100.1, "ninety"])
+    def test_out_of_range_threshold_rejected(self, client: TestClient, bad: Any) -> None:
+        response = client.post(
+            "/jobs",
+            json={"checkpoint_id": "ckpt-a", "task_id": "pick", "threshold": bad},
+        )
+        assert response.status_code == 422
+
+    def test_baseline_run_id_is_accepted_and_persisted(self, client: TestClient) -> None:
+        response = client.post(
+            "/jobs",
+            json={
+                "checkpoint_id": "ckpt-a",
+                "task_id": "pick",
+                "episodes": 5,
+                "baseline_run_id": "vrun-base0001",
+            },
+        )
+        assert response.status_code == 202
+        spec = self._spec_of(client, response.json()["job_id"])
+        assert spec["baseline_run_id"] == "vrun-base0001"
+
+    def test_empty_baseline_run_id_rejected(self, client: TestClient) -> None:
+        response = client.post(
+            "/jobs",
+            json={"checkpoint_id": "ckpt-a", "task_id": "pick", "baseline_run_id": ""},
+        )
+        assert response.status_code == 422
+
+    def test_sync_and_async_bodies_accept_the_same_gate_fields(self) -> None:
+        """The two paths must expose the same knobs, or verdicts drift again."""
+        from validsim.config import ValidationRequest
+
+        sync_fields = set(ValidationRequest.model_fields)
+        job_fields = set(EnqueueJobRequest.model_fields)
+        assert {"threshold", "baseline_run_id"} <= sync_fields
+        assert {"threshold", "baseline_run_id"} <= job_fields

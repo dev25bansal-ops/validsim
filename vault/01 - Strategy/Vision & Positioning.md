@@ -9,6 +9,9 @@ area: "01 - Strategy"
 
 # 🔭 Vision & Positioning
 
+> [!warning] Evidence boundary — 2026-09-21
+> Market-category statements and competitor gaps below are strategy hypotheses, not repo-verified facts. Validate them with current customer discovery and sourced market research before external use; this vault does not establish that no productized layer exists.
+
 ## Vision
 
 > [!quote]

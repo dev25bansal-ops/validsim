@@ -11,12 +11,15 @@ area: "08 - Team & Legal"
 
 §11.1. Two founders, AI/ML, pre-seed. The division of labor mirrors the product architecture — every sprint week has exactly one owner per workstream ([[8-Week Sprint Plan]]).
 
+> [!important] Blueprint status — 2026-09-21
+> These are planned roles and skill targets, not verified founder biographies or evidence of shipped Kubernetes/Next.js/billing experience. The current engineering prototype uses FastAPI/Typer, static HTML/JS, Docker Compose, Redis/PostgreSQL, and local Actions ([[Tech Stack]]).
+
 ## Roles
 
 | Role | Focus | Skills Required |
 |---|---|---|
 | **Founder 1 — ML/Robotics Lead** | Simulation engine, evaluation pipeline, model integration, adversarial scenarios | PyTorch, Isaac Sim/Lab, RL/IL, VLA models, domain randomization |
-| **Founder 2 — Platform/Infra Lead** | API, orchestration, dashboard, CI/CD integration, DevOps, billing | Kubernetes, FastAPI, Next.js, GitHub Actions, PostgreSQL, cloud infra |
+| **Founder 2 — Platform/Infra Lead** | API, queue/orchestration, dashboard, CI/CD integration, DevOps, future billing | FastAPI/Typer, static HTML/JS, GitHub Actions, PostgreSQL, Docker Compose; Kubernetes/Next.js/cloud-billing are target skills |
 
 ## Ownership map (from the sprint plan)
 
@@ -53,7 +56,7 @@ area: "08 - Team & Legal"
 
 | Gap | Bridge | When |
 |---|---|---|
-| No dedicated frontend/UX | Founder 2 ships dashboard (Next.js scaffold, W7) | Hire #2, month 5–7 |
+| No dedicated frontend/UX | Founder 2 ships the current static dashboard; a Next.js scaffold remains a W7 target | Hire #2, month 5–7 |
 | No enterprise sales experience | Developer-led motion first ([[Go-to-Market]]) | Hire #5, month 9–12 |
 | No formal robotics academic credibility | Advisory board: CMU/MIT/Stanford professor | Post-funding ([[Hiring Plan]]) |
 

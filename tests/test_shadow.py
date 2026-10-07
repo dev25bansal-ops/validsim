@@ -32,6 +32,9 @@ from validsim.sim.shadow import (
     contract_violations_for,
     reference_contract_cases,
 )
+# Private, but it is the exact function that turns a wire request into the
+# TaskConfig a backend receives -- the seam this test needs to assert on.
+from validsim.sim.shadow import _task_from_request  # noqa: E402
 
 BASE_URL = "http://worker.test:8090"
 SEED = 42
@@ -349,11 +352,45 @@ class TestReferenceContractCases:
             assert isinstance(case, ContractCase)
             assert case.name
             assert set(case.request) == {
-                "task_id", "robot", "environment", "seed",
+                "task_id", "robot", "environment", "checkpoint_id", "seed",
                 "episodes", "randomization_level", "scenarios",
             }
             # Replaying a canned pair through the real parser yields no violations.
             assert contract_violations_for(case) == []
+
+    def test_fixtures_carry_a_checkpoint(self) -> None:
+        """Every fixture must identify the policy under test.
+
+        A fixture set with no ``checkpoint_id`` would pass against a contract
+        incapable of expressing the product's core input: a worker could be
+        fully conformant, clear the promotion gate, and still be structurally
+        unable to validate a checkpoint. Conformance would certify the defect.
+        """
+        for case in reference_contract_cases():
+            assert case.request.get("checkpoint_id"), (
+                f"fixture {case.name!r} carries no checkpoint_id"
+            )
+
+    def test_checkpoint_survives_into_the_reconstructed_task(self) -> None:
+        """The request field must reach the TaskConfig a backend receives."""
+        for case in reference_contract_cases():
+            task = _task_from_request(case.request)
+            assert task.checkpoint_id == case.request["checkpoint_id"]
+
+    def test_null_checkpoint_is_accepted(self) -> None:
+        """``null`` means "no checkpoint supplied" and must stay valid.
+
+        The client sends ``None`` when the caller did not identify a checkpoint,
+        so rejecting it would break the CLI's default path.
+        """
+        case = reference_contract_cases()[0]
+        nulled = ContractCase(
+            name=case.name,
+            request={**case.request, "checkpoint_id": None},
+            response=case.response,
+        )
+        assert contract_violations_for(nulled) == []
+        assert _task_from_request(nulled.request).checkpoint_id is None
 
     def test_detects_unknown_field(self) -> None:
         case = reference_contract_cases()[0]

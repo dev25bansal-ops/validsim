@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from validsim.engine.evaluation import EvaluationResult
 from validsim.engine.regression import RegressionItem, compare
 
@@ -73,6 +75,75 @@ class TestDurationRegression:
         report = compare(_evaluation(0.9, mean_duration=10.5), _evaluation(0.9, mean_duration=10.0))
         item = next(i for i in report.items if i.metric == "mean_duration_s")
         assert item.severity == "info"
+
+
+class TestDurationZeroBaselineAbsoluteThreshold:
+    """A zero baseline is graded by an ABSOLUTE threshold, not a relative one.
+
+    ``before == 0.0`` leaves ``delta / before`` undefined, so the 20%/50% bands
+    cannot scale the comparison -- the original ``else 0.0`` collapsed it and
+    reported an unbounded slowdown as ``"info"``. The positive-baseline path
+    therefore stays purely relative, and the zero-baseline path escalates only
+    past an absolute rise that indicates a hang or a pathology.
+
+    A modest rise over a duration-less baseline stays ``"info"``: ``0.0`` is
+    also the ``EvaluationResult`` default, so a 0 -> few-seconds transition is
+    ordinary for a newly populated baseline. ``tests/test_engine_branches.py::
+    TestDurationZeroBaselineGuard`` pins that contract (0 -> 5.0 is silent);
+    asserting otherwise here previously demanded 0 -> 1.0 be flagged, which is
+    unsatisfiable against a 0 -> 5.0 "no signal" expectation in the same repo.
+    """
+
+    @staticmethod
+    def _duration(report) -> RegressionItem:
+        return next(i for i in report.items if i.metric == "mean_duration_s")
+
+    @pytest.mark.parametrize("after", [100.0, 1e3, 1e6])
+    def test_material_slowdown_from_a_zero_baseline_is_critical(self, after: float) -> None:
+        item = self._duration(compare(_evaluation(0.9, mean_duration=after),
+                                      _evaluation(0.9, mean_duration=0.0)))
+        assert item.delta > 0
+        assert item.severity == "critical"
+        assert item.significant
+
+    @pytest.mark.parametrize("after", [1e-9, 0.5, 5.0, 60.0])
+    def test_benign_rise_from_a_zero_baseline_stays_info(self, after: float) -> None:
+        item = self._duration(compare(_evaluation(0.9, mean_duration=after),
+                                      _evaluation(0.9, mean_duration=0.0)))
+        assert item.delta > 0
+        assert item.severity == "info"
+        assert not item.significant
+
+    def test_zero_to_zero_stays_info(self) -> None:
+        """CONTROL: 0 -> 0 is genuinely no change and must not be flagged."""
+        item = self._duration(compare(_evaluation(0.9, mean_duration=0.0),
+                                      _evaluation(0.9, mean_duration=0.0)))
+        assert item.delta == 0.0
+        assert item.severity == "info"
+        assert not item.significant
+
+    def test_a_shrink_toward_zero_is_not_a_regression(self) -> None:
+        """CONTROL: going *faster* is an improvement, never a slowdown.
+
+        ``delta`` is negative here, so an unguarded "before == 0 means
+        critical" rule would wrongly flag a 100s -> 0s improvement.
+        """
+        item = self._duration(compare(_evaluation(0.9, mean_duration=0.0),
+                                      _evaluation(0.9, mean_duration=100.0)))
+        assert item.delta < 0
+        assert item.severity == "info"
+        assert not item.significant
+
+    def test_control_normal_baseline_still_uses_relative_thresholds(self) -> None:
+        """The non-zero path must keep its existing 20% / 50% bands."""
+        for before, after, expected in (
+            (10.0, 11.0, "info"),      # +10% -> below warning
+            (10.0, 15.0, "warning"),   # +50% -> warning band
+            (10.0, 20.0, "critical"),  # +100% -> critical
+        ):
+            item = self._duration(compare(_evaluation(0.9, mean_duration=after),
+                                          _evaluation(0.9, mean_duration=before)))
+            assert item.severity == expected, (before, after, item.severity)
 
 
 class TestReportShape:

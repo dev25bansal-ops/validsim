@@ -11,7 +11,6 @@ PostgreSQL backend is exercised through the injected ``_conn_factory`` fake
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable
 
@@ -96,7 +95,7 @@ class TestMemoryDelete:
         store.save(b)
         assert store.delete(a.run_id) is True
         assert store.get(a.run_id) is None
-        assert store.get(b.run_id) is b
+        assert store.get(b.run_id) == b  # equal, and detached from the caller
         assert len(store) == 1
 
 
@@ -104,20 +103,6 @@ class TestMemoryDelete:
 # SQLite backend
 # ---------------------------------------------------------------------------
 
-
-@pytest.fixture()
-def make_store(tmp_path: Path) -> Iterator[Callable[[str], SqliteValidationStore]]:
-    """Factory opening named SQLite stores under ``tmp_path``; closes on exit."""
-    created: list[SqliteValidationStore] = []
-
-    def _make(name: str = "delete.db") -> SqliteValidationStore:
-        store = SqliteValidationStore(tmp_path / name)
-        created.append(store)
-        return store
-
-    yield _make
-    for store in created:
-        store.close()
 
 
 class TestSqliteDelete:

@@ -59,9 +59,9 @@ Auth is **env-gated and read once at `create_app()` time**:
 * `VALIDSIM_API_KEY` **unset** (default) → authentication is **disabled**.
   Every route is open — this keeps local development and the test suite free
   of credentials.
-* `VALIDSIM_API_KEY` **set** → every `/api/v1` route requires the
+* `VALIDSIM_API_KEY` **set** → every protected `/api/v1` route requires the
   `X-API-Key` request header to match the configured value exactly, or it
-  returns `401`.
+  returns `401`. The deliberately public routes are listed below.
 
 Key properties:
 
@@ -83,15 +83,26 @@ curl -H "X-API-Key: $VALIDSIM_API_KEY" http://127.0.0.1:8000/api/v1/validations
 { "detail": "Missing or invalid API key" }
 ```
 
-> [!warning] Health probe is also gated
-> The auth dependency is applied to **all** `/api/v1` routes — including
-> `GET /api/v1/health`. A Docker/compose healthcheck that hits `/api/v1/health`
-> without the header will go unhealthy the moment `VALIDSIM_API_KEY` is set
-> (fix: send the header or exempt the route). See
-> [`docs/runbook.md`](runbook.md) §4.1.
+> [!note] Deliberately public operational routes
+> These routes remain reachable without `X-API-Key`, even when
+> `VALIDSIM_API_KEY` is configured:
 >
-> Not protected (they are mounted before the dependency is installed):
-> `/docs`, `/redoc`, `/openapi.json`, and the `/static` asset mount.
+> | Method | Path | Exposure |
+> |---|---|---|
+> | GET | `/api/v1/health` | Liveness/readiness configuration probe; safe for a container healthcheck that cannot present a credential. |
+> | GET | `/metrics` | Deliberately unauthenticated Prometheus scrape endpoint. It exposes run volumes, approval/block counts, the latest composite score, build information, and in-process HTTP request counts by status class, so operators can derive error/failure rates. |
+> | GET | `/` | The dashboard's static HTML shell only — no run data. This is the one public surface that can explain *why* a key is required: the SPA boots, reads `401` from its first `/api/v1` call, and renders the key prompt. Gating it would return bare `401` JSON with no page to host that prompt, leaving an operator no way to authenticate. Every `/api/v1` route, including `/api/v1/dashboard/summary` and run history, remains gated. |
+>
+> `GET /api/v1/metrics` is the auth-gated alternative and returns the same
+> metrics body; when a key is configured, a missing or wrong key returns `401`.
+> `/docs`, `/redoc`, `/openapi.json` and `/docs/oauth2-redirect` are gated too —
+> `_DocsAuthMiddleware` covers every path FastAPI registers for the schema
+> surface, so a configured key returns `401` for those as well. `/static/*` is
+> the remaining ungated non-`/api/v1` route.
+>
+> Never bind this service to a public interface expecting the key to be the
+> only perimeter — see the operational note on `/metrics` above, which applies
+> equally to `/`.
 
 > [!warning] Destructive routes carry their own gate
 > `DELETE /api/v1/validations/{run_id}` additionally depends on
@@ -130,13 +141,19 @@ export VALIDSIM_CORS_ORIGINS='https://gates.example.com,https://staging.example.
 
 ## 4. Endpoints by resource
 
-"Auth" = requires `X-API-Key` only when `VALIDSIM_API_KEY` is set.
+"Auth" = requires `X-API-Key` only when `VALIDSIM_API_KEY` is set; `—` means
+the route is deliberately public. `/api/v1/health` and `/api/v1/metrics` are
+documented in [§2 Authentication](#2-authentication). `/metrics` is the
+auth-stripped Prometheus mount and is not part of the `/api/v1` resource
+listings.
 "Rate limit" = per-route throttling. `*` marks the three **write** routes
-covered by the opt-in IP-keyed sliding-window limiter — `POST /validations`,
+covered by the IP-keyed sliding-window limiter — `POST /validations`,
 `POST /validations/{run_id}/compare`, and `POST /jobs` (see
-[§4.7 Rate limiting](#47-rate-limiting)). It is **disabled by default**
-(`VALIDSIM_RATE_LIMIT=0`), so those entries behave like `None` until you turn it
-on. Every read route is unlimited.
+[§4.7 Rate limiting](#47-rate-limiting)). Protection is **on by default**
+(`60` requests per `60`s); an absent, unparsable, or negative
+`VALIDSIM_RATE_LIMIT` falls back to `60` rather than to disabled, so a config
+typo cannot silently remove the guard. Only an explicit `0` disables the
+limiter. Every read route is unlimited.
 
 ### 4.1 Validations
 
@@ -181,7 +198,26 @@ Field rules (Pydantic v2, strict — invalid input fails with `422`):
 | Field | Required | Constraints |
 |---|---|---|
 | `checkpoint_id` | yes | non-empty string |
-| `checkpoint_sha256` | no | exactly 64 chars (hex digest) |
+| `checkpoint_sha256` | no | exactly 64 characters — **length only; the characters are not checked to be hex.** See the warning below. |
+> [!warning] `checkpoint_sha256` is accepted, then discarded
+> This field is **accepted but unused**. It is validated for *length only*
+> (`min_length=64`, `max_length=64` in `validsim/config.py`) — there is no hex
+> pattern, so 64 `z` characters pass. Nothing reads the value, and nothing
+> persists it: `Scorecard` has no such field, `run_and_score` has no such
+> parameter, and neither the memory, SQLite nor PostgreSQL store writes it. The
+> stored run therefore carries **no** digest, and there is no binding between the
+> request envelope and the verdict it produced.
+>
+> Practical consequences: (a) a digest in this request is **not** evidence of
+> which artifact was validated — verify the digest in the owning model registry;
+> (b) do not rely on it as a chain-of-custody record; (c) supplying a wrong or
+> fabricated digest fails no validation and blocks nothing.
+>
+> It should be treated as reserved-but-unwired, and either implemented (hash the
+> artifact, persist the digest, expose it on the scorecard) or removed. Until
+> then this documentation deliberately does not describe it as a validated
+> digest.
+
 | `task` | yes | `TaskConfig` (below) |
 | `task.task_id` | yes | non-empty string |
 | `task.robot` | yes | `RobotSpec` |
@@ -203,25 +239,51 @@ Field rules (Pydantic v2, strict — invalid input fails with `422`):
   "run_id": "vrun-1a2b3c4d",
   "checkpoint_id": "checkpoint-abc123",
   "task_id": "pick-and-place",
-  "composite_score": 87.5,
+  "composite_score": 95.3,
   "success_rate": 0.92,
   "safety_score": 95.0,
   "robustness_score": 100.0,
+  "robustness_measured": false,
+  "randomization_group_count": 1,
+  "regression_baseline_available": false,
   "regression_delta": null,
   "confidence_interval": [0.9021, 0.9379],
   "deploy_decision": "APPROVE",
   "threshold": 85.0,
   "created_at": "2026-03-20T12:00:00+00:00",
   "episode_count": 1000,
+  "adversarial_episode_count": 0,
+  "adversarial_success_rate": null,
+  "block_reasons": [],
   "failure_taxonomy": { "grasp_failure": 12, "timeout": 8 }
 }
 ```
 
+* `composite_score` is `0.4 * (success_rate * 100) + 0.3 * safety_score +
+  0.2 * robustness_score + 0.1 * regression_component`. With no baseline, the
+  regression component is `100`, so the example computes to `95.3`. With a
+  baseline it is `100 - 25 * significant_regressions`, floored at `0`.
+* **`robustness_score: 100.0` with `robustness_measured: false` means the number
+  is a constant, not a result.** Robustness is the dispersion of success rate
+  across randomization groups; a run applies one `task.randomization` level to
+  every episode, so `randomization_group_count` is `1` and there is no
+  cross-condition variance to measure. `robustness_measured` is `true` only at
+  `>= 2` groups. **Never read `robustness_score` without it.**
+* `regression_baseline_available: false` means the regression component scored
+  `100.0` because *nothing was compared*, not because a comparison was clean.
+* `adversarial_episode_count` / `adversarial_success_rate` report the
+  adversarial segment separately, because the composite pools nominal and
+  adversarial episodes into one success rate and so cannot see which segment
+  failed. A segment of `>= 30` episodes that fails a one-sided binomial test
+  against a 60% floor adds a `block_reasons` entry and forces `BLOCK`; below 30
+  episodes the rate is reported but not gated.
 * `confidence_interval` is a **list** (tuple coerced) `[low, high]`, or `null`
   when there are no episodes.
 * `regression_delta` is `null` unless a baseline was supplied.
-* `deploy_decision` is `"APPROVE"` when `composite_score >= threshold`,
-  otherwise `"BLOCK"`.
+* `deploy_decision` is `"APPROVE"` only when `task.episodes > 0`,
+  `episode_count >= task.episodes`, and `composite_score >= threshold`;
+  otherwise it is `"BLOCK"`. A composite score alone is not sufficient evidence
+  to approve.
 
 #### `GET /api/v1/validations`
 
@@ -241,7 +303,7 @@ Paginated summaries, newest first (see [§5 Pagination](#5-pagination)).
       "task_id": "pick-and-place",
       "created_at": "2026-03-20T12:00:00+00:00",
       "baseline_run_id": null,
-      "composite_score": 87.5,
+      "composite_score": 95.3,
       "deploy_decision": "APPROVE",
       "episode_count": 1000
     }
@@ -262,7 +324,7 @@ Single run summary — same shape as one `items[]` entry above.
   "task_id": "pick-and-place",
   "created_at": "2026-03-20T12:00:00+00:00",
   "baseline_run_id": null,
-  "composite_score": 87.5,
+  "composite_score": 95.3,
   "deploy_decision": "APPROVE",
   "episode_count": 1000
 }
@@ -600,7 +662,7 @@ dependency is installed, so they inherit the same `X-API-Key` gate.
 | Method | Path | Auth | Rate limit | Description |
 |---|---|---|---|---|
 | POST | `/api/v1/jobs` | ✓ | `*` | Enqueue a validation job; returns id + initial status (`202`). |
-| GET | `/api/v1/jobs` | ✓ | None | All jobs in insertion (FIFO) order. |
+| GET | `/api/v1/jobs` | ✓ | None | All jobs in FIFO order; `limit` and/or `offset` activates a newest-first pagination envelope. |
 | GET | `/api/v1/jobs/{job_id}` | ✓ | None | Full status record for one job. |
 | GET | `/api/v1/jobs/{job_id}/status` | ✓ | None | Compact lifecycle snapshot (`{job_id, status, updated_at}`). |
 | GET | `/api/v1/jobs/{job_id}/events` | ✓ | None | Server-Sent-Events stream of status until terminal. |
@@ -647,27 +709,39 @@ than growing without bound.
 
 #### `GET /api/v1/jobs`
 
-A **bare array** of full job records in FIFO insertion order (not paginated).
+With no `limit` or `offset`, the response is the backwards-compatible **bare
+array** of full job records in FIFO insertion order. Supplying either parameter
+switches the response to a `{total, limit, offset, items}` envelope. Its `items`
+are full job records in **newest-first** order. `limit` is 1–500 (default `100`
+when only `offset` is supplied); `offset` is ≥0 (default `0` when only `limit`
+is supplied). `total` counts all queued jobs independently of the page. Values
+outside these ranges return `422`; an offset beyond the total is valid and
+returns an empty `items` list.
 
 ```json
-[
-  {
-    "job_id": "vrun-1a2b3c4d",
-    "status": "queued",
-    "spec": {
-      "run_id": "vrun-1a2b3c4d",
-      "checkpoint_id": "checkpoint-abc123",
-      "task_id": "pick-and-place",
-      "episodes": 1000,
-      "adversarial": 0
-    },
-    "created_at": "2026-03-20T12:00:00+00:00",
-    "started_at": null,
-    "finished_at": null,
-    "error": null,
-    "result": null
-  }
-]
+{
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "items": [
+    {
+      "job_id": "vrun-1a2b3c4d",
+      "status": "queued",
+      "spec": {
+        "run_id": "vrun-1a2b3c4d",
+        "checkpoint_id": "checkpoint-abc123",
+        "task_id": "pick-and-place",
+        "episodes": 1000,
+        "adversarial": 0
+      },
+      "created_at": "2026-03-20T12:00:00+00:00",
+      "started_at": null,
+      "finished_at": null,
+      "error": null,
+      "result": null
+    }
+  ]
+}
 ```
 
 #### `GET /api/v1/jobs/{job_id}`
@@ -729,13 +803,22 @@ curl -N -H "X-API-Key: $VALIDSIM_API_KEY" \
 
 ### 4.7 Rate limiting
 
-Opt-in, process-local, sliding-window throttling of the three **write** routes
-(`POST /api/v1/validations`, `POST /api/v1/validations/{run_id}/compare`,
+On-by-default, process-local, sliding-window throttling of the three **write**
+routes (`POST /api/v1/validations`, `POST /api/v1/validations/{run_id}/compare`,
 `POST /api/v1/jobs`). Read routes are never limited.
+
+> [!warning] Per-process, not global
+> The limiter is **process-local** (it blunts abuse against a single uvicorn
+> worker; it is not a distributed limit) and it is keyed on the client IP **as
+> uvicorn sees it**. Behind a reverse proxy or ingress that means N replicas
+> each enforce the full budget, so a horizontally-scaled deployment is
+> **N× more permissive** than a single-process reading suggests. Run uvicorn
+> with `--proxy-headers` / `--forwarded-allow-ips` so the real client IP is
+> visible, and size the limit with the replica count in mind.
 
 | Variable | Default | Behaviour |
 |---|---|---|
-| `VALIDSIM_RATE_LIMIT` | `0` | Requests allowed per window; `0` disables the limiter entirely (the default, preserving unlimited behaviour). |
+| `VALIDSIM_RATE_LIMIT` | `60` | Requests allowed per window. Protection is on by default; an absent, unparsable, or negative value falls back to `60`. Set `0` explicitly to disable the limiter entirely. |
 | `VALIDSIM_RATE_WINDOW_SECONDS` | `60` | Sliding-window length in seconds. |
 
 Key properties:
@@ -753,17 +836,64 @@ Key properties:
   a distributed/global limit.
 
 ```bash
-# 30 write requests per 60s, per client IP
-export VALIDSIM_RATE_LIMIT=30
+# 60 write requests per 60s, per client IP (the shipped default).
+# Lower it to tighten; only an explicit 0 disables the limiter.
+export VALIDSIM_RATE_LIMIT=60
 export VALIDSIM_RATE_WINDOW_SECONDS=60
 ```
 
 ---
 
+### 4.8 Pipeline admission control
+
+`POST /api/v1/validations` is the only route that runs the CPU-bound pipeline, and
+it is guarded by a **bounded admission gate**: at most `pipeline_concurrency`
+pipelines execute at once (default `40`). A request refused by the gate gets an
+immediate **`503`** rather than being queued invisibly behind other pipelines.
+
+The gate is checked **before** a worker thread is claimed, so a refusal costs
+nothing. The gate is checked *only* on this route — `POST /api/v1/jobs` is not
+gated this way (it has its own `max_depth` back-pressure, §4.6), and no read route
+is affected.
+
+| Variable | Default | Behaviour |
+|---|---|---|
+| `VALIDSIM_PIPELINE_CONCURRENCY` | `40` | Concurrent validation pipelines allowed at once. An absent, unparsable, zero or negative value falls back to `40`, so a config typo cannot silently remove the gate. A **negative** value is coerced to the `40` default by `_parse_positive_int`, so the gate is always at least `1` — the "unbounded" escape hatch at `_sync_routes_are_admitted` (`limit < 1`) is only reachable by injecting a non-positive budget directly onto `app.state`, not through the environment. |
+| `VALIDSIM_THREAD_LIMITER_TOKENS` | `48` | Floor for the worker-thread pool that serves every sync route. Read once at `create_app()` time; floored at `max(48, pipeline_concurrency + 8)` so cheap routes — above all `/api/v1/health` — stay answerable at full saturation. An absent, unparsable, zero or negative value falls back to `max(48, <concurrency> + 8)`. |
+
+**Response `503` — capacity exhausted**
+
+```json
+{ "detail": "validation capacity exhausted; retry shortly", "error": "overloaded" }
+```
+
+plus a `Retry-After: 5` header. Deliberately **not** an `HTTPException`: raising
+one from inside the pipeline closure would have to travel out of a worker thread,
+and `HTTPException` is only converted to a response by FastAPI's exception
+handler on the event loop. Returning a ready-made response keeps the refusal
+identical to every other response and lets the observability middleware count it
+normally.
+
+* The budget is read at `create_app()` time and published on
+  `app.state.pipeline_concurrency`, and the route passes it per request as
+  `try_acquire(limit)`. The gate itself is a process-wide `_AdmissionGate`
+  counting semaphore, but the per-request `limit` **overrides** the gate's own
+  budget for that call only — so the holder of `app.state` is authoritative
+  rather than silently governed by whatever value the process-wide default was
+  last resized to.
+* Resizing the budget never cancels work already admitted, and a release can
+  never drive `in_flight` below zero.
+* A non-positive `limit` means "unbounded" and runs the work directly, so a
+  misconfigured budget can never turn into a route that refuses everything.
+
+---
+
 ## 5. Pagination
 
-Pagination applies to exactly two list endpoints: `GET /api/v1/validations`
-and `GET /api/v1/models`.
+Pagination applies to `GET /api/v1/validations`, `GET /api/v1/models`, and
+`GET /api/v1/jobs`. The jobs endpoint activates its envelope only when
+`limit` and/or `offset` is supplied; without either, it preserves the bare
+FIFO array response.
 
 | Parameter | Type | Default | Constraints | Description |
 |---|---|---|---|---|
@@ -780,9 +910,12 @@ curl "http://127.0.0.1:8000/api/v1/models?limit=50&offset=0"
   `since`/`until` ISO-8601 bounds on `created_at` (a malformed value yields
   `422`); `total` counts the runs matching those filters.
 * `/models` returns a **bare array** slice (no `total`).
-* `/regressions`, `/dashboard/history`, `/dashboard/summary`,
-  `/models/{checkpoint_id}/history`, and `/jobs` are **not** paginated — they
-  return the full result (`/jobs` is a bare array in FIFO order).
+* `/regressions`, `/dashboard/history`, `/dashboard/summary`, and
+  `/models/{checkpoint_id}/history` are **not** paginated — they return the full
+  result.
+* `/jobs` returns a bare FIFO array when neither pagination parameter is
+  supplied. Supplying `limit` and/or `offset` returns the newest-first envelope
+  described in [§4.6 Jobs](#46-jobs).
 
 ---
 
@@ -793,10 +926,10 @@ curl "http://127.0.0.1:8000/api/v1/models?limit=50&offset=0"
 | `400` | Bad Request | Malformed `{job_id}` path parameter on any `/api/v1/jobs/{job_id}*` route — the id must match `vrun-` + 8 lowercase hex. Rejected before it reaches the queue (a well-formed-but-unknown id falls through to `404`). |
 | `401` | Unauthorized | `VALIDSIM_API_KEY` set and `X-API-Key` missing, empty, or wrong. Uniform `{"detail": "Missing or invalid API key"}` + `WWW-Authenticate: ApiKey`. Applies to all `/api/v1` routes and, separately, to `DELETE` via the destructive gate. |
 | `404` | Not Found | Unknown `run_id` (get / delete / scorecard / failures / compare / pdf / md / html); unknown `baseline_run_id` (create & compare); unknown `checkpoint_id` in model history; unknown (well-formed) `job_id`. |
-| `422` | Validation Error | Pydantic v2 rejects the `ValidationRequest`/`CompareRequest`/`EnqueueJobRequest` body, `limit`/`offset` params, or a malformed `since`/`until` filter (e.g. 64-char `checkpoint_sha256` violated, `episodes` out of 1–100000, missing required fields). |
-| `429` | Too Many Requests | Opt-in rate limiter over budget on a write route (`POST /validations`, `POST /validations/{run_id}/compare`, `POST /jobs`). Body `{"detail": "rate limit exceeded"}` + `Retry-After` header. Only when `VALIDSIM_RATE_LIMIT > 0` (see [§4.7 Rate limiting](#47-rate-limiting)). |
+| `422` | Validation Error | Pydantic v2 rejects the `ValidationRequest`/`CompareRequest`/`EnqueueJobRequest` body, `limit`/`offset` params, or a malformed `since`/`until` filter (e.g. a `checkpoint_sha256` whose **length** is not 64, `episodes` out of 1–100000, missing required fields). Note the digest's *contents* are never validated. |
+| `429` | Too Many Requests | Rate limiter over budget on a write route (`POST /validations`, `POST /validations/{run_id}/compare`, `POST /jobs`). Protection is **on by default** (`60`/`60`s); only an explicit `VALIDSIM_RATE_LIMIT=0` disables it. Body `{"detail": "rate limit exceeded"}` + `Retry-After` header (see [§4.7 Rate limiting](#47-rate-limiting)). |
 | `501` | Not Implemented | PDF export when the optional `reportlab` dependency is absent (`{"detail": "pip install reportlab"}`). The `.md`/`.html` renderers need no optional dependency. |
-| `503` | Service Unavailable | `POST /api/v1/jobs` when the queue is at `max_depth` (`{"error": "queue_full", "max_depth": <n>}` + `Retry-After: 5`). |
+| `503` | Service Unavailable | Two distinct causes, both returning `503` + `Retry-After: 5`. **(a)** `POST /api/v1/jobs` when the queue is at `max_depth` (`{"error": "queue_full", "max_depth": <n>}`). **(b)** `POST /api/v1/validations` when the bounded admission gate is saturated (`{"detail": "validation capacity exhausted; retry shortly", "error": "overloaded"}`). See [§4.8 Pipeline admission control](#48-pipeline-admission-control). |
 
 Error bodies for the hand-raised `HTTPException`s are `{"detail": "<message>"}`.
 FastAPI validation (`422`) uses the standard envelope:

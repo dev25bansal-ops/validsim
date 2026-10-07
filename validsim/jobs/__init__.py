@@ -7,12 +7,13 @@ Wire the queue into ``app.state.job_queue`` and include
 
 from __future__ import annotations
 
-from validsim.jobs.models import JobRecord, JobSpec, JobStatus
+from validsim.jobs.models import TERMINAL_STATUSES, JobRecord, JobSpec, JobStatus
 from validsim.jobs.queue import JobQueue, RedisJobQueue, create_job_queue
 from validsim.jobs.router import EnqueueJobRequest, get_queue, router
 from validsim.jobs.worker import JobWorker
 
 __all__ = [
+    "TERMINAL_STATUSES",
     "EnqueueJobRequest",
     "JobQueue",
     "JobRecord",

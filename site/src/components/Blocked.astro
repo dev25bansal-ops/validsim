@@ -1,0 +1,189 @@
+---
+/**
+ * Why the hero figure is a BLOCK — the argument the page is built around.
+ *
+ * Most validation marketing shows the run that passed. This section is the
+ * reason that is a mistake for a reader evaluating a gate: a tool that has
+ * never blocked anything has not been tested, and you cannot tell the
+ * difference between "nothing to report" and "nothing was wrong" by looking at
+ * a dashboard that is always green.
+ *
+ * The copy here is assembled from strings already in content.ts rather than
+ * written fresh, so a claim on this page cannot drift from the run it describes.
+ */
+import { readout, transcript } from '../data/content';
+
+const adversarialRow = readout.rows.find((r) => r.label.startsWith('Adversarial'));
+const successRow = readout.rows.find((r) => r.label === 'Success rate');
+
+/* Pulled from the transcript rather than restated, so the reasoning quoted on
+   the page is the reasoning the tool printed.
+
+   The block is taken whole and only then folded: each reason occupies two
+   transcript lines -- the sentence and its indented continuation -- so
+   filtering to the `- ` lines first would silently drop the second half of
+   every reason that wrapped. The fold stops at the first line that neither
+   starts a reason nor continues one, so the summary printed after them
+   ("Top failures: ...") stays out of the list of reasons. */
+const reasons = transcript
+  .slice(
+    transcript.findIndex((line) => line.text.trimStart().startsWith('- ')),
+  )
+  .reduce<string[]>((acc, line) => {
+    const text = line.text.trim();
+    if (acc.length === 0) {
+      if (text.startsWith('- ')) acc.push(text.slice(2));
+      return acc;
+    }
+    if (text.startsWith('- ')) {
+      acc.push(text.slice(2));
+    } else if (/^[a-z]/.test(text)) {
+      // A continuation is the tail of a sentence, so it never starts a new
+      // capitalised word; anything else is the transcript moving on.
+      acc[acc.length - 1] += ` ${text}`;
+    }
+    return acc;
+  }, []);
+---
+
+<section class="band" id="blocked">
+  <div class="wrap">
+    <div class="blocked">
+      <div class="blocked-head reveal">
+        <p class="fig-label">Fig 0.1 — why this is on the front page</p>
+        <h2>The run we are showing you failed</h2>
+        <p>
+          A validation gate earns its keep the day it says no. A tool that has only ever returned a
+          passing score has not been tested — and a dashboard that is always green cannot tell you
+          whether nothing went wrong or nothing was checked.
+        </p>
+      </div>
+
+      <div class="blocked-grid">
+        <ul class="reasons reveal">
+          {
+            reasons.map((reason) => (
+              <li>
+                <span class="reason-mark" aria-hidden="true" />
+                <span>{reason}</span>
+              </li>
+            ))
+          }
+        </ul>
+
+        <aside class="aside reveal">
+          <h3>What that run actually contained</h3>
+          <dl>
+            <div>
+              <dt>Nominal success</dt>
+              <dd class="v-block">{successRow?.value}</dd>
+            </div>
+            <div>
+              <dt>Adversarial success</dt>
+              <dd class="v-block">{adversarialRow?.value}</dd>
+            </div>
+            <div>
+              <dt>Robustness</dt>
+              <dd class="v-unmeasured">not measured</dd>
+            </div>
+            <div>
+              <dt>Verdict</dt>
+              <dd class="v-block">{readout.verdict}</dd>
+            </div>
+          </dl>
+          <p>
+            The first two failed their floors. The third could not be measured at all — one
+            randomization group is not enough, and an unmeasured component abstains from the score
+            rather than being handed the points it would otherwise have collected.
+          </p>
+        </aside>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .blocked-head {
+    max-width: var(--measure);
+    margin-block-end: clamp(2.5rem, 5vw, 3.5rem);
+  }
+  .blocked-head p {
+    margin-block-start: 1rem;
+    color: var(--ink-mid);
+    font-size: var(--t-lg);
+    max-width: 58ch;
+  }
+
+  .blocked-grid {
+    display: grid;
+    gap: clamp(2rem, 5vw, 3rem);
+    align-items: start;
+  }
+  @media (width > 52rem) {
+    .blocked-grid {
+      grid-template-columns: 1.25fr 1fr;
+    }
+  }
+
+  /* Reasons are ruled rows, not bullets: each one is a line the tool printed,
+     and a row per line is what makes that provenance legible. */
+  .reasons {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border-block-start: 1px solid var(--rule);
+  }
+  .reasons li {
+    display: flex;
+    gap: 1rem;
+    padding-block: 1.25rem;
+    border-block-end: 1px solid var(--rule);
+    color: var(--ink-mid);
+    font-size: var(--t-base);
+  }
+  /* A drawn marker rather than a bullet glyph, matching the page's "instrument"
+     register: a small filled square on the rule, like a printed ledger mark. */
+  .reason-mark {
+    flex: none;
+    inline-size: 0.4rem;
+    block-size: 0.4rem;
+    margin-block-start: 0.65rem;
+    background: var(--block);
+  }
+
+  .aside {
+    border-inline-start: 2px solid var(--block);
+    padding-inline-start: 1.5rem;
+  }
+  .aside h3 {
+    font-size: var(--t-sm);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    margin-block-end: 1.25rem;
+  }
+  .aside dl {
+    display: grid;
+    gap: 0.5rem;
+    font-size: var(--t-sm);
+  }
+  .aside dl > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-block-end: 1px dotted var(--rule);
+    padding-block-end: 0.5rem;
+  }
+  .aside dt {
+    color: var(--ink-dim);
+  }
+  .aside dd {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .aside p {
+    margin-block-start: 1.25rem;
+    font-size: var(--t-sm);
+    color: var(--ink-dim);
+    max-width: 48ch;
+  }
+</style>

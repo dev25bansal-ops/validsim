@@ -248,8 +248,9 @@ class _FakeSMTP:
     def __exit__(self, *exc: object) -> bool:
         return False
 
-    def starttls(self) -> None:
+    def starttls(self, context: object = None) -> None:
         self.starttls_calls += 1
+        self.tls_context = context
 
     def login(self, user: str, password: str) -> None:
         self.login_calls.append((user, password))

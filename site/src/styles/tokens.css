@@ -1,0 +1,67 @@
+/* ==========================================================================
+   ValidSim — design tokens
+   --------------------------------------------------------------------------
+   Single source of truth for the palette, type scale and rhythm. Every
+   component reads these; none of them hard-code a colour or a size.
+
+   Aesthetic: precision instrument / spec sheet. Warm near-black chassis lit
+   only by its own readout, engineering-drawing grid for texture, and a
+   palette that IS the product's verdict semantics (green APPROVE, red BLOCK,
+   amber unmeasured). No ambient glow, no glassmorphism, no neon.
+   ========================================================================== */
+
+@layer reset, tokens, base, layout, components, utilities;
+
+@layer tokens {
+  :root {
+    /* Warm near-black, not blue-black. A blue-black chassis is the default
+       "dark mode" look; a slightly warm one reads as equipment. */
+    --chassis:    oklch(0.12 0.008 90);
+    --panel:      oklch(0.16 0.010 90);
+    --raised:     oklch(0.20 0.012 90);
+    --rule:       oklch(0.27 0.012 90);
+    --rule-faint: oklch(0.30 0.012 90 / 0.28);
+
+    --ink:        oklch(0.93 0.012 90);
+    --ink-mid:    oklch(0.73 0.014 90);
+    --ink-dim:    oklch(0.57 0.016 90);
+
+    /* Verdict colours, lifted from validsim/engine. These are the product's
+       own semantics, not a decorative palette — which is why amber carries the
+       accent: it is the colour of an instrument warning lamp. */
+    --approve:    oklch(0.78 0.150 160);
+    --block:      oklch(0.66 0.190 27);
+    --unmeasured: oklch(0.80 0.160 75);
+    --link:       oklch(0.72 0.120 240);
+
+    --font: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Modular scale. The jump from --t-base to --t-readout is deliberate and
+       large: one dramatic focal point, everything else quiet. */
+    --t-xs:      0.75rem;
+    --t-sm:      0.875rem;
+    --t-base:    1.0625rem;
+    --t-lg:      clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+    --t-xl:      clamp(1.5rem, 1.15rem + 1.7vw, 2.375rem);
+    --t-hero:    clamp(2.25rem, 1.2rem + 4.6vw, 4.25rem);
+    --t-readout: clamp(4.5rem, 16vw, 12rem);
+
+    --shell:   78rem;
+    --gutter:  clamp(1.25rem, 4vw, 2.75rem);
+    --measure: 62ch;
+
+    /* Layout switches. These live here because every multi-column arrangement
+       on the page switches at the same widths; a component that invents its own
+       breakpoint drifts from the others within a release. */
+    --split-narrow: 44rem;
+    --split-wide:   52rem;
+    --split-hero:   56rem;
+
+    /* The gate axis. A scorecard is a measurement against a threshold, so the
+       page draws that relationship rather than printing two numbers side by
+       side: the composite sits where it landed, the rule sits where it had to
+       land, and the gap between them is the finding. */
+    --gate-track: clamp(8rem, 18vw, 12rem);
+  }
+}

@@ -1,0 +1,59 @@
+---
+/** Pipeline stages as ruled spec-sheet rows. Deliberately NOT cards. */
+import { stages } from '../data/content';
+---
+
+<section class="band" id="pipeline">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <p class="fig-label">Fig 0.4 — the pipeline</p>
+      <h2>Four stages, wired into CI</h2>
+      <p>A CLI and a GitHub Action. If your team can run a test, it can run a validation.</p>
+    </div>
+
+    <div class="stages reveal">
+      {
+        stages.map((stage) => (
+          <article class="stage">
+            <p class="stage-no">{stage.no}</p>
+            <h3>{stage.title}</h3>
+            <p>{stage.body}</p>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .stages {
+    border-block-start: 1px solid var(--rule);
+  }
+  .stage {
+    display: grid;
+    gap: 0.35rem 2rem;
+    padding-block: 1.75rem;
+    border-block-end: 1px solid var(--rule);
+  }
+  @media (width > 46rem) {
+    .stage {
+      grid-template-columns: 7rem 15rem 1fr;
+      align-items: baseline;
+    }
+  }
+  .stage-no {
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    color: var(--unmeasured);
+    letter-spacing: 0.08em;
+  }
+  h3 {
+    font-size: var(--t-lg);
+    font-weight: 500;
+  }
+  .stage p:last-child {
+    color: var(--ink-mid);
+    font-size: var(--t-sm);
+    max-width: 52ch;
+  }
+</style>

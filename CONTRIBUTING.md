@@ -74,7 +74,7 @@ Configuration lives in `pytest.ini`:
 Notes:
 
 - `conftest.py` at the repo root inserts the repo root into `sys.path` so `validsim` resolves under pytest — no install is strictly required for tests.
-- The suite covers every module (`tests/` has one `test_*.py` per `validsim` module, ~250 tests).
+- The suite covers every module (`tests/` has one `test_*.py` per `validsim` module). **No test count is quoted here on purpose** — a hand-copied number goes stale on the next commit. `python -m pytest tests/` prints the current totals; `python -m pytest tests/ --collect-only -q` counts collected tests without running any, and a collection count is not a pass count (skipped and xfailed tests are collected but never pass).
 - Postgres store tests (`test_store_postgres.py`) skip automatically unless the `VALIDSIM_PG_URL` environment variable is set (`@pytest.mark.skipif(..., reason="no postgres")`) — no local Postgres needed for a green run.
 
 ### Manual verification before every PR
@@ -194,7 +194,9 @@ CI (`.github/workflows/ci.yml`) runs lint + tests + Docker build on every push/P
 
 ## 7. Project Architecture (one paragraph)
 
-ValidSim is a cloud-native validation platform that sits between model training and real-world robot deployment: a checkpoint plus task config is submitted through a FastAPI API (`validsim/api/`) or Typer CLI (`validsim/cli.py`), validated against strict Pydantic config models (`validsim/config.py`), executed as massively parallel simulation episodes with domain randomization and LLM-generated adversarial scenarios (`validsim/sim/`, `validsim/scenarios/`), scored by the evaluation/safety/regression/scorecard engines (`validsim/engine/`) into a composite deploy gate (APPROVE/BLOCK), persisted via a store backend (`validsim/store/`, SQLite/Postgres/in-memory), and reported through a built-in dashboard, PDF scorecards, webhooks, and GitHub Actions plugins (`actions/`, `docs/github-actions.md`). The simulation backend is a mock in the MVP with an Isaac worker HTTP adapter behind `VALIDSIM_BACKEND=isaac` (`validsim/sim/isaac_worker.py`, contract in `docs/isaac-worker.md`).
+ValidSim is a cloud-native validation platform that sits between model training and real-world robot deployment: a checkpoint plus task config is submitted through a FastAPI API (`validsim/api/`) or Typer CLI (`validsim/cli.py`), validated against strict Pydantic config models (`validsim/config.py`), executed as massively parallel simulation episodes with domain randomization and rule-based adversarial scenarios over a 12-category taxonomy (`validsim/sim/`, `validsim/scenarios/`), scored by the evaluation/safety/regression/scorecard engines (`validsim/engine/`) into a composite deploy gate (APPROVE/BLOCK), persisted via a store backend (`validsim/store/`, SQLite/Postgres/in-memory), and reported through a built-in dashboard, PDF scorecards, and GitHub Actions plugins (`actions/`, `docs/github-actions.md`). The simulation backend is a mock in the MVP with an Isaac worker HTTP adapter behind `VALIDSIM_BACKEND=isaac` (`validsim/sim/isaac_worker.py`, contract in `docs/isaac-worker.md`).
+
+Two capabilities are implemented and tested but **not reachable from any entrypoint**, so do not describe them as product features in docs or PR text: the webhook/SMTP notification layer (`validsim/notify/`) and the LLM scenario generator (`validsim/scenarios/llm_generator.py`). `run_and_score` never constructs either; see `docs/runbook.md` §4.4–4.5.
 
 **Deeper reading:**
 
@@ -219,5 +221,5 @@ ValidSim is a cloud-native validation platform that sits between model training 
 
 ## 9. Getting Help
 
-- Open an issue with a minimal reproduction and the output of `python -m pytest tests/ -q`
+- Open an issue with a minimal reproduction and the output of `python -m pytest tests/`
 - For design context, check the relevant note in `vault/04 - Engineering/` first — most decisions are documented there

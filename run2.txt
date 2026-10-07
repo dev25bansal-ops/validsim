@@ -1,0 +1,30 @@
+........................................................................ [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 31%]
+........................................................................ [ 41%]
+........................................................................ [ 52%]
+........................................................................ [ 62%]
+........................................................................ [ 72%]
+........................................................................ [ 83%]
+........................................................................ [ 93%]
+...................ss......................                              [100%]
+[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":540,"threshold":500,"scope":"turn","targets":["\\\\?\\C:\\Users\\dev25\\AppData\\Local\\Temp\\pytest-of-dev25\\garbage-df89c258-cb0b-4ee1-b1a0-30b3b66a9c83"],"targetCount":1}
+Exception ignored in atexit callback <function cleanup_numbered_dir at 0x000002CE8D1ABC10>:
+Traceback (most recent call last):
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 370, in cleanup_numbered_dir
+    try_cleanup(path, consider_lock_dead_if_created_before)
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 341, in try_cleanup
+    maybe_delete_a_numbered_dir(path)
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 293, in maybe_delete_a_numbered_dir
+    rm_rf(garbage)
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 168, in rm_rf
+    shutil.rmtree(str(path), onexc=onerror)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 1105, in _safe_shutil_rmtree
+    _try_trash(abs_path, recursive=True)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 969, in _try_trash
+    _check_bulk_delete_guard(abs_path)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 868, in _check_bulk_delete_guard
+    _exit_bulk_guard_control(
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 843, in _exit_bulk_guard_control
+    raise SystemExit(1)
+SystemExit: 1

@@ -1,0 +1,97 @@
+---
+/**
+ * Privacy page. Not boilerplate filler: ValidSim's product handles API keys, so
+ * an enterprise buyer will ask what it stores and what it logs. Answering
+ * precisely is a sales asset.
+ */
+import Base from '../layouts/Base.astro';
+import Masthead from '../components/Masthead.astro';
+import Footer from '../components/Footer.astro';
+import { site } from '../data/content';
+---
+
+<Base
+  title="Privacy — ValidSim"
+  description="What ValidSim stores, what it logs, and what it does not collect."
+>
+  <Masthead slot="chrome" />
+
+  <main id="main">
+    <section class="band">
+      <div class="wrap">
+        <div class="band-head">
+          <p class="fig-label">Fig 0.6 — privacy</p>
+          <h1 style="font-size: var(--t-hero); letter-spacing: -0.035em; max-width: 18ch;">
+            What we store, and what we do not
+          </h1>
+          <p>
+            ValidSim handles API keys, so this page is specific rather than generic. If something
+            here is unclear or looks wrong, <a href={`mailto:${site.email}`}>ask us</a>.
+          </p>
+        </div>
+
+        <div class="doc">
+          <h2>This website</h2>
+          <p>
+            This site is a static build. It sets no cookies, runs no analytics, embeds no third-party
+            scripts, and has no advertising or tracking pixels. The only network request the page
+            makes is for two webfonts, which is why we disclose it here.
+          </p>
+
+          <h2>The product</h2>
+          <p>
+            When you run ValidSim, the data stays where you run it. A local run uses an in-memory
+            store that is discarded when the process exits; set a durable backend and the scorecards
+            persist there. The API authenticates with an <code>X-API-Key</code> header compared in
+            constant time. Keys are never logged, never written to a scorecard, and never included
+            in an export.
+          </p>
+
+          <h2>Logs</h2>
+          <p>
+            The API emits structured JSON logs for operational debugging. Every request is logged with
+            a method, path, status and duration. Request bodies, validation results and API keys are
+            not logged. Logs are intended for a self-hosted deployment's own infrastructure.
+          </p>
+
+          <h2>What we collect from you</h2>
+          <p>
+            Nothing, unless you email us. This site has no form and no third-party embed, so there is
+            no mechanism by which visiting it could identify you to us.
+          </p>
+
+          <h2>Contact</h2>
+          <p>
+            Questions, corrections, or a deletion request: <a href={`mailto:${site.email}`}>{site.email}</a>.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+</Base>
+
+<style>
+  .doc {
+    max-width: var(--measure);
+    display: grid;
+    gap: 1rem;
+  }
+  .doc h2 {
+    font-size: var(--t-lg);
+    font-weight: 700;
+    margin-block-start: 2rem;
+  }
+  .doc p {
+    color: var(--ink-mid);
+  }
+  .doc a {
+    color: var(--unmeasured);
+  }
+  .doc code {
+    font-family: var(--mono);
+    font-size: 0.95em;
+    color: var(--ink);
+  }
+</style>

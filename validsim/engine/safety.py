@@ -9,6 +9,7 @@ final score in ``[0, 100]``.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -20,6 +21,19 @@ __all__ = ["SafetyResult", "compute_safety"]
 _COLLISION_WEIGHT = 0.5
 _FORCE_WEIGHT = 0.3
 _PROXIMITY_WEIGHT = 0.2
+
+
+def _is_finite(value: float | None) -> bool:
+    """Whether ``value`` is a real, comparable number.
+
+    Guards the safety channels against non-finite sensor readings. ``NaN``
+    compares ``False`` against every bound (``NaN > limit`` is ``False``), so a
+    NaN contact force or distance would otherwise be counted as a *passing*
+    episode and produce a perfect safety score. A sensor that reports NaN has
+    not demonstrated safety -- it has failed to report -- so the scoring treats
+    it as a violation and the gate fails closed.
+    """
+    return value is not None and math.isfinite(value)
 
 
 @dataclass(frozen=True)
@@ -80,15 +94,54 @@ def compute_safety(
             safety_score=100.0,
         )
 
-    collisions = sum(e.collision_count for e in episodes)
+    # Same rule as the other two channels, applied to a count rather than a
+    # threshold: a non-finite collision_count is a failed *reading*, not a clean
+    # one, so it counts as a collision. Summing it directly let NaN poison the
+    # total -- and ``min(nan, 1.0)`` is 1.0 in CPython, so the penalty vanished
+    # and the episode scored as a perfect, collision-free run.
+    collisions = sum(
+        1 if not _is_finite(e.collision_count) else e.collision_count
+        for e in episodes
+    )
     collisions_per_episode = collisions / total
-    force_exceeded = sum(1 for e in episodes if e.max_contact_force_n > force_limit_n)
+    force_exceeded = sum(
+        1
+        for e in episodes
+        if not _is_finite(e.max_contact_force_n) or e.max_contact_force_n > force_limit_n
+    )
     force_rate = force_exceeded / total
 
-    distances = [e.min_human_distance_m for e in episodes if e.min_human_distance_m is not None]
-    min_proximity = min(distances) if distances else None
-    proximity_violations = sum(1 for d in distances if d < proximity_limit_m)
-    proximity_rate = proximity_violations / total
+    distances = [
+        e.min_human_distance_m
+        for e in episodes
+        if e.min_human_distance_m is not None
+    ]
+    # ``min()`` over a list containing NaN is order-dependent and can return the
+    # NaN, discarding a genuinely closer reading elsewhere in the list. Only
+    # finite values are eligible to be "closest".
+    finite_distances = [d for d in distances if _is_finite(d)]
+    min_proximity = min(finite_distances) if finite_distances else None
+    # A non-finite distance is a failed *reading*, not a passing one, so it is
+    # counted as a violation rather than silently excluded. Excluding it (as
+    # ``None`` already is) would let a sensor that only ever reports NaN score a
+    # perfect proximity rate -- a fail-open on the channel that exists to catch
+    # a robot running into a person.
+    proximity_violations = sum(
+        1
+        for d in distances
+        if not _is_finite(d) or d < proximity_limit_m
+    )
+    # The denominator is the number of episodes a human was actually present in,
+    # NOT the total. An episode with no human is "not applicable" to this
+    # channel, not "not a violation": dividing by the total made a run that
+    # violated proximity in *every* human-present episode score 99.98 once the
+    # same violation was diluted across 999 human-free ones, so the score was
+    # controlled by how a run was batched rather than by the robot's behaviour.
+    # With no human ever present the channel is unmeasured, and abstaining (0.0)
+    # is the fail-closed choice -- a perfect 0.0 would be a fail-open on the one
+    # channel that exists to catch a robot running into a person.
+    human_present = len(distances)
+    proximity_rate = proximity_violations / human_present if human_present else 0.0
 
     penalty = (
         min(collisions_per_episode, 1.0) * _COLLISION_WEIGHT

@@ -9,6 +9,9 @@ area: "01 - Strategy"
 
 # ⚡ Why Now — This Is a 2026 Problem (Not 2021 or 2030)
 
+> [!warning] Verify before external use — 2026-09-21
+> The five forces and timing conclusion are a dated thesis. Re-check market, funding, open-source-license and regulatory claims against current sources before presenting them as fact.
+
 Five converging forces make this the exact right moment. Miss one and the market doesn't exist; miss all five and we're 4 years early.
 
 ## Force 1: Capital Explosion 💸

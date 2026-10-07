@@ -94,6 +94,11 @@ runs:
         # steps below and by the ValidSim Scorecard action in the same job
         # (validsim.cli honours VALIDSIM_CACHE_FILE; default is CWD-relative).
         echo "VALIDSIM_CACHE_FILE=${RUNNER_TEMP}/validsim/scorecards.json" >> "$GITHUB_ENV"
+        # `gate` decides from the durable store, never from that cache, so the
+        # validation must be persisted somewhere a second process can read.
+        # sqlite inside runner.temp is job-scoped and stays out of the workspace.
+        echo "VALIDSIM_STORE=sqlite" >> "$GITHUB_ENV"
+        echo "VALIDSIM_SQLITE_PATH=${RUNNER_TEMP}/validsim/runs.db" >> "$GITHUB_ENV"
 
     - name: Install ValidSim
       shell: bash

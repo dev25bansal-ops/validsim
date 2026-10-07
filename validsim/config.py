@@ -62,6 +62,21 @@ def _asset_root() -> Path:
 def resolve_asset_path(path: str | Path) -> Path:
     """Resolve *path* against the asset root and verify it stays inside.
 
+    .. warning::
+       **No production caller.** The asset *fields* it is paired with
+       (:attr:`RobotSpec.urdf_path`, :attr:`EnvironmentSpec.scene_usd`) are
+       validated for shape and containment by
+       :func:`_validate_asset_path`, but nothing currently *resolves* them to a
+       filesystem path: the shipped backends do not read URDF or USD files. This
+       helper is the supported way to do so, and it is tracked on the
+       ``DEAD_BUT_ALLOWED`` list in ``tests/test_wiring_reachability_agent.py``,
+       which fails once it is wired and the documentation is stale.
+
+       The env var is still advertised in ``.env.example`` because
+       :func:`_validate_asset_path` **does** enforce containment against it —
+       the traversal and absolute-path rejections are live, and covered by
+       ``tests/test_config_paths.py``.
+
     Args:
         path: Relative asset path, e.g. ``"robots/franka.urdf"``.
 
@@ -128,6 +143,19 @@ class TaskConfig(BaseModel):
         episodes: Number of nominal (non-adversarial) episodes to run.
         randomization: Domain-randomization intensity.
         adversarial_count: Number of adversarial scenarios to generate/run.
+        checkpoint_id: Identifier of the policy artifact under test.
+
+    ``checkpoint_id`` is carried here rather than as a separate argument
+    because a :class:`~validsim.sim.runner.SimulationBackend` receives exactly one
+    context object per episode. Before it existed, the checkpoint reached the
+    engine only through ``stable_seed(checkpoint_id, task_id)`` -- i.e. it merely
+    selected an RNG stream, so two different checkpoints produced statistically
+    indistinguishable runs and the scorecard could not rank policies. Carrying it
+    on the task makes the artifact under test part of the input a backend sees.
+
+    It is optional (``None``) so existing callers and the CLI's
+    ``--checkpoint`` flag keep working unchanged; a run without one is simply
+    scored against a default policy.
     """
 
     task_id: str = Field(..., min_length=1, description="Task identifier.")
@@ -136,6 +164,9 @@ class TaskConfig(BaseModel):
     episodes: int = Field(1000, ge=1, le=100000, description="Nominal episodes.")
     randomization: RandomizationLevel = Field("full", description="Randomization level.")
     adversarial_count: int = Field(0, ge=0, le=1000, description="Adversarial episodes.")
+    checkpoint_id: str | None = Field(
+        None, min_length=1, description="Policy artifact under test."
+    )
 
 
 class ValidationRequest(BaseModel):
@@ -146,6 +177,8 @@ class ValidationRequest(BaseModel):
         checkpoint_sha256: Optional SHA-256 digest of the checkpoint artifact.
         task: The :class:`TaskConfig` describing what to simulate.
         baseline_run_id: Optional prior run id used for regression comparison.
+        threshold: Composite score (0-100) required to approve. ``None`` keeps
+            the engine default of 85.0, so existing clients need no change.
     """
 
     checkpoint_id: str = Field(..., min_length=1, description="Checkpoint identifier.")
@@ -158,6 +191,9 @@ class ValidationRequest(BaseModel):
     task: TaskConfig
     baseline_run_id: str | None = Field(
         None, description="Run id to compare against for regressions."
+    )
+    threshold: float | None = Field(
+        None, ge=0.0, le=100.0, description="Composite gate; defaults to 85.0."
     )
 
 

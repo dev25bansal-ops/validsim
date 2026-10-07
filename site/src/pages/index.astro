@@ -1,0 +1,67 @@
+---
+import Base from '../layouts/Base.astro';
+import Masthead from '../components/Masthead.astro';
+import Hero from '../components/Hero.astro';
+import Gate from '../components/Gate.astro';
+import Blocked from '../components/Blocked.astro';
+import Stages from '../components/Stages.astro';
+import Field from '../components/Field.astro';
+import Recording from '../components/Recording.astro';
+import Method from '../components/Method.astro';
+import Pricing from '../components/Pricing.astro';
+import Faq from '../components/Faq.astro';
+import Close from '../components/Close.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<Base
+  title="ValidSim — CI for robot foundation models"
+  description="ValidSim runs a robot model checkpoint through thousands of simulated episodes under domain randomization and adversarial scenarios, then returns a scorecard you can gate a deploy on."
+>
+  <Masthead slot="chrome" />
+
+  <main id="main">
+    <!--
+      Order is the argument. The blocked run comes before the product, because
+      the one thing a reader evaluating a gate needs to know is whether this
+      tool has ever said no — and that is answered by a run, not a promise.
+
+        1  the claim, then the run that failed
+        2  why a failure is the point
+        3  the method, and the bug it found
+        4  the same run, recorded end to end
+        5  how it fits a pipeline
+        6  who this is and is not for
+        7  pricing, labelled a hypothesis
+        8  the questions, answered
+    -->
+    <Hero />
+
+    <div class="wrap">
+      <Gate />
+    </div>
+
+    <Blocked />
+    <Method />
+    <Recording />
+    <Stages />
+    <Field />
+    <Pricing />
+    <Faq />
+    <Close />
+  </main>
+
+  <Footer />
+
+  <!--
+    Two modules, deliberately separate. The readout scrub is the page's only
+    scroll-linked motion; the recording's play control is a control, not an
+    effect. Astro bundles and type-strips both into deferred modules with no
+    framework involved, so if either never loads — blocked bundle, no JS, a
+    crawler — the composite and the video are already correct in the markup.
+  -->
+  <script>
+    import '../scripts/readoutScrub';
+    import '../scripts/runRecording';
+  </script>
+</Base>

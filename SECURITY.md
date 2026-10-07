@@ -10,42 +10,43 @@ safety defects. A bug that lets an attacker forge an `APPROVE`, tamper with a st
 scorecard, or exfiltrate a customer's model checkpoints is a **critical** finding to
 us even if it has no CVSS-style "remote code execution" label.
 
-This policy applies to this repository and to the ValidSim hosted platform.
+This policy applies to this repository. There is no hosted ValidSim platform yet; if
+one ships, this policy extends to it and this line will say so.
 
-> **Placeholders to replace before publishing:** `security@validsim.example`,
-> `github.com/validsim/validsim`, and the PGP key fingerprint below.
+> **Intake status — read this first.** The only report channel that exists today is
+> GitHub's private vulnerability reporting on this repository (Channel A). There is no
+> security mailbox, no PGP key, and no hosted-platform inbox. Earlier drafts of this
+> document printed an address and a key fingerprint that were never provisioned; a
+> report sent there reached nobody, which is a worse outcome than having no channel at
+> all. If Channel A is unavailable to you, use the fallback in §1.
 
 ---
 
 ## 1. Reporting a vulnerability
 
-Please use **one** of the two channels below. Do **not** open a public issue, pull
-request, discussion, or social-media post for an unpatched vulnerability.
+Use **one** of the routes below. Do **not** open a public issue, pull request,
+discussion, or social-media post for an unpatched vulnerability.
 
-### Channel A — Email
+### Channel A — GitHub private security advisory
 
-**[security@validsim.example](mailto:security@validsim.example)**
+This gives you a private thread, keeps the report out of public view by default, and
+lets a CVE advisory be published afterwards:
 
-- Include the string `VALIDSIM-SEC` in the subject line so the message routes to the
-  security queue instead of the general inbox.
-- We accept reports in English. Anonymous reports are accepted, but we cannot offer
-  credit, ask follow-up questions, or pay any reward without a way to contact you.
-- For findings that include sensitive data, encrypt with our PGP key
-  (fingerprint: `<TO-BE-PUBLISHED>`), or send a first message with no payload so we
-  can reply with a one-time upload path.
+1. Open this repository on GitHub and go to the **Security** tab.
+2. Click **"Report a vulnerability"** (the same form lives at
+   `<repository URL>/security/advisories/new`).
+3. Describe the issue and your proposed severity; submit.
 
-### Channel B — GitHub private security advisory
+Anonymous reports are accepted, but without a way back to us we cannot offer credit or
+answer follow-up questions — the advisory thread is how we stay in touch.
 
-If you have a GitHub account, prefer the structured flow — it gives you a private
-thread, keeps the report out of public view by default, and lets us publish a CVE
-advisory afterwards:
+### Fallback — if the form is not visible
 
-1. Go to <https://github.com/validsim/validsim/security/advisories>
-2. Click **"Report a vulnerability"**.
-3. Describe the issue and proposed severity; submit.
-
-The repository's *Private reporting* setting must be enabled for this form to appear.
-If it is not, use Channel A and we will open the advisory on your behalf.
+*Private reporting* must be enabled on the repository for that button to appear. If it
+is not, open a **public issue containing no vulnerability details** — just "I would
+like to report a security issue; please enable private vulnerability reporting" — and
+we will turn it on and open the advisory for you. Include the string `VALIDSIM-SEC` in
+the title so it is recognisable at a glance.
 
 ### What to include (helps us triage fast)
 
@@ -94,8 +95,8 @@ These are internal targets, not contractual commitments.
 | Advisory / patch release | **Within 5 business days** of the fix shipping | `SECURITY.md`-linked advisory, changelog entry, and a note to you. |
 
 If we cannot meet a target we will say so explicitly, with a reason and a revised
-date. If you believe a report has stalled, escalate to `founders@validsim.example`
-(placeholder) referencing the original thread.
+date. If you believe a report has stalled, reply in the advisory thread and ask for it
+to be escalated to a founder (the accountable owner of this document).
 
 **Embargo:** we ask for a **90-day** private window from triage, or until the patch is
 released, whichever comes first. We will extend it on request. We release security
@@ -128,7 +129,8 @@ needing to read the advisory first.
   `VALIDSIM_API_KEY`, `POSTGRES_PASSWORD`, webhook secrets, or LLM provider keys.
 - Asset/config parsing (`validsim/config.py`), including path handling for URDF and
   USD references.
-- The managed/hosted ValidSim platform and its tenant isolation.
+- The managed/hosted ValidSim platform and its tenant isolation — once one exists.
+  Nothing is hosted today, so there is no shared tenancy to attack yet.
 
 ### Out of scope
 
@@ -138,12 +140,14 @@ needing to read the advisory first.
   model providers, and any CDN or SaaS we depend on. Report these to the upstream
   project; **do** report them to us if a ValidSim-specific integration makes the
   issue exploitable or blocks an upstream fix.
-- **Customer-side misconfiguration.** Our controls are environment-driven, so a
-  deployment with `VALIDSIM_API_KEY` unset, `VALIDSIM_CORS_ORIGINS` left at `*`, or
-  `VALIDSIM_RATE_LIMIT=0` is unprotected by design. That is the operator's
-  configuration, not a ValidSim vulnerability. Reports that the **defaults are
-  unsafe**, or that a control can be **bypassed while correctly configured**, are in
-  scope.
+- **Unsafe defaults are ours, not yours.** A control that is off until the operator
+  turns it on is a defect in the product, so reports that a *shipped default* leaves a
+  deployment unprotected are **in scope** and have historically been correct: an empty
+  `VALIDSIM_API_KEY` used to report authentication as enabled while leaving every route
+  open, and the API container used to publish on all interfaces. Both are fixed. What
+  stays out of scope is an operator deliberately opting out of a control that is on by
+  default — `VALIDSIM_RATE_LIMIT=0`, or a wildcard `VALIDSIM_CORS_ORIGINS` set
+  explicitly after reading the runbook.
 - Findings requiring physical access to a data centre, or social engineering of
   employees, contractors, or customers.
 - Denial-of-service / resource-exhaustion reports without a demonstrated bypass of
@@ -158,16 +162,15 @@ needing to read the advisory first.
   content on third-party sites linking to us.
 - Issues in `project.docx`, `vault/`, or other internal business documents. These are
   marked **CONFIDENTIAL — Founding Document**. If you have received them without
-  authorisation, please contact `founders@validsim.example` instead of filing a
-  security report; we will treat it as an information-security incident, not a
-  vulnerability.
+  authorisation, tell us through the Channel A advisory form (or the §1 fallback)
+  rather than filing a security report; we will treat it as an information-security
+  incident, not a vulnerability.
 
 ### Not a security vulnerability, please use normal channels
 
 Bugs with no security impact, feature requests, dependency version bumps with no
-exploitable path, lint/type warnings, and test failures → open a regular
-[GitHub issue](https://github.com/validsim/validsim/issues) or email
-`team@validsim.example`.
+exploitable path, lint/type warnings, and test failures → open a regular issue in this
+repository's **Issues** tab.
 
 ---
 
@@ -177,16 +180,19 @@ We ship security fixes for the current minor line and the one immediately preced
 it. Patch releases are versioned normally (`0.2.1`, `0.2.2`, …); we do not backport
 into a line once it reaches end-of-life.
 
+Nothing has been published yet: `validsim.__version__` is `0.2.0` and the repository
+carries no git tags. The table therefore describes the single line under development,
+not a set of released artifacts; this section becomes a real support policy at the
+first tag.
+
 | Version | Status | Security fixes |
 |---|---|---|
-| **0.3.x** | Current (active development) | ✅ Yes — first priority |
-| **0.2.x** | Current stable | ✅ Yes |
-| 0.1.x | End of life | ❌ No |
-| < 0.1.0 | Never released / pre-release | ❌ No |
+| **0.2.x** | Current line, in development (unreleased) | ✅ Yes — first priority |
+| < 0.2.0 | Never released / pre-release | ❌ No |
 
 Notes for reporters:
 
-- The MVP `0.1.0` / `0.2.0` line runs the **mock** simulation backend and is intended
+- The `0.2.x` line runs the **mock** simulation backend and is intended
   for development and demonstration. Do not use it to gate real hardware.
 - Pre-release and `nightly` builds are supported on a best-effort basis; please note
   the exact commit SHA.
@@ -228,26 +234,28 @@ Practical consequences:
 ## 6. Hardening already in place
 
 This is a summary of defences that exist in the codebase today, so you can calibrate
-your testing and skip the low-hanging fruit. Several controls are **opt-in via
-environment variables** and are read once at `create_app()` time — read §3 "Out of
-scope" before reporting a control that is simply switched off.
+your testing and skip the low-hanging fruit. Several controls are configured through
+environment variables and are read once at `create_app()` time. A control that is off
+*because a default left it off* is a product finding under §3, not operator error.
 
 **Authentication & transport surface**
 
 - **API key authentication** — when `VALIDSIM_API_KEY` is set, every `/api/v1` route
-  requires a matching `X-API-Key` header. Comparison is constant-time
-  (`secrets.compare_digest`) and failures return a uniform `401`, so the response is
-  not an oracle for key length or content. When the variable is unset, auth is
-  disabled — a deliberate local-development/test posture, not a bypass.
+  except `GET /api/v1/health` requires a matching `X-API-Key` header. Comparison is
+  constant-time (`secrets.compare_digest`) and failures return a uniform `401`, so the
+  response is not an oracle for key length or content. An empty value is treated as
+  *not configured*: authentication is off, and `/api/v1/health` reports
+  `auth_enabled: false` rather than claiming otherwise. With `VALIDSIM_ENV=production`
+  (or `prod`) and no key, the app refuses to start instead of serving open routes.
 - **CORS allow-list** — `VALIDSIM_CORS_ORIGINS` takes a comma-separated origin list
-  instead of a hardcoded policy. The default is `*` (legacy behaviour), which is why
-  we treat an un-narrowed default as a deployment finding for the operator, and a
-  *bypass of a configured allow-list* as a product finding for us.
+  instead of a hardcoded policy. The default is still `*`, which is an unsafe default
+  by the §3 definition — narrowing it is tracked as open work, so a report saying "the
+  CORS default is a wildcard" is already known and does not need a PoC.
 - **Rate limiting** — a sliding-window limiter (`VALIDSIM_RATE_LIMIT` requests per
   `VALIDSIM_RATE_WINDOW_SECONDS`, default window 60s) applied to write and sensitive
   routes under `/api/v1/validations/…`, including the ad-hoc `/compare` endpoint,
-  keyed per client and answered with `429` + `Retry-After`. `0` disables it, which is
-  the default.
+  keyed per client and answered with `429` + `Retry-After`. The limit ships **on**
+  at `DEFAULT_RATE_LIMIT = 60` requests per window; `0` disables it.
 
 **Integrity of outbound and inbound data**
 
@@ -282,9 +290,11 @@ scope" before reporting a control that is simply switched off.
   `${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}`, so the stack aborts rather than
   starting with an empty or default database password. Secrets come from the
   environment or a `.env` file that is never committed.
-- **Loopback-restricted data stores** — Redis and PostgreSQL publish on
-  `127.0.0.1:6379` / `127.0.0.1:5432` for local debugging only; they are not exposed
-  on external interfaces, and services wait on `service_healthy` before starting.
+- **Loopback-restricted network exposure** — every published port in
+  `docker-compose.yml` binds to `127.0.0.1`: the API on `:8000`, Redis on `:6379`,
+  PostgreSQL on `:5432`. Nothing is reachable from another host unless an operator
+  edits that binding deliberately, and services wait on `service_healthy` before
+  starting.
 - **Dependency hygiene** — runtime and dev/test dependencies are separated
   (`requirements.txt` vs `requirements-dev.txt`, mirrored by the `dev` extra), the
   shipped package is limited to the `validsim` tree, and CI runs lint (`ruff`), the
@@ -303,8 +313,9 @@ dashboard.
 
 For our own reference, and so reporters know what happens after they hit "send":
 
-1. **Intake** — the security mailbox and GitHub advisory queue are reviewed daily by
-   an on-call engineer; a founder is the accountable owner for this document.
+1. **Intake** — we aim to read the GitHub advisory queue every day; a founder is the
+   accountable owner for this document. There is no security team and no rota today,
+   so read §2 as a commitment being made rather than a capability already staffed.
 2. **Triage** — reproduce on a supported version, assign severity using the
    safety-critical weighting in the preamble, and decide whether affected tenants must
    be notified.
@@ -333,5 +344,5 @@ be confirmed separately under their own terms.
 > commitments, and contractual breach-notification windows) that apply to ValidSim and
 > to your customers' jurisdictions.
 
-**Last updated:** 2026-02-06 · **Owner:** Security on-call, escalating to the founders
-· **Review cadence:** quarterly, and on every minor release.
+**Last updated:** 2026-09-21 · **Owner:** the founders, who are the escalation point
+for every item above · **Review cadence:** quarterly, and on every minor release.

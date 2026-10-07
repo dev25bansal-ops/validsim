@@ -24,8 +24,8 @@ is the engineer-facing counterpart to [[GitHub Actions Integration]] and
 |---|---|
 | Runner | pytest (`pytest>=8.0`, `pytest-cov>=5.0` in [requirements-dev.txt](../requirements-dev.txt)) |
 | Discovery | `tests/test_*.py`, functions named `test_*` ([pytest.ini](../pytest.ini)) |
-| Default flags | `-q --tb=short` (`addopts` in [pytest.ini](../pytest.ini)) |
-| Size | ~250 tests across 70+ files — one-or-more `test_*.py` per `validsim` module |
+| Default flags | `-q --tb=short` (`addopts` in [pytest.ini](../pytest.ini)). Already quiet by default — adding your own `-q` **stacks** into `-qq` and hides the `N passed` summary. Most runs need no extra flag: just don't pass `-q`. To force verbosity, clear the ini with `-o addopts=` — but that drops `--tb=short` too, so failing runs print full tracebacks | |
+| Size | One-or-more `test_*.py` per `validsim` module. **No fixed number is quoted here on purpose** — a hand-copied count goes stale on the next commit. `python -m pytest tests/` runs the suite and prints the totals; `python -m pytest tests/ --collect-only -p no:warnings \| tail -1` counts collected tests without running any — **a collection count is not a pass count** (skipped and xfailed tests are collected but never pass) |
 | Coverage floor | **90%** (branch coverage), baseline established at ~95% ([pyproject.toml](../pyproject.toml)) |
 | Path shim | root [conftest.py](../conftest.py) inserts the repo root into `sys.path`, so `validsim` resolves without an install |
 
@@ -414,12 +414,17 @@ Two workflows run this suite; both are the same `pytest` you run locally.
 
 ### 8.1 `ci.yml` — every push / PR to `main`
 
-[.github/workflows/ci.yml](../.github/workflows/ci.yml) has two jobs:
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) has four jobs:
 
-1. **`test`** (Python 3.12): `ruff check` → `pytest` under coverage → artifacts
-   + step summary.
-2. **`docker`**: builds the image, `needs: test` — a failing suite can never
-   produce an image (the same gate-the-deploy discipline ValidSim sells).
+1. **`test`** — "Lint & Test (Python 3.12)": `ruff check` → `pytest` under
+   coverage → artifacts + step summary.
+2. **`postgres`** — "PostgreSQL backend parity": runs the store tests against a
+   real `postgres:16-alpine` service container, so the production backend is
+   exercised rather than skipped.
+3. **`docker`** — "Build image (no push)", `needs: [test, postgres]` — a failing
+   suite can never produce an image (the same gate-the-deploy discipline
+   ValidSim sells).
+4. **`compose`** — "Compose topology & queue drain", `needs: [test, postgres]`.
 
 The test step runs pytest with coverage **and** JUnit in one pass:
 

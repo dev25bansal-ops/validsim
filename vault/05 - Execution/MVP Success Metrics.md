@@ -12,6 +12,11 @@ area: "05 - Execution"
 
 The seven numbers that define "the MVP is done" ([[8-Week Sprint Plan]] Week 8). Each is instrumented in the demo video script and quotable in the YC application ([[YC Countdown]]: *"one metric measured and repeatable"*).
 
+> [!warning] Targets, not achieved results — 2026-09-21
+> No row below is verified by an attached benchmark. The current backend is a deterministic mock and there is no deployed Isaac worker image. Do not quote 4× A100 timing, >95% ground-truth accuracy, 100% uptime, or <2 s load in fundraising materials until the measurement method, environment, timestamp, and artifact are recorded.
+>
+> Also: the engine records **no wall-clock duration at all**. `EpisodeResult.duration_s` is a seeded RNG draw, and `EvaluationResult.mean_duration_s` is algebraically identical to it (mean × N ≡ sum) — so neither can evidence the timing row, and any cost or "time saved" figure derived from them is fiction. Reproduced at 5,000 episodes, that fiction prices at ~$49/run versus the vault's $5–7 target, i.e. ~8×. See [[Unit Economics]] and `docs/PLATFORM_PROPOSAL.md` §7.1.
+
 ## 7.4 Targets
 
 | Metric | Target | Measured how | Sprint week proven |
@@ -42,10 +47,10 @@ MVP metrics are **engineering acceptance tests**; business metrics (runs complet
 
 ## Demo-day checklist (Week 8, day 1–2 E2E test)
 
-- [ ] `git push` checkpoint → Action fires ([[GitHub Actions Integration]])
-- [ ] 5,000 episodes, 100 adversarial scenarios, wall-clock < 30 min on 4× A100
-- [ ] Slack notification with composite score + regression list
-- [ ] Dashboard: scorecard, failure treemap, regression timeline, episode replay (<2 s load)
+- [ ] `git push` checkpoint → local composite Action fires ([[GitHub Actions Integration]])
+- [ ] 5,000 episodes, 100 adversarial scenarios, wall-clock < 30 min on 4× A100 — **measure with a real clock.** The engine's `EpisodeResult.duration_s` is a seeded RNG draw, not wall-clock, and `EvaluationResult.mean_duration_s` is algebraically identical to it, so neither can evidence this row. See [[Unit Economics]] and `docs/PLATFORM_PROPOSAL.md` §7.1.
+- [ ] Live Slack-capable webhook delivery (HMAC dispatcher, not the planned public registration API)
+- [ ] Dashboard: scorecard, failure taxonomy, trends, and job panel; episode replay remains planned
 - [ ] PDF scorecard downloads, branded
 - [ ] `validsim gate --threshold 85` returns APPROVE on good run, non-zero exit on seeded regression ([[CLI Design]])
 - [ ] API uptime 100% across the recorded demo

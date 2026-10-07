@@ -6,14 +6,25 @@ single cheap read the store already offers (for the default in-memory backend
 that is a pure in-memory pass; no per-run fetch, no second query). Exposed
 metrics:
 
-* ``validsim_runs_total`` (counter) — number of validation runs recorded.
-* ``validsim_approvals_total`` (counter) — runs whose verdict was ``APPROVE``.
-* ``validsim_blocks_total`` (counter) — runs whose verdict was ``BLOCK``.
+* ``validsim_runs_total`` (gauge) — validation runs currently in the store.
+* ``validsim_approvals_total`` (gauge) — stored runs whose verdict was ``APPROVE``.
+* ``validsim_blocks_total`` (gauge) — stored runs whose verdict was ``BLOCK``.
 * ``validsim_composite_score`` (gauge) — composite score of the latest run
   (``0`` when the store is empty).
 * ``validsim_build_info`` (gauge) — constant ``1`` labelled with the version.
 * ``validsim_http_requests_total`` (counter) — requests by status class, kept
   in-process by :class:`Metrics` and bumped from the ASGI middleware.
+
+A note on types: the run/approval/block series are **gauges**, not counters.
+Runs are deletable (``DELETE /api/v1/validations/{id}`` and ``validsim
+delete``), so their count moves in both directions and is not monotonic;
+declaring them as counters would break ``rate()`` and let alerts fire backwards.
+Their ``_total`` suffix is retained for backward compatibility with existing
+dashboards and alerts even though the type is ``gauge`` -- renaming them to
+``_stored`` would be more idiomatic but is a breaking observability change that
+must be coordinated with whoever owns the Grafana boards. The only true counter
+here is ``validsim_http_requests_total``, which is process-local and can only
+grow.
 
 Output is Prometheus *text exposition format* served as ``text/plain``.
 """
@@ -27,6 +38,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from validsim import __version__
+from validsim.api.store_stats import (
+    _sqlite_conn,
+    latest_composite,
+    store_totals,
+)
 from validsim.store.memory import ValidationStore
 
 __all__ = [
@@ -104,20 +120,58 @@ class Metrics:
 def _summary(store: ValidationStore) -> dict[str, float]:
     """Derive run/approval/block/composite values from ``store`` in one pass.
 
-    A single :meth:`~ValidationStore.history` call (oldest-first) yields every
-    value, so a scrape performs exactly one cheap store read — no ``get()`` per
-    run, no second query. ``composite`` is the latest run's score, ``0.0`` when
-    the store is empty.
+    The ``history()`` call this used to make is *unavoidable for a generic
+    backend* but not for the two this platform ships. On SQLite it means
+    ``SELECT *`` — every row and every JSON blob (``episodes_json``,
+    ``evaluation_json``, ``safety_json``, ``regression_json``) read off disk and
+    decoded — to read three scalars, measured **105 ms at n=4 000** and rising
+    linearly (≈21-26 µs per run: O(total runs), not O(1)).
+
+    That cost lands on the **unauthenticated** ``/metrics`` endpoint, which is
+    deliberately mounted outside the ``X-API-Key`` gate so Prometheus can scrape
+    it without a credential, so the exposure is unauthenticated O(n) work:
+
+    * an anonymous caller drives the store lock and every JSON decode on demand,
+      with no credential and no rate limit (reads are never metered);
+    * 20 concurrent anonymous scrapes at n=4 000 measured **2 158 ms** wall vs
+      95.6 ms for one — a **22.6x serialization factor**, since each scrape holds
+      the store lock for its whole pass. ``/api/v1/health`` meanwhile rose from
+      ~1 ms to a **74 ms median / 110 ms max**, and the Docker ``HEALTHCHECK`` is
+      ``--timeout=5s --retries=3``, so this is the liveness-starvation failure
+      mode the ``main.py`` docstring already documents for pipeline saturation.
+
+    So the values come from :mod:`validsim.api.store_stats`, which computes the
+    identical numbers from the narrow projection each value lives in — for SQL a
+    ``SELECT COUNT(*)/SUM(...)`` over promoted columns that touches **no JSON
+    column at all**. ``latest_composite`` is a max over ``created_at`` whose
+    tie-break is fixed to match ``history()[-1]``; that equivalence is asserted
+    against the ``history()`` path on all three backends by
+    ``tests/test_api_obsstats_agent.py``.
+
+    Falls back to the ``history()`` pass for a store offering neither the
+    resident-attributes nor the SQL fast path, so an injected test double still
+    scrapes instead of failing.
     """
+    if hasattr(store, "_runs") or _sqlite_conn(store) is not None:
+        totals = store_totals(store)
+        return {
+            "runs": float(totals.runs),
+            "approvals": float(totals.approvals),
+            "blocks": float(totals.blocks),
+            # ``runs`` is an int, so ``total - approvals`` is exact.
+            "composite": float(latest_composite(store)),
+        }
     runs = list(store.history())
     total = len(runs)
     approvals = sum(1 for r in runs if r.scorecard.deploy_decision == "APPROVE")
-    latest_composite = runs[-1].scorecard.composite_score if runs else 0.0
+    # Named distinctly from the imported ``latest_composite`` so this local
+    # cannot shadow the function the fast path above calls.
+    fallback_composite = runs[-1].scorecard.composite_score if runs else 0.0
     return {
         "runs": float(total),
         "approvals": float(approvals),
         "blocks": float(total - approvals),
-        "composite": float(latest_composite),
+        "composite": float(fallback_composite),
     }
 
 
@@ -153,20 +207,23 @@ def render_metrics(store: ValidationStore, metrics: Metrics) -> str:
 
     emit(
         "validsim_runs_total",
-        "counter",
-        "Total number of validation runs recorded.",
+        "gauge",
+        "Number of validation runs currently recorded in a store whose runs are "
+        "deletable, so this value is not monotonic. A gauge, not a counter.",
         f"validsim_runs_total {_fmt(summary['runs'])}",
     )
     emit(
         "validsim_approvals_total",
-        "counter",
-        "Total number of runs approved for deployment.",
+        "gauge",
+        "Number of currently stored runs approved for deployment. A gauge, not "
+        "a counter, because deleting a run lowers it.",
         f"validsim_approvals_total {_fmt(summary['approvals'])}",
     )
     emit(
         "validsim_blocks_total",
-        "counter",
-        "Total number of runs blocked from deployment.",
+        "gauge",
+        "Number of currently stored runs blocked from deployment. A gauge, not "
+        "a counter, because deleting a run lowers it.",
         f"validsim_blocks_total {_fmt(summary['blocks'])}",
     )
     emit(

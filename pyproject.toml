@@ -22,13 +22,22 @@ dependencies = [
     "typer>=0.12",
     "httpx>=0.27",
     "psycopg[binary]>=3.1",
+    "redis>=5.0",
     "reportlab>=4.0",
 ]
 
+# Keep in step with requirements-dev.txt, which carries the version floors.
+# fakeredis/lupa are not optional: without them the Redis queue tests
+# parameterise to an empty backend list and report SKIP, not failure.
 [project.optional-dependencies]
 dev = [
     "pytest",
+    "pytest-cov",
     "ruff",
+    "pyyaml",
+    "fakeredis",
+    "lupa",
+    "hypothesis",
 ]
 
 [project.scripts]
@@ -44,3 +53,41 @@ version = { attr = "validsim.__version__" }
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+# `line-length` above is inert unless E501 is actually selected. Ruff's default
+# rule set is `E4,E7,E9,F`, which excludes E501 — so `ruff check` reported "All
+# checks passed!" on a tree carrying 14 over-length lines, and the CI lint gate
+# (`ruff check validsim tests`) could not fail on line length at all. Selecting
+# E501 makes the declared limit real.
+#
+# Scope note: only E501 is added. Broader groups (B/UP/SIM) were trialled and
+# surface ~69 further violations that are pre-existing and unrelated to this
+# defect; adopting them is its own cleanup, not a silent side effect of enabling
+# the line-length gate.
+[tool.ruff.lint]
+select = ["E4", "E5", "E7", "E9", "F"]
+
+# ---------------------------------------------------------------------------
+# Coverage (pytest-cov / coverage.py)
+#
+# Baseline established at ~95% line/branch coverage; the actual number
+# fluctuates 93-95% across runs, so the enforced floor sits at 90% to fail
+# CI on a real regression without tripping on that normal measurement jitter.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["validsim"]
+branch = true
+omit = [
+    "tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

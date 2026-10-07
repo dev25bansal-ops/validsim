@@ -9,6 +9,7 @@ input.
 
 from __future__ import annotations
 
+import re
 from html import escape
 
 from validsim.engine.scorecard import Scorecard
@@ -21,12 +22,74 @@ def _fmt(value: float | None, spec: str = "{:.1f}", dash: str = "—") -> str:
     return dash if value is None else spec.format(value)
 
 
+#: Characters that are structural in Markdown table rows: the column separator
+#: plus anything that could start a new block. Escaped with a backslash, which
+#: every Markdown renderer honours inside a table cell.
+_MD_CELL_ESCAPES = (
+    "|", "\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", "!", "<", ">",
+)
+
+
+def _md(value: object) -> str:
+    """Escape ``value`` for safe interpolation into a Markdown table cell.
+
+    Failure-mode names are the one caller-controlled field that lands inside a
+    table row, so they need the full structural escape set. See
+    :func:`_md_code` for the ids, which are rendered inside code spans.
+    """
+    text = str(value)
+    for char in _MD_CELL_ESCAPES:
+        text = text.replace(char, "\\" + char)
+    # A newline would end the cell and start a new Markdown block/table row.
+    return text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+
+def _md_code_span(value: object) -> str:
+    """Render ``value`` as a self-contained Markdown inline-code span.
+
+    A code span renders its contents literally, so the only character that can
+    break out is the delimiter itself. Backslash escapes are *not* processed
+    inside a code span, so escaping ordinary identifier characters (``-``,
+    ``_``) would leak backslashes to the reader. The fence is therefore widened
+    to one backtick longer than the longest run inside the value, which is the
+    CommonMark-sanctioned way to contain arbitrary content.
+
+    Line breaks are flattened because a crafted value could otherwise close the
+    span and resume Markdown parsing on the next line.
+    """
+    text = str(value).replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    # Measure the longest run of CONSECUTIVE backticks (str.split would return
+    # the non-backtick segments between them, not the delimiter runs).
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    # CommonMark strips one leading/trailing space when the content is both
+    # space-padded and space-terminated, so padding is only needed (and only
+    # rendered harmlessly) when the value itself begins or ends with a backtick.
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
 def _ci_text(sc: Scorecard) -> str:
     """Render the 95% bootstrap confidence interval (or an em-dash)."""
     if sc.confidence_interval is None:
         return "not available"
     low, high = sc.confidence_interval
     return f"[{low:.4f}, {high:.4f}]"
+
+
+def _robustness_text(sc: Scorecard) -> str:
+    """Render the robustness score, flagging it when it is a constant.
+
+    A robustness score is a dispersion across randomization groups, so with
+    fewer than two groups the number is the maximum *by construction* rather
+    than by measurement -- and a normal run has exactly one group, because
+    ``run_validation`` applies a single randomization level to every episode.
+    Rendering a bare "100.0" there tells the reader the model was proven
+    robust, which is precisely the opposite of what the data supports.
+    """
+    if not sc.robustness_measured:
+        return f"{_fmt(sc.robustness_score)} (not measured)"
+    return _fmt(sc.robustness_score)
 
 
 def scorecard_to_markdown(sc: Scorecard) -> str:
@@ -43,13 +106,20 @@ def scorecard_to_markdown(sc: Scorecard) -> str:
     """
     verdict = sc.deploy_decision
     relation = "meets or exceeds" if sc.deploy_decision == "APPROVE" else "is below"
+    # Escape every caller-controlled string once, up front. The identifiers
+    # are emitted as self-contained code spans by ``_md_code_span``; the
+    # failure-mode names land in a table cell and use the full ``_md`` escaping.
+    run_id = _md_code_span(sc.run_id)
+    checkpoint_id = _md_code_span(sc.checkpoint_id)
+    task_id = _md_code_span(sc.task_id)
+    created_at = _md_code_span(sc.created_at)
     lines: list[str] = [
         "# ValidSim Validation Report",
         "",
-        f"- **Run:** `{sc.run_id}`",
-        f"- **Checkpoint:** `{sc.checkpoint_id}`",
-        f"- **Task:** `{sc.task_id}`",
-        f"- **Created:** {sc.created_at}",
+        f"- **Run:** {run_id}",
+        f"- **Checkpoint:** {checkpoint_id}",
+        f"- **Task:** {task_id}",
+        f"- **Created:** {created_at}",
         "",
         f"## Verdict: {verdict}",
         "",
@@ -63,7 +133,7 @@ def scorecard_to_markdown(sc: Scorecard) -> str:
         f"| Composite score | {sc.composite_score} |",
         f"| Success rate | {sc.success_rate * 100:.1f}% |",
         f"| Safety score | {_fmt(sc.safety_score)} |",
-        f"| Robustness score | {_fmt(sc.robustness_score)} |",
+        f"| Robustness score | {_robustness_text(sc)} |",
         f"| Regression delta | {_fmt(sc.regression_delta, '{:+.4f}')} |",
         f"| Episodes | {sc.episode_count} |",
         "",
@@ -72,7 +142,10 @@ def scorecard_to_markdown(sc: Scorecard) -> str:
     ]
     if sc.failure_taxonomy:
         lines += ["| Failure mode | Count |", "| --- | --- |"]
-        lines += [f"| {mode} | {count} |" for mode, count in sc.failure_taxonomy.items()]
+        lines += [
+            f"| {_md(mode)} | {count} |"
+            for mode, count in sc.failure_taxonomy.items()
+        ]
     else:
         lines.append("_No failures recorded._")
     lines += [
@@ -117,7 +190,7 @@ def scorecard_to_html(sc: Scorecard) -> str:
     metric_rows = [
         ("Success rate", f"{sc.success_rate * 100:.1f}%"),
         ("Safety score", _fmt(sc.safety_score)),
-        ("Robustness score", _fmt(sc.robustness_score)),
+        ("Robustness score", _robustness_text(sc)),
         ("Regression delta", _fmt(sc.regression_delta, "{:+.4f}")),
         ("Episodes", str(sc.episode_count)),
         ("95% CI", _ci_text(sc)),

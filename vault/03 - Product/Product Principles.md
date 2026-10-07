@@ -11,6 +11,9 @@ area: "03 - Product"
 
 Six non-negotiables. Every scope decision in [[8-Week Sprint Plan]] and every trade-off in a [[Decision Log]] is checked against this list.
 
+> [!important] Blueprint status — 2026-09-21
+> These remain product principles, not a list of shipped features. Current evidence records use `APPROVE` or `BLOCK`; hash-chained audit, episode recordings, external GitHub Action distribution, and SaaS billing are future-state work ([[Data Flow]], [[Module Specs]], [[Tech Stack]]).
+
 ## The six principles
 
 ### 1. Zero-config to start
@@ -30,14 +33,14 @@ Six non-negotiables. Every scope decision in [[8-Week Sprint Plan]] and every tr
 ### 3. Actionable failures
 > Don't just say "failed." **Show the video, classify the failure, suggest the fix.**
 
-- Every episode records video, joint states, forces, contacts (HDF5/MP4)
+- Planned: every episode records video, joint states, forces and contacts (HDF5/MP4); current runs persist structured episode-result JSON
 - Failure taxonomy = rule-based + LLM classification into the 12 adversarial categories
 - The blocked-deploy path must end in a reproducible artifact, not a stack trace ([[Core User Flows]] failure paths)
 
 ### 4. Deployment gating
 > The scorecard isn't a report; **it's a decision.** Approve or block.
 
-- `validsim gate --run-id abc123 --threshold 85` exits non-zero on block ([[CLI Design]])
+- `validsim gate --run-id vrun-1a2b3c4d --threshold 85` exits non-zero on block ([[CLI Design]])
 - Fleet Deployment Gate is an architectural layer, not a feature ([[Solution Architecture]] L5)
 - Product-market signal: teams that adopt the gate become sticky → NRR >120% target ([[Unit Economics]])
 
@@ -45,7 +48,7 @@ Six non-negotiables. Every scope decision in [[8-Week Sprint Plan]] and every tr
 > Every output is formatted for ISO/insurer consumption.
 
 - Scorecard schema designed against ISO 10218 / ISO 13482 from day one, even though ISO report *generation* is post-MVP ([[MVP Non-Goals]], [[Compliance]])
-- Immutable, timestamped, hash-chained audit trail underneath every run ([[Data Flow]])
+- Planned immutable, timestamped, hash-chained audit trail underneath every run; current history is not immutable ([[Data Flow]])
 
 ### 6. Developer-native
 > CLI, API, GitHub Actions. **No enterprise sales motion required to start.**
@@ -59,7 +62,7 @@ Six non-negotiables. Every scope decision in [[8-Week Sprint Plan]] and every tr
 | Conflict | Resolution |
 |---|---|
 | Zero-config vs. statistical rigor (more knobs = better science) | Rigorous defaults (5,000 episodes, full randomization) so the *default* is already sound |
-| Deployment gating vs. false confidence | "Inconclusive" state when CI too wide — never gate on noise (principle 2 wins) |
+| Deployment gating vs. false confidence | Current engine blocks insufficient evidence as `BLOCK`; a future `INCONCLUSIVE` state remains design intent |
 | Developer-native vs. compliance-heavy buyers | Engineer consumes dashboard; compliance consumes PDF export — same data, two surfaces ([[User Personas]]) |
 
 Links: [[Product Vision]] · [[Scorecard UX]] · [[MVP Scope]] · [[Founding Team]] · [[Home]]

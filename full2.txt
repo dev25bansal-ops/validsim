@@ -1,0 +1,323 @@
+sssssssssssssssssssssssssssssssssssssssssssss........................... [  2%]
+...........................................s............................ [  5%]
+........................................................................ [  7%]
+.......................................................................s [ 10%]
+sss..................................................................... [ 12%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 25%]
+........................................................................ [ 27%]
+........................................................................ [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 35%]
+.............................................................x.......... [ 37%]
+........................................................................ [ 40%]
+.....................................................FF.F........F...... [ 43%]
+........................................................................ [ 45%]
+.................................................................x...... [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+.........................................x...................xx......... [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 63%]
+............FFF......................................................... [ 65%]
+........................................................................ [ 68%]
+...............................................................FFF.F.... [ 70%]
+........................................................................ [ 73%]
+...........................xxxxxxxxxxxx................................. [ 75%]
+........................................................................ [ 78%]
+...sxxxxxxxxx.....................FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF [ 81%]
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF [ 83%]
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFEEEEEE [ 86%]
+......................EEE.........EEEEEEEE.............E................ [ 88%]
+EEEEEEEEEEEEEE.EEEEEEEEEE.....................................ssssEEEEEE [ 91%]
+EEEEEEFE.EEEEE.EE........sss............................................ [ 93%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+...................................                                      [100%]
+============================== warnings summary ===============================
+C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:24
+  C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:24: DeprecationWarning: 'click.utils.get_binary_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_binary_stream as get_binary_stream
+
+C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:25
+  C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\typer\__init__.py:25: DeprecationWarning: 'click.utils.get_text_stream' is deprecated and will be removed in Click 9.0.
+    from click.utils import get_text_stream as get_text_stream
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_jobs_worker.py::TestRetryPolicy::test_dead_letter_is_reported_not_silent
+FAILED tests/test_jobs_worker.py::TestRetryPolicy::test_dead_letter_signal_is_emitted_by_the_reaper_too
+FAILED tests/test_jobs_worker.py::TestRetryPolicy::test_a_success_after_retries_is_reported_normally
+FAILED tests/test_jobs_worker.py::TestSpecGateReachesTheScorecard::test_sync_and_async_agree_for_the_same_checkpoint
+FAILED tests/test_regression.py::TestDurationRelativeChangeFromZero::test_any_slowdown_from_a_zero_baseline_is_flagged[1e-09]
+FAILED tests/test_regression.py::TestDurationRelativeChangeFromZero::test_any_slowdown_from_a_zero_baseline_is_flagged[0.5]
+FAILED tests/test_regression.py::TestDurationRelativeChangeFromZero::test_any_slowdown_from_a_zero_baseline_is_flagged[1.0]
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_checkpoint_id_is_one_of_the_five_documented_inputs
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_checkpoint_id_is_one_of_the_five_documented_inputs_but_only_shifts_the_probability
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_same_seed_different_checkpoint_usually_yields_a_different_episode
+FAILED tests/test_sim_contract_audit_agent.py::TestSeededDeterminism::test_scenario_difficulty_is_an_input
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[cjk]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[emoji]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[rtl]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[zero-width]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[long]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[very-long]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[sql-ish]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[nul-adjacent]
+FAILED tests/test_store_edgecases_agent.py::test_identifiers_survive_the_round_trip[newline]
+FAILED tests/test_store_edgecases_agent.py::test_ids_are_compared_exactly_not_trimmed
+FAILED tests/test_store_edgecases_agent.py::TestOversizedPayloads::test_three_thousand_taxonomy_entries
+FAILED tests/test_store_edgecases_agent.py::TestOversizedPayloads::test_two_thousand_block_reasons
+FAILED tests/test_store_edgecases_agent.py::TestOversizedPayloads::test_many_episodes
+FAILED tests/test_store_edgecases_agent.py::TestOversizedPayloads::test_large_but_representable_numbers
+FAILED tests/test_store_edgecases_agent.py::TestOversizedPayloads::test_infinite_score_survives_both_backends
+FAILED tests/test_store_edgecases_agent.py::TestDeleteThenHistory::test_deleted_run_leaves_no_trace
+FAILED tests/test_store_edgecases_agent.py::TestDeleteThenHistory::test_delete_is_idempotent
+FAILED tests/test_store_edgecases_agent.py::TestDeleteThenHistory::test_history_stays_sorted_after_interleaved_deletes
+FAILED tests/test_store_edgecases_agent.py::TestDeleteThenHistory::test_resave_after_delete_frees_the_id
+FAILED tests/test_store_edgecases_agent.py::TestDeleteThenHistory::test_history_bounds_after_deletion
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-1-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-1-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-1-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-1-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-1-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-2-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-2-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-2-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-2-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-2-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-5-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-5-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-5-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-5-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-5-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-100-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-100-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-100-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-100-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-100-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-500-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-500-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-500-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-500-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[0-500-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-1-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-1-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-1-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-1-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-1-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-2-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-2-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-2-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-2-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-2-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-5-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-5-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-5-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-5-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-5-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-100-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-100-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-100-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-100-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-100-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-500-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-500-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-500-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-500-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[1-500-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-1-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-1-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-1-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-1-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-1-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-2-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-2-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-2-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-2-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-2-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-5-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-5-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-5-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-5-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-5-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-100-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-100-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-100-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-100-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-100-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-500-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-500-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-500-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-500-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[2-500-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-1-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-1-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-1-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-1-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-1-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-2-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-2-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-2-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-2-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-2-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-5-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-5-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-5-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-5-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-5-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-100-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-100-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-100-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-100-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-100-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-500-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-500-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-500-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-500-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[9-500-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-1-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-1-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-1-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-1-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-1-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-2-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-2-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-2-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-2-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-2-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-5-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-5-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-5-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-5-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-5-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-100-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-100-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-100-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-100-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-100-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-500-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-500-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-500-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-500-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[10-500-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-1-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-1-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-1-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-1-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-1-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-2-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-2-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-2-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-2-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-2-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-5-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-5-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-5-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-5-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-5-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-100-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-100-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-100-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-100-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-100-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-500-0]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-500-1]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-500-2]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-500-3]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_slice_matches_python_semantics_on_both_backends[499-500-10]
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_limit_zero_and_negative_do_not_raise
+FAILED tests/test_store_edgecases_agent.py::TestPaginationBoundaries::test_paging_is_stable_across_repeated_reads
+FAILED tests/test_store_edgecases_agent.py::TestConcurrentAccess::test_many_threads_writing_distinct_ids_lose_nothing
+FAILED tests/test_store_edgecases_agent.py::TestConcurrentAccess::test_same_run_id_written_from_many_threads_stays_single
+FAILED tests/test_store_edgecases_agent.py::TestConcurrentAccess::test_reads_during_writes_never_raise
+FAILED tests/test_store_sqlite.py::TestBlankSqlitePathIsTreatedAsUnset::test_blank_env_var_uses_the_default_db_path[   ]
+ERROR tests/test_store_edgecases_agent.py::TestConcurrentAccess::test_two_sqlite_instances_on_one_file
+ERROR tests/test_store_edgecases_agent.py::TestPostgresRowReconstructionParity::test_pg_reconstruction_equals_sqlite_reconstruction[minimal-]
+ERROR tests/test_store_edgecases_agent.py::TestPostgresRowReconstructionParity::test_pg_reconstruction_equals_sqlite_reconstruction[default-]
+ERROR tests/test_store_edgecases_agent.py::TestPostgresRowReconstructionParity::test_pg_reconstruction_equals_sqlite_reconstruction[unicode-]
+ERROR tests/test_store_edgecases_agent.py::TestPostgresRowReconstructionParity::test_pg_reconstruction_equals_sqlite_reconstruction[long-ids-]
+ERROR tests/test_store_edgecases_agent.py::TestPostgresRowReconstructionParity::test_pg_reconstruction_equals_sqlite_reconstruction[big-taxonomy-]
+ERROR tests/test_store_edgecases_agent.py::TestPostgresRowReconstructionParity::test_pg_reconstruction_equals_sqlite_reconstruction[block-reasons-]
+ERROR tests/test_store_factory.py::TestSqliteSelection::test_sqlite_backend_with_path
+ERROR tests/test_store_factory.py::TestSqliteSelection::test_backend_name_is_case_insensitive
+ERROR tests/test_store_factory.py::TestSqliteSelection::test_sqlite_default_path_used
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs0-expected0]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs1-expected1]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs2-expected2]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs3-expected3]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs4-expected4]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs5-expected5]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_filters[kwargs6-expected6]
+ERROR tests/test_store_filters.py::TestSqliteHistoryFilters::test_default_matches_full_history
+ERROR tests/test_store_filters.py::TestLegacyScorecardReconstruction::test_legacy_row_still_flows_through_a_real_sqlite_read
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_second_save_cannot_overwrite_a_recorded_verdict[memory]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_second_save_cannot_overwrite_a_recorded_verdict[sqlite]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_every_read_path_returns_the_first_recorded_run[memory]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_every_read_path_returns_the_first_recorded_run[sqlite]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_duplicate_does_not_disturb_neighbouring_rows[memory]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_duplicate_does_not_disturb_neighbouring_rows[sqlite]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_delete_then_save_is_the_sanctioned_correction_path[memory]
+ERROR tests/test_store_parity.py::TestAppendOnlyWriteContract::test_delete_then_save_is_the_sanctioned_correction_path[sqlite]
+ERROR tests/test_store_parity.py::TestStrictWriteContract::test_first_write_reports_true_then_false[memory]
+ERROR tests/test_store_parity.py::TestStrictWriteContract::test_first_write_reports_true_then_false[sqlite]
+ERROR tests/test_store_parity.py::TestStrictWriteContract::test_rejected_duplicate_is_identical_to_save[memory]
+ERROR tests/test_store_parity.py::TestStrictWriteContract::test_rejected_duplicate_is_identical_to_save[sqlite]
+ERROR tests/test_store_parity.py::TestStrictWriteContract::test_delete_then_save_exists_reports_true_again[memory]
+ERROR tests/test_store_parity.py::TestStrictWriteContract::test_delete_then_save_exists_reports_true_again[sqlite]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_every_field_survives_the_round_trip[memory]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_every_field_survives_the_round_trip[sqlite]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_tuple_typed_fields_come_back_as_tuples[memory]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_tuple_typed_fields_come_back_as_tuples[sqlite]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_empty_and_zero_valued_fields_survive[memory]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_empty_and_zero_valued_fields_survive[sqlite]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_episode_and_detail_fields_survive[memory]
+ERROR tests/test_store_parity.py::TestCrossBackendScorecardParity::test_episode_and_detail_fields_survive[sqlite]
+ERROR tests/test_store_parity.py::TestPipelineReturnsTheStoredVerdict::test_retry_with_the_same_run_id_returns_the_stored_record[memory]
+ERROR tests/test_store_parity.py::TestPipelineReturnsTheStoredVerdict::test_retry_with_the_same_run_id_returns_the_stored_record[sqlite]
+ERROR tests/test_store_sqlite.py::TestRoundTrip::test_save_and_get_preserves_scorecard
+ERROR tests/test_store_sqlite.py::TestRoundTrip::test_get_unknown_returns_none
+ERROR tests/test_store_sqlite.py::TestRoundTrip::test_repeated_save_keeps_the_first_verdict
+ERROR tests/test_store_sqlite.py::TestRoundTrip::test_repeated_save_is_a_single_row_in_the_table
+ERROR tests/test_store_sqlite.py::TestRoundTrip::test_summary_reflects_stored_scorecard
+ERROR tests/test_store_sqlite.py::TestQueries::test_list_for_checkpoint_filters_and_orders
+ERROR tests/test_store_sqlite.py::TestQueries::test_history_orders_oldest_first
+ERROR tests/test_store_sqlite.py::TestQueries::test_len_tracks_saved_runs - O...
+ERROR tests/test_store_sqlite.py::TestPersistence::test_data_survives_reopen
+ERROR tests/test_store_sqlite.py::TestPersistence::test_creates_schema_on_init
+ERROR tests/test_store_sqlite.py::TestBlankSqlitePathIsTreatedAsUnset::test_blank_env_var_uses_the_default_db_path[]
+ERROR tests/test_store_sqlite.py::TestBlankSqlitePathIsTreatedAsUnset::test_blank_env_var_uses_the_default_db_path[ ]
+ERROR tests/test_store_sqlite.py::TestBlankSqlitePathIsTreatedAsUnset::test_blank_env_var_uses_the_default_db_path[\t]
+ERROR tests/test_store_sqlite.py::TestFullDetailRoundTrip::test_round_trip_preserves_entire_run
+ERROR tests/test_store_sqlite.py::TestFullDetailRoundTrip::test_episodes_survive_reopen
+ERROR tests/test_store_sqlite.py::TestFullDetailRoundTrip::test_null_regression_round_trips_as_none
+ERROR tests/test_store_sqlite.py::TestAdversarialFieldsRoundTrip::test_fields_survive_sqlite_round_trip
+ERROR tests/test_store_sqlite.py::TestAdversarialFieldsRoundTrip::test_fields_survive_reopen
+ERROR tests/test_store_sqlite.py::TestAdversarialFieldsRoundTrip::test_legacy_row_without_detail_columns_is_readable
+ERROR tests/test_store_sqlite.py::TestAdversarialFieldsRoundTrip::test_scorecard_json_remains_queryable
+[safe-delete][SAFE_DELETE_BULK_GUARD_ERROR] ENOSPC: no space left on device, open 'C:\Users\dev25\AppData\Local\Temp\codebuddy-safe-delete-bulk\fc1069a5ca1b086fc7a9c4618da13469af677a8ad63fe9ffae476996ffc8b46d\state.json.37224.tmp'
+Exception ignored in atexit callback <function cleanup_numbered_dir at 0x00000203475E8D50>:
+Traceback (most recent call last):
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 370, in cleanup_numbered_dir
+    try_cleanup(path, consider_lock_dead_if_created_before)
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 341, in try_cleanup
+    maybe_delete_a_numbered_dir(path)
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 293, in maybe_delete_a_numbered_dir
+    rm_rf(garbage)
+  File "C:\Users\dev25\AppData\Roaming\Python\Python314\site-packages\_pytest\pathlib.py", line 168, in rm_rf
+    shutil.rmtree(str(path), onexc=onerror)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 1545, in _safe_shutil_rmtree
+    _try_trash(abs_path, recursive=True)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 1396, in _try_trash
+    _check_bulk_delete_guard(abs_path)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 1275, in _check_bulk_delete_guard
+    _flush_bulk_pending(pending, guard_path, node_bin)
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 1204, in _flush_bulk_pending
+    _exit_bulk_guard_control(
+  File "C:\Users\dev25\AppData\Local\Programs\CodeBuddy\resources\app\extensions\genie\out\vendor\shim\sitecustomize.py", line 1055, in _exit_bulk_guard_control
+    raise SystemExit(1)
+SystemExit: 1

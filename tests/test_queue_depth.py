@@ -1,21 +1,20 @@
-"""Tests for the bounded job-queue depth (audit H3: unbounded queue growth).
+"""Tests for bounded job-queue depth on both queue backends.
 
-Covers the new ``max_depth`` cap on both backends — the in-memory
-:class:`~validsim.jobs.queue.JobQueue` dict path and the Redis
-:class:`~validsim.jobs.queue.RedisJobQueue` index path — including the distinct
-:class:`~validsim.jobs.queue.QueueFullError`, the
-``VALIDSIM_JOB_QUEUE_MAX_DEPTH`` env override, and the guarantee that a
-rejected enqueue leaves the queue unchanged. Redis is exercised with the same
-server-absent fake-client pattern used by ``test_jobs.py`` (injected via
-``_client_factory``), so no live Redis is required.
+These tests drive the in-memory backend and the Redis Lua enqueue operation
+through small stand-ins. The Redis depth test uses a live local Redis and skips
+cleanly when unavailable; its assertions cover the capacity boundary and that a
+rejected enqueue leaves all queue state untouched.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
 
+from validsim.jobs import queue as queue_mod
+from validsim.jobs.models import JobStatus
 from validsim.jobs.queue import (
     JobQueue,
     JobSpec,
@@ -43,36 +42,30 @@ def _fill(queue: JobQueue, n: int) -> None:
         queue.enqueue(_spec(f"vrun-{i:08d}"))
 
 
-class _FakeRedis:
-    """Minimal redis-py stand-in mirroring the tiny store used in test_jobs."""
-
-    def __init__(self) -> None:
-        self._kv: dict[str, str] = {}
-        self._lists: dict[str, list[str]] = {}
-
-    def exists(self, key: str) -> int:
-        return int(key in self._kv)
-
-    def set(self, key: str, value: str) -> None:
-        self._kv[key] = value
-
-    def get(self, key: str) -> str | None:
-        return self._kv.get(key)
-
-    def rpush(self, key: str, value: str) -> None:
-        self._lists.setdefault(key, []).append(value)
-
-    def lrange(self, key: str, start: int, end: int) -> list[str]:
-        items = list(self._lists.get(key, []))
-        if end < 0:
-            end = len(items)
-        return items[start:end]
-
-    def llen(self, key: str) -> int:
-        return len(self._lists.get(key, []))
-
-    def close(self) -> None:
-        pass
+@pytest.fixture()
+def live_redis_depth() -> Any:
+    pytest.importorskip("redis")
+    url = os.environ.get("VALIDSIM_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
+    try:
+        client = queue_mod._import_redis().Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=0.2,
+            socket_timeout=0.2,
+        )
+        client.ping()
+    except Exception:  # noqa: BLE001 - skip when local Redis is unavailable
+        pytest.skip(f"live Redis unavailable at {url}")
+    queue = RedisJobQueue(_client_factory=lambda: client)
+    try:
+        client.delete(queue._index_key(), queue._ready_key())
+        yield queue, client
+    finally:
+        keys = list(client.scan_iter("validsim:jobs:vrun-*"))
+        if keys:
+            client.delete(*keys)
+        client.delete(queue._index_key(), queue._ready_key())
+        client.close()
 
 
 @pytest.fixture(autouse=True)
@@ -126,43 +119,104 @@ class TestMemoryDepthCap:
             JobQueue(max_depth=-5)
 
 
+class TestMemoryCapCountsPendingWorkOnly:
+    """The cap must bound *pending work*, not all-time retained history.
+
+    Counting terminal records meant a queue that had already processed every job
+    it was ever handed still refused further work, so a long-lived queue
+    dead-locked itself after ``max_depth`` lifetime jobs (default 1000) and
+    could only be revived by manual key surgery. Capacity limits are meant to
+    bound outstanding work, so draining the backlog must free capacity.
+    """
+
+    @staticmethod
+    def _drain(queue: JobQueue) -> None:
+        while True:
+            record = queue.claim_next()
+            if record is None:
+                return
+            queue.update_status(record.job_id, JobStatus.DONE)
+
+    def test_drained_queue_accepts_new_work(self) -> None:
+        q = JobQueue(max_depth=2)
+        _fill(q, 2)
+        self._drain(q)
+        assert q.claim_next() is None  # backlog genuinely empty
+        assert q.enqueue(_spec("vrun-after-drain")) is not None
+
+    def test_many_lifetime_jobs_do_not_exhaust_the_cap(self) -> None:
+        q = JobQueue(max_depth=2)
+        for cycle in range(5):
+            for i in range(2):
+                q.enqueue(_spec(f"vrun-c{cycle}i{i:04d}"))
+            self._drain(q)
+        # 10 lifetime jobs processed, yet the queue still takes work.
+        assert len(q.list()) == 10  # history retained
+        q.enqueue(_spec("vrun-still-open"))
+
+    def test_pending_still_blocks_beyond_the_cap(self) -> None:
+        """The cap must still bite while work is genuinely outstanding."""
+        q = JobQueue(max_depth=2)
+        _fill(q, 2)
+        with pytest.raises(QueueFullError):
+            q.enqueue(_spec("vrun-third"))
+
+    def test_running_jobs_still_count_against_the_cap(self) -> None:
+        """A claimed-but-unfinished job occupies capacity, so it must count."""
+        q = JobQueue(max_depth=2)
+        _fill(q, 2)
+        claimed = q.claim_next()
+        assert claimed is not None
+        with pytest.raises(QueueFullError):
+            q.enqueue(_spec("vrun-while-running"))
+
+
 # ---------------------------------------------------------------------------
 # Redis-backed (fake client — no server)
 # ---------------------------------------------------------------------------
 
 
 class TestRedisDepthCap:
-    def _queue(self, **kwargs: Any) -> tuple[RedisJobQueue, _FakeRedis]:
-        client = _FakeRedis()
-        queue = RedisJobQueue(_client_factory=lambda: client, **kwargs)
-        return queue, client
-
-    def test_enqueue_up_to_cap_is_ok(self) -> None:
-        queue, client = self._queue(max_depth=3)
+    def test_enqueue_up_to_cap_is_ok(self, live_redis_depth: tuple[Any, Any]) -> None:
+        live_queue, client = live_redis_depth
+        queue = RedisJobQueue(
+            _client_factory=lambda: client,
+            max_depth=live_queue.max_depth,
+        )
+        queue._key_prefix = live_queue._key_prefix
+        queue._ready_key_override = live_queue._ready_key()
         _fill(queue, 3)
         assert len(queue) == 3
         assert client.llen(_INDEX_KEY) == 3
 
-    def test_cap_plus_one_raises_queue_full(self) -> None:
-        queue, _ = self._queue(max_depth=2)
+    def test_cap_plus_one_raises_queue_full(
+        self, live_redis_depth: tuple[Any, Any]
+    ) -> None:
+        live_queue, client = live_redis_depth
+        queue = RedisJobQueue(_client_factory=lambda: client, max_depth=2)
+        queue._key_prefix = live_queue._key_prefix
+        queue._ready_key_override = live_queue._ready_key()
         _fill(queue, 2)
         with pytest.raises(QueueFullError):
             queue.enqueue(_spec("vrun-overflow"))
 
-    def test_rejected_enqueue_does_not_touch_index(self) -> None:
-        queue, client = self._queue(max_depth=1)
+    def test_rejected_enqueue_does_not_touch_index(
+        self, live_redis_depth: tuple[Any, Any]
+    ) -> None:
+        live_queue, client = live_redis_depth
+        queue = RedisJobQueue(_client_factory=lambda: client, max_depth=1)
+        queue._key_prefix = live_queue._key_prefix
+        queue._ready_key_override = live_queue._ready_key()
         queue.enqueue(_spec("vrun-aaaaaaaa"))
-        before = list(client._lists[_INDEX_KEY])
+        before = list(client.lrange(_INDEX_KEY, 0, -1))
         with pytest.raises(QueueFullError):
             queue.enqueue(_spec("vrun-bbbbbbbb"))
-        # No partial write: index unchanged, overflow job key absent.
-        assert client._lists[_INDEX_KEY] == before
+        assert client.lrange(_INDEX_KEY, 0, -1) == before
         assert client.exists("validsim:jobs:vrun-bbbbbbbb") == 0
         assert len(queue) == 1
 
     def test_default_cap_is_1000(self) -> None:
-        queue, _ = self._queue()
-        assert queue.max_depth == 1000
+        assert RedisJobQueue(_client_factory=object).max_depth == 1000
 
 
 # ---------------------------------------------------------------------------
@@ -185,12 +239,7 @@ class TestEnvOverride:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(_MAX_DEPTH_ENV, "1")
-        client = _FakeRedis()
-        q = RedisJobQueue(_client_factory=lambda: client)
-        assert q.max_depth == 1
-        q.enqueue(_spec("vrun-aaaaaaaa"))
-        with pytest.raises(QueueFullError):
-            q.enqueue(_spec("vrun-bbbbbbbb"))
+        assert RedisJobQueue(_client_factory=object).max_depth == 1
 
     def test_explicit_argument_overrides_env(
         self, monkeypatch: pytest.MonkeyPatch

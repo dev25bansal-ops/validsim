@@ -26,7 +26,14 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
+coverage.xml
+/coverage-*.xml
 htmlcov/
+.validsim/
+*.db
+*.sqlite
+*.sqlite3
 
 # --- Virtual environments ------------------------------------------------------
 .venv/
@@ -35,6 +42,13 @@ env/
 
 # --- Tests: kept out of the runtime image (CI runs them from source) -----------
 tests/
+/*junit*.xml
+/pytest*.xml
+/_*.xml
+/pytest*.txt
+/_*.txt
+/collect.txt
+/*.log
 
 # --- Docs & business files ------------------------------------------------------
 *.docx

@@ -10,6 +10,9 @@ area: "03 - Product"
 
 # ✂️ MVP Scope
 
+> [!warning] Verify before external send — 2026-09-21
+> This page is the intended MVP acceptance plan, not evidence that each step is shipped. The repository currently provides a deterministic mock backend, optional HTTP worker adapter, static dashboard, reports, jobs, and local Actions; Isaac Lab execution, GPU throughput, media recordings, real webhooks, and external Action publication are not verified. Do not present the unchecked items as completed.
+
 > [!important] The wedge
 > Pick **one embodied-AI stack** (e.g., a GR00T-class or pi0-class VLA model) evaluated on **one standard manipulation benchmark** in Isaac Lab. Everything else is deferred ([[MVP Non-Goals]]).
 
@@ -20,13 +23,13 @@ Rationale: two founders, eight weeks, one demo video ([[Founding Team]], [[8-Wee
 | # | Capability | Detail | Sprint week |
 |---|---|---|---|
 | 1 | User submits a model checkpoint + task config via CLI or API | `validsim run --checkpoint ... --task bin_picking` | W6 |
-| 2 | System spins up Isaac Lab environment with the specified robot + task | Franka Panda, tabletop bin picking | W1 |
-| 3 | Runs **1,000–5,000 parallel simulation episodes** with domain randomization | 6+ randomization axes; <30 min on 4× A100 | W2 |
-| 4 | Generates **LLM-based adversarial scenarios** (50–100 edge cases) | GPT-4o prompt pipeline → scene JSON | W4 |
-| 5 | Evaluates success rate, failure taxonomy, safety metrics | Rule-based classifier; 0–100 safety score | W3 |
-| 6 | Compares against previous checkpoint (regression detection) | Bootstrap 95% CI; `GET /regressions` | W5 |
-| 7 | Outputs a **scorecard dashboard** + downloadable PDF report | Composite 40/30/20/10 weighting | W7–W8 |
-| 8 | Exposes results via webhook / GitHub Actions integration | Slack notification + PR comment | W6 |
+| 2 | System spins up Isaac Lab environment with the specified robot + task | **Planned**; the current default is a deterministic mock backend | W1 |
+| 3 | Runs **1,000–5,000 simulation episodes** with domain randomization | Current engine runs episodes serially in the mock; `<30 min on 4× A100` is an unverified target | W2 |
+| 4 | Generates **adversarial scenarios** (50–100 edge cases) across 12 categories | **Shipped as a deterministic, rule-based generator** (`scenarios/generator.py`) — reproducible from `(checkpoint_id, task_id)`, no network I/O. An LLM-backed generator exists (`scenarios/llm_generator.py`, `create_scenario_generator()`) and is tested, but **no run uses it**: `engine/pipeline.py:131` hardcodes the rule-based generator, so `VALIDSIM_LLM_ENABLED` / `VALIDSIM_LLM_API_KEY` have no effect. GPT-4o-to-Isaac scene editing is a separate, larger target | W4 |
+| 5 | Evaluates success rate, failure taxonomy, safety metrics | Composite evaluation and rule-based failure taxonomy are implemented; calibrated physics/safety realism is a target | W3 |
+| 6 | Compares against previous checkpoint (regression detection) | Bootstrap CI and `GET /regressions` are implemented | W5 |
+| 7 | Outputs a **scorecard dashboard** + downloadable PDF report | Static dashboard and PDF/JSON/Markdown/HTML reports exist; the React/Next.js screen is target state | W7–W8 |
+| 8 | Exposes results via webhook / GitHub Actions integration | HMAC dispatcher code and local Actions exist; public webhook registration and published Actions are planned | W6 |
 
 ## Benchmark choice
 
@@ -38,8 +41,8 @@ Rationale: two founders, eight weeks, one demo video ([[Founding Team]], [[8-Wee
 
 ## MVP definition of done
 
-- [ ] End-to-end: submit → simulate → evaluate → dashboard → PDF (Week 8, days 1–2)
-- [ ] Branded PDF scorecard generator (Week 8, days 2–3)
+- [x] End-to-end: submit → simulate → evaluate → dashboard → PDF (mock/static path; real Isaac path remains unverified)
+- [x] Branded PDF scorecard generator (API export)
 - [ ] 1-minute demo video, both founders on camera (Week 8, day 3) → [[YC Countdown]]
 - [ ] Technical blog post published (Week 8, day 5) = public artifact
 - [ ] All targets in [[MVP Success Metrics]] green

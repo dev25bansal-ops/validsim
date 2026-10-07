@@ -1,0 +1,279 @@
+---
+/**
+ * Fig 0.4 — one run, recorded.
+ *
+ * The page already prints the transcript as static text, which is the right
+ * default: it is selectable, searchable and readable with no plugin. So this
+ * section is not a replacement for that. It exists because a scorecard is a
+ * process, and a process is the one thing a static block cannot show — that
+ * the same run ends up in three places with the same verdict, and that the
+ * third one fails a build.
+ *
+ * The video is a recording of a real run, not a mock-up. Shot 1 types the CLI
+ * output verbatim, shot 3 shows that run leaving the GitHub Action with exit 1.
+ * Every figure in the recording matches the readout above it, which is the
+ * point: the reader can check.
+ *
+ * The run id is NOT written here. It is read from `readout.runId` — the same
+ * field the scorecard and the transcript render — because this section's whole
+ * claim is that the video, the terminal and the scorecard are one run. An id
+ * typed in by hand is how that claim silently rots: run ids are minted per run
+ * (`vrun-<8 hex of uuid4>`), so a second hardcoded id is not a formatting
+ * variance, it is a different run, and the reader is left looking at two
+ * mutually exclusive runs while the prose insists they are the same one.
+ *
+ * The narration underneath is a SHOT LIST, not a caption track. A reader who
+ * cannot or will not play the video must still be able to read what it shows,
+ * so each step is in the DOM as text and the video only illustrates it.
+ */
+import { readout } from '../data/content';
+
+const runId = readout.runId;
+
+const shots = [
+  {
+    at: '00:04',
+    title: 'The CLI returns the scorecard',
+    body: 'The same command the docs tell you to run, typed out at speed: 69.0% nominal, 34.0% adversarial against a 60% floor, robustness not measured, composite 72.7 against a threshold of 85.0.',
+  },
+  {
+    at: '00:08',
+    title: 'The same number, drawn as a measurement',
+    body: 'The composite sits where it landed and the gate sits where it had to. The twelve points between them are the finding, and they are the same finding the terminal just printed.',
+  },
+  {
+    at: '00:11',
+    title: 'The Action fails the pull request',
+    body: `${runId} goes into a GitHub check, the action gates on it, and the job exits 1. An unvalidated model update cannot merge by default — the one thing a dashboard cannot do for you.`,
+  },
+] as const;
+---
+
+<section class="band" id="run">
+  <div class="wrap">
+    <div class="rec-head reveal">
+      <p class="fig-label">Fig 0.3 — one run, three surfaces</p>
+      <h2>The same run, all the way through</h2>
+      <p>
+        Fifteen seconds of a real validation. Nothing here is staged: the run id is the one the
+        Action gated on, and the numbers are the ones on the scorecard above.
+      </p>
+    </div>
+
+    <div class="rec reveal" data-runrec data-playing="0">
+      <div class="rec-frame">
+        <video
+          src="/validsim-run.webm"
+          poster="/validsim-run-poster.png"
+          width="1280"
+          height="720"
+          autoplay
+          muted
+          loop
+          playsinline
+          preload="none"
+          controls
+        >
+          Your browser cannot play WebM.
+          <a href="/validsim-run.webm">Download the recording</a> instead — it is the same run.
+        </video>
+
+        <button type="button" class="rec-play" data-play-toggle>Play the run</button>
+
+        <span class="rec-bar" aria-hidden="true"><b>recording</b> {runId} · 00:15</span>
+      </div>
+
+      <ol class="rec-shots">
+        {
+          shots.map((shot) => (
+            <li>
+              <span class="rec-at">{shot.at}</span>
+              <div>
+                <h3>{shot.title}</h3>
+                <p>{shot.body}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+
+      <p class="rec-download">
+        <a href="/validsim-run.webm" download>Download the recording</a>
+        <span>· 823 KB, WebM, no audio track</span>
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .rec-head {
+    max-width: var(--measure);
+    margin-block-end: clamp(2.5rem, 5vw, 3.5rem);
+  }
+  .rec-head p {
+    margin-block-start: 1rem;
+    color: var(--ink-mid);
+    font-size: var(--t-lg);
+    max-width: 58ch;
+  }
+
+  .rec {
+    display: grid;
+    gap: clamp(2rem, 4vw, 3rem);
+  }
+
+  /* -- the frame ----------------------------------------------------------- */
+
+  .rec-frame {
+    position: relative;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    background: var(--panel);
+    overflow: clip;
+  }
+
+  video {
+    inline-size: 100%;
+    block-size: auto;
+    aspect-ratio: 16 / 9;
+    background: var(--chassis);
+  }
+
+  /* The frame is presented as a recorded artefact rather than a web page: a
+     caption strip in the same chrome as the hero's terminal, so the two are
+     visibly the same kind of object. */
+  .rec-bar {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline: 0;
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    padding: 0.7rem 1rem;
+    background: linear-gradient(to bottom, oklch(0.12 0.008 90 / 0.9), transparent);
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    color: var(--ink-dim);
+    pointer-events: none;
+  }
+  .rec-bar b {
+    color: var(--ink-mid);
+    font-weight: 500;
+    font-style: normal;
+  }
+  /* A live tally light. The recording is 15 seconds, so this is honest: it
+     marks a real capture, not a decorative pulse. */
+  .rec-bar b::before {
+    content: '';
+    display: inline-block;
+    inline-size: 0.45rem;
+    block-size: 0.45rem;
+    border-radius: 50%;
+    background: var(--block);
+    margin-inline-end: 0.5rem;
+    translate: 0 -1px;
+  }
+
+  /* The play control. Sits centred on the poster so it reads as a control for
+     the frame, and appears whenever playback is not running. It is never
+     overlaid on a playing video — the element carries `controls`, and the
+     browser's own bar is the right affordance mid-playback. Two visible
+     controls for one video is how a reader ends up pressing the wrong one. */
+  .rec-play {
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-start: 50%;
+    translate: -50% -50%;
+    padding: 0.8rem 1.4rem;
+    background: var(--unmeasured);
+    color: var(--chassis);
+    font-family: var(--font);
+    font-size: var(--t-sm);
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    border: 0;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: opacity 0.25s cubic-bezier(0.25, 1, 0.5, 1);
+  }
+  .rec-play:hover {
+    background: color-mix(in oklch, var(--unmeasured) 86%, white);
+  }
+  .rec[data-playing='1'] .rec-play {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .rec-play:disabled {
+    background: var(--raised);
+    color: var(--ink-dim);
+    cursor: not-allowed;
+  }
+
+  /* -- the shot list ------------------------------------------------------- */
+
+  .rec-shots {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border-block-start: 1px solid var(--rule);
+  }
+  .rec-shots li {
+    display: grid;
+    gap: 0.4rem 1.5rem;
+    padding-block: 1.15rem;
+    border-block-end: 1px solid var(--rule);
+  }
+  @media (width > 44rem) {
+    .rec-shots li {
+      grid-template-columns: 5rem 1fr;
+    }
+  }
+  .rec-at {
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    color: var(--unmeasured);
+    letter-spacing: 0.06em;
+    font-variant-numeric: tabular-nums;
+  }
+  .rec-shots h3 {
+    font-size: var(--t-base);
+    font-weight: 500;
+  }
+  .rec-shots p {
+    margin-block-start: 0.35rem;
+    color: var(--ink-dim);
+    font-size: var(--t-sm);
+    max-width: 58ch;
+  }
+
+  .rec-download {
+    font-family: var(--mono);
+    font-size: var(--t-xs);
+    color: var(--ink-dim);
+  }
+  .rec-download a {
+    color: var(--ink-mid);
+    text-underline-offset: 0.25em;
+  }
+  .rec-download span {
+    color: var(--ink-dim);
+  }
+  .rec-download a:hover {
+    color: var(--ink);
+  }
+
+  /* A reader who asked for less motion gets the frame without the reveal. */
+  @media (prefers-reduced-motion: reduce) {
+    .rec-play {
+      transition: none;
+    }
+  }
+
+  /* In forced-colors the amber button loses its fill, so the label has to
+     carry the meaning on its own — it already says what it does. */
+  @media (forced-colors: active) {
+    .rec-play {
+      border: 1px solid ButtonText;
+    }
+  }
+</style>

@@ -1,0 +1,12 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.8, pytest-9.1.1, pluggy-1.6.0
+rootdir: D:\SIM-TO-REAL
+configfile: pytest.ini
+plugins: anyio-4.15.1, hypothesis-6.168.3, cov-7.1.0
+collected 3 items / 1 deselected / 2 selected
+
+tests\bench\test_bench_stability.py ..                                   [100%]
+
+========================== benchmark regression gate ==========================
+all benchmarks within tolerance
+======================= 2 passed, 1 deselected in 1.14s =======================

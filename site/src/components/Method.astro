@@ -1,0 +1,61 @@
+---
+/**
+ * The method section — the strongest asset on the page, because it is true.
+ * Three items as ruled columns, not three cards with icons.
+ */
+import { method } from '../data/content';
+---
+
+<section class="band" id="method">
+  <div class="wrap">
+    <div class="band-head reveal">
+      <p class="fig-label">Fig 0.2 — the method</p>
+      <h2>The gate we run on ourselves</h2>
+      <p>
+        We have no customers to show you. The only thing left is how we work, so here is a real
+        example rather than a slogan.
+      </p>
+    </div>
+
+    <div class="method reveal">
+      {
+        method.map((item) => (
+          <article class="method-item">
+            <h3>{item.title}</h3>
+            <p>{item.body}</p>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .method {
+    display: grid;
+    gap: 0;
+  }
+  @media (width > 52rem) {
+    .method {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  .method-item {
+    padding: 2rem 1.75rem 2rem 0;
+    border-block-start: 2px solid var(--approve);
+  }
+  @media (width > 52rem) {
+    .method-item + .method-item {
+      padding-inline-start: 1.75rem;
+    }
+  }
+  h3 {
+    font-size: var(--t-base);
+    font-weight: 700;
+    margin-block-end: 0.75rem;
+  }
+  p {
+    font-size: var(--t-sm);
+    color: var(--ink-mid);
+  }
+</style>
