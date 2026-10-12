@@ -227,7 +227,7 @@ def _flaky_backend(failures: int, message: str = "transient") -> Any:
 def _captured_records(logger_name: str = "validsim.jobs") -> Iterator[Any]:
     """Yield an accessor returning the :class:`logging.LogRecord` list captured.
 
-    :func:`validsim.logging.configure_logging` deliberately sets
+    :func:`validsim._log.configure_logging` deliberately sets
     ``propagate = False`` on the ``validsim`` logger so an embedding host that
     configures root logging does not receive every ValidSim record twice -- once
     as our JSON line and once in the host's own format. That is a real property

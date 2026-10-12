@@ -2,7 +2,7 @@
 
 Covers the three pieces wired into :func:`validsim.api.main.create_app`:
 
-* :mod:`validsim.logging` — idempotent JSON logging configuration.
+* :mod:`validsim._log` — idempotent JSON logging configuration.
 * The ASGI observability middleware — ``X-Request-ID`` echo/generation and the
   in-process HTTP request counter.
 * :mod:`validsim.api.metrics` — the Prometheus text endpoint, its content type,
@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from validsim import __version__
 from validsim.api.main import create_app
 from validsim.api.metrics import HTTP_METRIC_NAME, Metrics, render_metrics
-from validsim.logging import configure_logging
+from validsim._log import configure_logging
 from validsim.store.memory import ValidationStore
 
 #: Env vars ``create_app`` reads at build time; cleared before every test so
@@ -193,7 +193,7 @@ class TestLoggingConfiguration:
         assert len(logging.getLogger("validsim").handlers) == count
 
     def test_get_logger_namespaces_under_validsim(self) -> None:
-        from validsim.logging import get_logger
+        from validsim._log import get_logger
 
         assert get_logger("api.access").name == "validsim.api.access"
         assert get_logger("validsim.engine").name == "validsim.engine"
@@ -202,7 +202,7 @@ class TestLoggingConfiguration:
         import io
         import json
 
-        from validsim.logging import JsonLogFormatter
+        from validsim._log import JsonLogFormatter
 
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)

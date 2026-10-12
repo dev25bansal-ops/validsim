@@ -109,7 +109,7 @@ from validsim.engine.export import scorecard_to_html, scorecard_to_markdown
 from validsim.engine.pdf import scorecard_pdf_bytes
 from validsim.engine.pipeline import DEFAULT_THRESHOLD, BaselineNotFoundError, run_and_score
 from validsim.engine.regression import compare
-from validsim.logging import configure_logging, get_logger
+from validsim._log import configure_logging, get_logger
 from validsim.notify.config import notify_config_from_env
 from validsim.sim import create_backend
 from validsim.sim.runner import run_validation, stable_seed

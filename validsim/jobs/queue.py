@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, ClassVar
 
 from validsim.jobs.models import TERMINAL_STATUSES, JobRecord, JobSpec, JobStatus
-from validsim.logging import get_logger
+from validsim._log import get_logger
 
 __all__ = [
     "JobQueue",

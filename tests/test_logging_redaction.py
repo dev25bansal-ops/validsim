@@ -46,7 +46,7 @@ import logging
 
 import pytest
 
-from validsim.logging import (
+from validsim._log import (
     REDACTED,
     JsonLogFormatter,
     configure_logging,

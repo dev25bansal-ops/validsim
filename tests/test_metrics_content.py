@@ -12,7 +12,7 @@ this module checks that it is *correct*:
 * the in-process HTTP counter is bumped once per request and bucketed by status
   class by the ASGI observability middleware in :mod:`validsim.api.main`;
 * the body is well-formed Prometheus text exposition served as ``text/plain``;
-* :func:`validsim.logging.configure_logging` is idempotent (a second call never
+* :func:`validsim._log.configure_logging` is idempotent (a second call never
   duplicates handlers).
 
 No source is modified: runs are seeded straight into a
@@ -42,8 +42,8 @@ from validsim.api.metrics import (
 from validsim.engine.evaluation import EvaluationResult
 from validsim.engine.safety import SafetyResult
 from validsim.engine.scorecard import Scorecard
-import validsim.logging as _logging_module
-from validsim.logging import configure_logging
+import validsim._log as _logging_module
+from validsim._log import configure_logging
 from validsim.store.memory import StoredRun, ValidationStore
 
 #: Env vars ``create_app`` reads at build time; cleared before every test so
@@ -75,7 +75,7 @@ _EXPECTED_TYPES = {
     HTTP_METRIC_NAME: "counter",
 }
 
-#: Attribute markers :mod:`validsim.logging` uses to recognise its own handler
+#: Attribute markers :mod:`validsim._log` uses to recognise its own handler
 #: and configured state. Read defensively so an internal rename shows up as a
 #: failed assertion rather than an import error.
 _HANDLER_MARKER = getattr(_logging_module, "_HANDLER_MARKER", "_validsim_json_handler")
