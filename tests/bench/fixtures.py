@@ -47,13 +47,32 @@ def seeded_store(count: int) -> ValidationStore:
     """An in-memory store of ``count`` distinct runs at one episode each."""
     proto = prototype_run(1)
     store = ValidationStore()
-    for i in range(count):
-        store.save(
-            StoredRun(
-                **{**proto.__dict__, "run_id": f"vrun-{i:08x}", "created_at": _stamp(i)}
-            )
+    store.save_many(
+        StoredRun(
+            **{**proto.__dict__, "run_id": f"vrun-{i:08x}", "created_at": _stamp(i)}
         )
+        for i in range(count)
+    )
     return store
+
+
+def seed_store(store: ValidationStore, count: int) -> None:
+    """Load ``count`` distinct runs into ``store`` in one bulk write.
+
+    Uses :meth:`~validsim.store.memory.ValidationStore.save_many` rather than a
+    ``save`` loop. Both are observably identical -- append-only, same rows, same
+    conflict rule -- but a disk-backed ``save`` commits (and therefore fsyncs)
+    per call, which measures ~15 minutes for 100 000 rows against under three
+    seconds batched. Seeding is pure fixture setup, so paying the slow path
+    bought nothing and made the store-scale benchmarks unrunnable.
+    """
+    proto = prototype_run(1)
+    store.save_many(
+        StoredRun(
+            **{**proto.__dict__, "run_id": f"vrun-{i:08x}", "created_at": _stamp(i)}
+        )
+        for i in range(count)
+    )
 
 
 def clone_runs(proto: StoredRun, count: int, *, distinct_stamps: bool = True) -> list[StoredRun]:

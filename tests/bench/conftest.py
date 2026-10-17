@@ -92,14 +92,49 @@ def record(name: str, median_ms: float) -> None:
     _RESULTS[name] = median_ms
 
 
-def _affordable_rounds(func: Callable[[], Any], rounds: int, budget_s: float) -> int:
-    """Time one call, then choose a round count that fits ``budget_s``."""
-    start = time.perf_counter()
-    func()
-    single_s = time.perf_counter() - start
-    if single_s <= 0:
-        return rounds
-    return max(MIN_ROUNDS, min(rounds, int(budget_s / single_s)))
+def plan_rounds(
+    single_s: float, rounds: int, warmup: int, budget_s: float
+) -> tuple[int, int]:
+    """Split ``budget_s`` into (warmup, measured) call counts for one call cost.
+
+    Pure arithmetic -- no clock, no I/O -- so the budget policy is testable
+    without sleeping. ``budget_s`` bounds the *total* wall clock (warmups
+    included), so it is a ceiling on how many calls are affordable, not a floor
+    under the measured count. The previous
+    ``max(MIN_ROUNDS, min(rounds, budget // single))`` had no ceiling at all:
+    when a single call already cost more than the whole budget it still forced
+    ``MIN_ROUNDS`` measured calls *plus* the warmups, so an expensive benchmark
+    overran by an unbounded factor. That is not hypothetical -- the 100k-episode
+    bootstrap costs ~12s per call, ran five of them for a nominal 3s budget, and
+    the "fast" tier never finished, which is why no ``baseline.json`` could be
+    generated and the compare gate was permanently stuck at "cannot measure".
+
+    ``MIN_ROUNDS`` is still honoured whenever it fits: warmups are sacrificed
+    first (they only stabilise allocator/cache state, which matters far less
+    than having a median at all), and only when the budget cannot fit
+    ``MIN_ROUNDS`` measured samples does the count drop below it -- never below
+    one, because a single sample is still a measurement.
+
+    Args:
+        single_s: Measured cost of one call, in seconds.
+        rounds: Maximum measured samples wanted (``DEFAULT_ROUNDS``).
+        warmup: Maximum discarded warmup calls wanted (``DEFAULT_WARMUP``).
+        budget_s: Total wall-clock budget for this benchmark, in seconds.
+
+    Returns:
+        ``(warmup_calls, measured_rounds)``; both non-negative and
+        ``measured_rounds >= 1``. Their sum never exceeds ``budget_s/single_s``
+        (rounded up), except that at least one call is always taken so an
+        over-budget benchmark is still measured once.
+    """
+    if single_s <= 0:  # pragma: no cover - a call cannot cost zero time
+        return warmup, rounds
+    total = max(1, int(budget_s / single_s))
+    # Keep a warmup only while MIN_ROUNDS measured samples still fit alongside
+    # it; otherwise spend the whole budget on measurement.
+    warm = min(warmup, max(0, total - MIN_ROUNDS))
+    measured = min(rounds, max(1, total - warm))
+    return warm, measured
 
 
 def compare_to_baseline() -> list[str]:
@@ -138,11 +173,24 @@ def compare_to_baseline() -> list[str]:
         delta = current - prior
         if delta <= 0 or delta < ABSOLUTE_FLOOR_MS:
             continue
-        if delta / prior <= REGRESSION_TOLERANCE:
+        # A zero prior means the baseline run measured below timer resolution
+        # (``memstore_count_n*`` does: it is O(1) under a lock). The ratio is
+        # then undefined and ``delta / prior`` raised ZeroDivisionError, turning
+        # a measurable regression into a crashed gate -- the one outcome worse
+        # than a missed regression, because the whole run dies and reports
+        # nothing. Fall back to the absolute test that already admitted this
+        # branch: with no ratio to normalise by, any increase over the noise
+        # floor is a regression.
+        if prior > 0 and delta / prior <= REGRESSION_TOLERANCE:
             continue
+        # The percentage is only meaningful with a non-zero prior, so the
+        # message must not divide either -- guarding the comparison above but
+        # not this f-string would still crash on exactly the rows the guard
+        # exists for.
+        ratio = f"+{100 * delta / prior:.0f}%" if prior > 0 else "no baseline ratio"
         failures.append(
             f"{name}: {current:.1f}ms vs baseline {prior:.1f}ms "
-            f"(+{delta:.1f}ms, +{100 * delta / prior:.0f}%)"
+            f"(+{delta:.1f}ms, {ratio})"
         )
     return failures
 
@@ -261,12 +309,20 @@ def time_benchmark(
 
     ``name`` is the stable key written to ``baseline.json``; keep it descriptive
     and stable across refactors (e.g. ``bootstrap_ci_n10000_resamples500``).
+
+    The first call doubles as the cost probe: :func:`plan_rounds` turns its
+    duration into a (warmup, measured) split that fits
+    :data:`PER_BENCHMARK_BUDGET_S` in total, so an expensive benchmark is
+    sampled once instead of overrunning the budget by a multiple.
     """
-    affordable = _affordable_rounds(func, rounds, PER_BENCHMARK_BUDGET_S)
-    for _ in range(warmup):
+    probe_start = time.perf_counter()
+    func()
+    single_s = time.perf_counter() - probe_start
+    warm, measured = plan_rounds(single_s, rounds, warmup, PER_BENCHMARK_BUDGET_S)
+    for _ in range(warm):
         func()
     samples: list[float] = []
-    for _ in range(affordable):
+    for _ in range(measured):
         start = time.perf_counter()
         func()
         samples.append((time.perf_counter() - start) * 1000.0)
@@ -274,7 +330,8 @@ def time_benchmark(
     record(name, median_ms)
     print(
         f"[bench] {name}: median {median_ms:.2f}ms "
-        f"(min {min(samples):.2f} / max {max(samples):.2f}, {affordable} rounds)"
+        f"(min {min(samples):.2f} / max {max(samples):.2f}, "
+        f"{measured} rounds, {warm} warmup)"
     )
     return median_ms
 
