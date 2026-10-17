@@ -5,6 +5,32 @@
 **Working tree at assessment:** clean  
 **Status:** evidence-backed remediation backlog; no code changes are included in this document
 
+> **Remediation status (2026-10-16).** The entries below are a point-in-time
+> assessment against the pinned baseline and are deliberately *not* rewritten as
+> work lands, so the original evidence stays checkable. Since this assessment,
+> the following have been remediated in the working tree:
+>
+> * **SEC-007** — CORS now defaults to an **empty** allow-list, and
+>   `VALIDSIM_ENV=production` refuses to start with a wildcard
+>   `VALIDSIM_CORS_ORIGINS`. The bare `/metrics` scrape path also requires
+>   `X-API-Key` in production unless `VALIDSIM_METRICS_PUBLIC` is set.
+> * **SEC-008** — webhook egress now shares one policy
+>   (`validsim/notify/egress.py`) across `VALIDSIM_WEBHOOK_URLS` and
+>   `WebhookDispatcher.register()`, refusing loopback, link-local, RFC1918,
+>   CGNAT, multicast, reserved and unspecified hosts plus well-known metadata
+>   hostnames; redirects are not followed. *Residual:* a DNS name resolving to a
+>   private address is not caught (the check performs no lookup).
+> * **BUG-002** — the benchmark round planner now bounds each benchmark's
+>   **total** wall clock (`tests/bench/conftest.py::plan_rounds`) instead of
+>   enforcing a floor of `MIN_ROUNDS` with no ceiling, and a baseline has been
+>   committed so the compare gate can actually measure. Bulk seeding
+>   (`ValidationStore.save_many`, one transaction) removed the unbounded fixture
+>   cost that stopped the baseline being generated at all.
+> * **BUG-003** — `compare_to_baseline` no longer raises `ZeroDivisionError` when
+>   the baseline entry is `0.0` (which the committed baseline contains, because
+>   `memstore_count_n*` measures below timer resolution); it falls back to the
+>   absolute noise floor.
+
 ## Purpose and scope
 
 This catalog records concrete problems requiring remediation in the ValidSim repository. It covers:
