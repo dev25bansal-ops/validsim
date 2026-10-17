@@ -7,9 +7,12 @@ The benchmark at the bottom then reports what the equality costs.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import sqlite3
+from typing import Iterator
 
 import pytest
 
@@ -31,6 +34,31 @@ from validsim.store.sqlite import SqliteValidationStore  # noqa: E402
 
 APPROVE = "APPROVE"
 BLOCK = "BLOCK"
+
+
+@contextlib.contextmanager
+def _quiet_logs() -> Iterator[None]:
+    """Mute every logger below CRITICAL for the duration of a benchmark.
+
+    ``logging.disable`` is **process-global**: it raises the floor for every
+    logger in the interpreter, not just this module's, and it stays raised until
+    something lowers it again. Called bare inside a benchmark body it therefore
+    outlives the test -- and every later test that asserts on a captured log
+    record then sees nothing, because the record is discarded by
+    ``Logger.isEnabledFor`` before any handler runs. That is not a hypothetical:
+    it silently broke the dead-letter, log-redaction and JSON-log-line tests in
+    the full suite, which all pass in isolation and only fail when this file
+    runs first.
+
+    Restoring the previous value on exit keeps the intent (benchmarks should not
+    pay for log formatting) without exporting the side effect.
+    """
+    previous = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        logging.disable(previous)
 
 
 def _stamp(i: int) -> str:
@@ -305,34 +333,93 @@ def _median_ms(fn, *, warmup: int, rounds: int) -> float:
 @pytest.mark.parametrize("count", BENCH_SIZES)
 def test_bench_totals_fast_vs_slow(tmp_path, count: int) -> None:
     """store_totals() vs the history() body, on both backends."""
-    import logging
-
-    logging.disable(logging.CRITICAL)
-    for label, store in _stores(tmp_path, count):
-        slow = _median_ms(lambda: _slow_totals(store), warmup=1, rounds=3)
-        fast = _median_ms(lambda: store_totals(store), warmup=2, rounds=7)
-        print(
-            f"\n[bench] totals {label:<7} n={count:<7} slow(history) {slow:9.2f}ms "
-            f"-> fast(projection) {fast:7.3f}ms  ({slow / fast:.0f}x)"
-        )
-        assert store_totals(store) == _slow_totals(store)
+    with _quiet_logs():
+        for label, store in _stores(tmp_path, count):
+            slow = _median_ms(lambda: _slow_totals(store), warmup=1, rounds=3)
+            fast = _median_ms(lambda: store_totals(store), warmup=2, rounds=7)
+            print(
+                f"\n[bench] totals {label:<7} n={count:<7} slow(history) {slow:9.2f}ms "
+                f"-> fast(projection) {fast:7.3f}ms  ({slow / fast:.0f}x)"
+            )
+            assert store_totals(store) == _slow_totals(store)
 
 
 @pytest.mark.benchmark
 @pytest.mark.parametrize("count", BENCH_SIZES)
 def test_bench_summaries_page_fast_vs_slow(tmp_path, count: int) -> None:
     """A single 25-item page: the list endpoint's actual access pattern."""
-    import logging
+    with _quiet_logs():
+        for label, store in _stores(tmp_path, count):
+            slow = _median_ms(lambda: _slow_summaries(store, 25, 0), warmup=1, rounds=3)
+            fast = _median_ms(lambda: run_summaries(store, limit=25, offset=0), warmup=2, rounds=7)
+            print(
+                f"\n[bench] page25 {label:<7} n={count:<7} slow(history) {slow:9.2f}ms "
+                f"-> fast(projection) {fast:7.3f}ms  ({slow / fast:.0f}x)"
+            )
+            assert run_summaries(store, limit=25, offset=0) == _slow_summaries(store, 25, 0)
 
-    logging.disable(logging.CRITICAL)
-    for label, store in _stores(tmp_path, count):
-        slow = _median_ms(lambda: _slow_summaries(store, 25, 0), warmup=1, rounds=3)
-        fast = _median_ms(lambda: run_summaries(store, limit=25, offset=0), warmup=2, rounds=7)
-        print(
-            f"\n[bench] page25 {label:<7} n={count:<7} slow(history) {slow:9.2f}ms "
-            f"-> fast(projection) {fast:7.3f}ms  ({slow / fast:.0f}x)"
-        )
-        assert run_summaries(store, limit=25, offset=0) == _slow_summaries(store, 25, 0)
+
+class TestLogMutingDoesNotLeak:
+    """The benchmark mute must not outlive the benchmark.
+
+    ``logging.disable`` is global and sticky. Before the fix this file called it
+    bare inside two benchmark bodies, which muted every logger in the process for
+    the rest of the session and made six log-assertion tests in other files fail
+    -- all of them green in isolation, all of them red in the full suite. These
+    tests pin the property rather than the symptom, so a future benchmark that
+    reaches for ``logging.disable`` fails here instead of three files away.
+    """
+
+    def test_the_mute_is_lifted_on_exit(self) -> None:
+        with _quiet_logs():
+            assert logging.root.manager.disable == logging.CRITICAL
+        assert logging.root.manager.disable == 0
+
+    def test_a_record_is_delivered_after_the_block(self) -> None:
+        """The observable consequence: a handler still receives records.
+
+        This is the exact mechanism that broke the dead-letter capture tests --
+        the record never reached the handler, because ``isEnabledFor`` rejected
+        it before dispatch.
+        """
+        seen: list[str] = []
+
+        class _Collector(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                seen.append(record.getMessage())
+
+        logger = logging.getLogger("validsim.jobs.queue")
+        handler = _Collector(level=logging.DEBUG)
+        logger.addHandler(handler)
+        previous_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        try:
+            with _quiet_logs():
+                logger.warning("muted")
+            assert seen == [], "the mute must actually silence inside the block"
+
+            logger.warning("after")
+            assert seen == ["after"], (
+                "the mute leaked past the block, so a later test asserting on a "
+                "log record would see nothing"
+            )
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous_level)
+
+    def test_a_prior_disable_value_is_restored_not_clobbered(self) -> None:
+        """Restoring means restoring, not resetting to zero.
+
+        If an embedding host had already muted the process, this file must put
+        that back rather than silently un-muting it.
+        """
+        logging.disable(logging.ERROR)
+        try:
+            with _quiet_logs():
+                assert logging.root.manager.disable == logging.CRITICAL
+            assert logging.root.manager.disable == logging.ERROR
+        finally:
+            logging.disable(0)
 
 
 if __name__ == "__main__":
