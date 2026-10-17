@@ -118,6 +118,13 @@ def scorecard_to_markdown(sc: Scorecard) -> str:
         "",
         f"- **Run:** {run_id}",
         f"- **Checkpoint:** {checkpoint_id}",
+    ]
+    # Chain of custody: only render the digest when the run carried one. A
+    # placeholder line would read as "the artifact was not pinned", which is
+    # exactly the ambiguity the digest exists to remove.
+    if sc.checkpoint_sha256:
+        lines.append(f"- **Checkpoint SHA-256:** {_md_code_span(sc.checkpoint_sha256)}")
+    lines += [
         f"- **Task:** {task_id}",
         f"- **Created:** {created_at}",
         "",

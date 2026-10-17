@@ -233,6 +233,18 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
     ("validsim.notify.config", "NotifyConfig"): "result type of the unwired notify_config_from_env",
     ("validsim.notify.config", "HookSpec"): "element type of the unwired NotifyConfig",
     (
+        "validsim.notify.egress",
+        "forbidden_host_reason",
+    ): "SSRF egress policy; called only by the unwired notify layer",
+    (
+        "validsim.notify.egress",
+        "url_rejection_reason",
+    ): "SSRF egress policy; called only by the unwired notify layer",
+    (
+        "validsim.notify.egress",
+        "is_deliverable_url",
+    ): "SSRF egress policy; called only by the unwired notify layer",
+    (
         "validsim.config_loader",
         "ConfigFileError",
     ): "raised by the unwired config_loader bridge; no production importer",
@@ -882,6 +894,9 @@ def test_module_level_orphans_are_declared_entry_points() -> None:
         "validsim.notify.config",
         "validsim.notify.dispatcher",
         "validsim.notify.email",
+        # The SSRF egress policy: imported only by notify/config and
+        # notify/dispatcher, both of which are themselves unwired.
+        "validsim.notify.egress",
         # An O(1) store-summary projection with its own test suite but not yet
         # routed to; delete this line once an endpoint calls it.
         "validsim.api.store_stats",

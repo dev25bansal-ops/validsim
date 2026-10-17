@@ -491,3 +491,48 @@ class TestUnmeasuredBaselineIsNotACleanOne:
         card = _build(_episodes(n_success=7, n_failure=3), regression=report)
         assert card.regression_baseline_available is True
 
+
+class TestCheckpointSha256ChainOfCustody:
+    """The scorecard must carry the artifact digest it was given -- and only then.
+
+    The API schema has always *accepted* ``checkpoint_sha256``, but nothing
+    threaded it onto the record, so a verdict could not be tied to one
+    artifact. These lock the field down in both directions: recorded when
+    supplied, ``None`` (never fabricated) when not.
+    """
+
+    def _build_with_sha(self, sha: str | None) -> Scorecard:
+        episodes = _episodes(n_success=8, n_failure=2)
+        return build_scorecard(
+            run_id="vrun-cafe1234",
+            checkpoint_id="ckpt-1",
+            task=_task(),
+            evaluation=evaluate(episodes),
+            safety=_safety(100.0),
+            episodes=episodes,
+            created_at="2026-01-01T00:00:00+00:00",
+            checkpoint_sha256=sha,
+        )
+
+    def test_digest_is_recorded_verbatim(self) -> None:
+        digest = "0123456789abcdef" * 4
+        assert self._build_with_sha(digest).checkpoint_sha256 == digest
+
+    def test_absent_digest_stays_none_and_is_not_fabricated(self) -> None:
+        card = self._build_with_sha(None)
+        assert card.checkpoint_sha256 is None
+        # It must not be derived from the id: a name is not a hash.
+        assert card.checkpoint_sha256 != card.checkpoint_id
+
+    def test_digest_round_trips_through_json(self) -> None:
+        digest = "f" * 64
+        card = self._build_with_sha(digest)
+        assert json.loads(card.to_json())["checkpoint_sha256"] == digest
+
+    def test_digest_does_not_move_the_verdict(self) -> None:
+        """Provenance only: adding the digest must not change any score."""
+        with_sha = self._build_with_sha("a" * 64)
+        without = self._build_with_sha(None)
+        assert with_sha.composite_score == without.composite_score
+        assert with_sha.deploy_decision == without.deploy_decision
+

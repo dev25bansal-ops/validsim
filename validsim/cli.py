@@ -386,6 +386,36 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _normalise_sha256(value: str) -> str:
+    """Validate and lower-case a caller-supplied SHA-256 hex digest.
+
+    The digest is chain-of-custody metadata, so it is normalised rather than
+    trusted: surrounding whitespace and upper-case hex are folded to the
+    canonical lower-case form (the same bytes hash identically regardless of
+    case), and anything that is not 64 hex characters is rejected with a
+    ``typer.BadParameter`` so the CLI exits non-zero instead of persisting a
+    digest that merely *looks* like provenance.
+
+    Args:
+        value: Raw digest text from ``--checkpoint-sha256``.
+
+    Returns:
+        The canonical 64-character lower-case hex digest.
+
+    Raises:
+        typer.BadParameter: ``value`` is not a 64-character hex string.
+    """
+    candidate = value.strip().lower()
+    if not _SHA256_RE.match(candidate):
+        raise typer.BadParameter(
+            "checkpoint SHA-256 must be exactly 64 hexadecimal characters"
+        )
+    return candidate
+
+
 def _run_impl(
     task: str,
     robot: str,
@@ -394,6 +424,7 @@ def _run_impl(
     checkpoint: str,
     environment: str,
     threshold: float,
+    checkpoint_sha256: str | None = None,
 ) -> None:
     """Shared body for the ``run`` and ``validate`` commands.
 
@@ -403,7 +434,14 @@ def _run_impl(
     JSON and prints the human-readable summary. ``validate`` is a pure
     discoverability alias of ``run`` (see :func:`validate`); both delegate here
     so their behaviour can never drift apart.
+
+    ``checkpoint_sha256`` is optional chain-of-custody metadata. When given it
+    is recorded on the scorecard and echoed in the summary; a malformed digest
+    is rejected up front rather than stored, because a bad digest that silently
+    round-trips is worse than no digest at all -- it looks like provenance.
     """
+    if checkpoint_sha256 is not None:
+        checkpoint_sha256 = _normalise_sha256(checkpoint_sha256)
     config = TaskConfig(
         task_id=task,
         robot=RobotSpec(name=robot),
@@ -418,6 +456,7 @@ def _run_impl(
             checkpoint,
             store,
             threshold=threshold,
+            checkpoint_sha256=checkpoint_sha256,
             run_validation=run_validation,
             create_backend=create_backend,
         )
@@ -433,6 +472,8 @@ def _run_impl(
     typer.echo(f"  Version:       {__version__}")
     typer.echo(f"  Run ID:        {scorecard.run_id}")
     typer.echo(f"  Checkpoint:    {scorecard.checkpoint_id}")
+    if scorecard.checkpoint_sha256:
+        typer.echo(f"  Checkpoint SHA: {scorecard.checkpoint_sha256}")
     typer.echo(
         f"  Task:          {scorecard.task_id} ({episodes} nominal + {adversarial} adversarial)"
     )
@@ -470,9 +511,17 @@ def run(
         "mock-scene", "--environment", "-E", help="Environment/scene name."
     ),
     threshold: float = typer.Option(85.0, "--threshold", help="Composite score to approve."),
+    checkpoint_sha256: str | None = typer.Option(
+        None,
+        "--checkpoint-sha256",
+        help="Optional SHA-256 hex digest of the checkpoint artifact (chain of custody).",
+    ),
 ) -> None:
     """Run a local validation against the configured backend and print a summary."""
-    _run_impl(task, robot, episodes, adversarial, checkpoint, environment, threshold)
+    _run_impl(
+        task, robot, episodes, adversarial, checkpoint, environment, threshold,
+        checkpoint_sha256,
+    )
 
 
 @app.command()
@@ -488,13 +537,21 @@ def validate(
         "mock-scene", "--environment", "-E", help="Environment/scene name."
     ),
     threshold: float = typer.Option(85.0, "--threshold", help="Composite score to approve."),
+    checkpoint_sha256: str | None = typer.Option(
+        None,
+        "--checkpoint-sha256",
+        help="Optional SHA-256 hex digest of the checkpoint artifact (chain of custody).",
+    ),
 ) -> None:
     """Alias for ``run``: validate a checkpoint and print a summary.
 
     Accepts exactly the same options as :command:`run` and delegates to the
     identical implementation; provided for discoverability.
     """
-    _run_impl(task, robot, episodes, adversarial, checkpoint, environment, threshold)
+    _run_impl(
+        task, robot, episodes, adversarial, checkpoint, environment, threshold,
+        checkpoint_sha256,
+    )
 
 
 @app.command()

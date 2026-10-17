@@ -95,6 +95,36 @@ class TestRun:
         assert run_id in data
         assert data[run_id]["checkpoint_id"] == "ckpt-cli"
 
+    def test_checkpoint_sha256_is_echoed_and_cached(self, cache_file: Path) -> None:
+        digest = "ab" * 32
+        result = _invoke("run", "--episodes", "20", "--adversarial", "0",
+                         "--checkpoint", "ckpt-cli", "--checkpoint-sha256", digest)
+        assert result.exit_code == 0, result.output
+        assert f"Checkpoint SHA: {digest}" in result.output
+        run_id = RUN_ID_RE.search(result.output).group(0)  # type: ignore[union-attr]
+        assert json.loads(cache_file.read_text(encoding="utf-8"))[run_id][
+            "checkpoint_sha256"
+        ] == digest
+
+    def test_checkpoint_sha256_normalises_upper_case(self) -> None:
+        digest = "AB" * 32
+        result = _invoke("run", "--episodes", "20", "--adversarial", "0",
+                         "--checkpoint", "ckpt-cli", "--checkpoint-sha256", digest)
+        assert result.exit_code == 0, result.output
+        assert f"Checkpoint SHA: {digest.lower()}" in result.output
+
+    def test_malformed_checkpoint_sha256_is_rejected(self) -> None:
+        result = _invoke("run", "--episodes", "20", "--adversarial", "0",
+                         "--checkpoint", "ckpt-cli", "--checkpoint-sha256", "not-a-hash")
+        assert result.exit_code != 0
+        assert "64 hexadecimal" in result.output
+
+    def test_absent_checkpoint_sha256_prints_no_line(self) -> None:
+        result = _invoke("run", "--episodes", "20", "--adversarial", "0",
+                         "--checkpoint", "ckpt-cli")
+        assert result.exit_code == 0, result.output
+        assert "Checkpoint SHA:" not in result.output
+
 
 class TestStatusAndScorecard:
     def test_status(self) -> None:

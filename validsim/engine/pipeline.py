@@ -84,6 +84,7 @@ def run_and_score(
     run_id: str | None = None,
     threshold: float = DEFAULT_THRESHOLD,
     baseline_run_id: str | None = None,
+    checkpoint_sha256: str | None = None,
     run_validation: RunValidationFn = _default_run_validation,
     create_backend: CreateBackendFn = _default_create_backend,
 ) -> StoredRun:
@@ -110,6 +111,11 @@ def run_and_score(
             "no threshold argument" behavior.
         baseline_run_id: Optional prior run id to compare against for
             regressions. Only the API supplies this.
+        checkpoint_sha256: Optional SHA-256 digest of the checkpoint artifact.
+            Recorded on the scorecard as provenance only; it never changes the
+            verdict. Threaded here rather than onto ``task`` because a backend
+            never hashes the artifact -- it only simulates it -- so the digest
+            belongs to the *record* of the run, not the *input* to it.
         run_validation: Injectable ``run_validation`` primitive. Callers pass
             their module-level reference so test monkeypatching still applies.
         create_backend: Injectable backend factory, used only when ``backend``
@@ -161,6 +167,7 @@ def run_and_score(
         episodes=episodes,
         regression=regression,
         threshold=threshold,
+        checkpoint_sha256=checkpoint_sha256,
     )
     candidate = StoredRun(
         run_id=run_id,

@@ -294,5 +294,9 @@ def make_adversarial_scorecard(run_id: str = DEFAULT_RUN_ID) -> Scorecard:
         robustness_measured=False,
         randomization_group_count=4,
         regression_baseline_available=False,
+        # Chain-of-custody digest: a 64-char hex value, so the fixture proves the
+        # field survives every backend's JSON round trip rather than silently
+        # falling back to its ``None`` default.
+        checkpoint_sha256="ab" * 32,
     )
 

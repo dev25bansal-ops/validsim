@@ -70,6 +70,25 @@ _MIN_ROBUSTNESS_GROUPS = 2
 _REGRESSION_PENALTY = 25.0
 #: Bootstrap resample count for the success-rate confidence interval.
 _CI_N_RESAMPLES = 500
+#: Minimum episodes a run must contain before its evidence can certify a deploy.
+#:
+#: ``sufficient_evidence`` already rejects a run that under-delivered against
+#: its own ``task.episodes``, but that predicate is *relative*: a task
+#: configured for one episode under-delivers at zero and is "sufficient" at
+#: one. A single episode is not evidence -- a 1/1 run scores a composite of
+#: 100.0 and would APPROVE, which is precisely the "certified on almost no
+#: evidence" failure this gate exists to prevent, and the exact scenario a
+#: reviewer reaching for the scorecard would never suspect.
+#:
+#: This absolute floor makes the quantity predicate falsifiable in production.
+#: A run below it is BLOCKed however well those few episodes scored. 10 is
+#: deliberately small -- it must not disturb legitimate small runs (the smoke
+#: path uses 20, the benchmark fixtures 100) -- while being large enough that a
+#: single lucky draw cannot certify a deploy. The next refinement, once the
+#: callers want it, is to gate the success *lower bound* rather than the point
+#: estimate; this floor is the necessary first step because a lower bound over
+#: n=1 is not defined in any useful sense.
+_MIN_EVIDENCE_EPISODES = 10
 #: Minimum success rate the ADVERSARIAL segment must reach for an approval.
 #:
 #: The composite pools nominal and adversarial episodes into a single success
@@ -352,6 +371,11 @@ class Scorecard:
             ``False`` means the regression component scored 0.0 and abstained
             from the weighted average because nothing was compared, not
             because a comparison came back clean.
+        checkpoint_sha256: SHA-256 hex digest of the checkpoint artifact, when
+            the caller supplied one, or ``None``. Provenance only -- it does
+            not enter any score -- but it is what lets a consumer prove two
+            verdicts describe the same policy rather than two builds that
+            happen to share a ``checkpoint_id``.
         regression_delta: Success-rate delta vs baseline, or ``None``.
         confidence_interval: 95% bootstrap CI of the success rate, or ``None``.
         deploy_decision: ``"APPROVE"`` or ``"BLOCK"``.
@@ -388,6 +412,14 @@ class Scorecard:
     robustness_measured: bool = True
     randomization_group_count: int = 0
     regression_baseline_available: bool = True
+    # Chain-of-custody digest. A verdict is only meaningful against a *specific*
+    # artifact, but ``checkpoint_id`` is a name an operator picks and can freely
+    # reuse for a rebuilt or retrained policy -- so two scorecards sharing a
+    # ``checkpoint_id`` cannot be proven to describe the same weights. The
+    # caller-supplied SHA-256 closes that gap. ``None`` means "not supplied" and
+    # is never fabricated from ``checkpoint_id``; a consumer that needs the
+    # guarantee must reject a scorecard without it rather than assume one.
+    checkpoint_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict (CI tuple converted to list)."""
@@ -412,6 +444,7 @@ def build_scorecard(
     threshold: float = 85.0,
     created_at: str | None = None,
     stats_seed: int = 42,
+    checkpoint_sha256: str | None = None,
 ) -> Scorecard:
     """Assemble the composite scorecard from engine outputs.
 
@@ -426,6 +459,10 @@ def build_scorecard(
         threshold: Composite score needed for ``APPROVE``.
         created_at: ISO timestamp override (defaults to now, UTC).
         stats_seed: Seed for the bootstrap CI.
+        checkpoint_sha256: Optional SHA-256 digest of the checkpoint artifact,
+            carried onto the scorecard verbatim for chain-of-custody. It never
+            affects the composite; it is recorded so a verdict can be tied to
+            one specific artifact rather than to a reusable name.
 
     Returns:
         A frozen :class:`Scorecard` ready for storage/serialization.
@@ -469,7 +506,7 @@ def build_scorecard(
     # completed the task must never be certifiable, however low the threshold
     # is set.
     #
-    # This clause is a *belt-and-braces* backstop. Scoring unmeasured
+    # The first two clauses are a *belt-and-braces* backstop. Scoring unmeasured
     # components as 0.0 (see ``_unmeasured_component_credit``) already means a
     # 0%-success run can no longer reach a high composite, but the threshold is
     # operator-configurable: setting it to 0 would otherwise approve a
@@ -477,8 +514,15 @@ def build_scorecard(
     # that signs off "this model never completed the task" is worse than no
     # gate at all, so the verdict is protected independently of where the
     # threshold happens to sit.
+    #
+    # The third clause closes the *absolute* side of the same hole. The first
+    # clause is relative to ``task.episodes``, so a task configured for one
+    # episode is "sufficient" at one episode -- and a 1/1 run scores 100.0.
+    # ``_MIN_EVIDENCE_EPISODES`` rejects any run too small to be evidence at
+    # all, whatever it scored and whatever the caller configured.
     sufficient_evidence = (
         evaluation.total_episodes >= task.episodes > 0
+        and evaluation.total_episodes >= _MIN_EVIDENCE_EPISODES
         and evaluation.success_count > 0
     )
 
@@ -510,6 +554,7 @@ def build_scorecard(
     if not sufficient_evidence:
         block_reasons.append(
             "insufficient evidence: run did not deliver the requested episodes, "
+            f"delivered fewer than the {_MIN_EVIDENCE_EPISODES}-episode minimum, "
             "or recorded no successful episode at all"
         )
     if composite < threshold:
@@ -545,4 +590,5 @@ def build_scorecard(
         robustness_measured=robustness_measured,
         randomization_group_count=group_count,
         regression_baseline_available=baseline_available,
+        checkpoint_sha256=checkpoint_sha256,
     )

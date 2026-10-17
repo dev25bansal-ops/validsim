@@ -86,6 +86,14 @@ _WAIT_PAST_LEASE = 1.0
 _JOIN_TIMEOUT = 30.0
 
 
+#: Episodes needed before the scorecard's evidence floor will let a clean run
+#: reach APPROVE (``scorecard._MIN_EVIDENCE_EPISODES``). Tests whose subject is
+#: the *verdict-overwrite* contract -- not the evidence floor -- must clear it,
+#: otherwise they exercise "too few episodes to judge" and never reach the
+#: approve/block transition they exist to pin.
+_EVIDENCE_EPISODES = 12
+
+
 def _spec(run_id: str = _JOB_ID, **overrides: Any) -> JobSpec:
     """Small, fast job spec (overridable per test)."""
     base: dict[str, Any] = {
@@ -317,7 +325,7 @@ def _run_pipeline(store: Any, backend: Any, run_id: str = _JOB_ID) -> Any:
         task_id="pick-place",
         robot=RobotSpec(name="franka_panda"),
         environment=EnvironmentSpec(name="mock-scene"),
-        episodes=2,
+        episodes=_EVIDENCE_EPISODES,
         adversarial_count=0,
     )
     return run_and_score(
@@ -912,7 +920,7 @@ class TestCrashRetryVerdictOverwrite:
         backend = _ToggleBackend()
 
         first_queue = JobQueue(max_attempts=1)
-        first_queue.enqueue(_spec())
+        first_queue.enqueue(_spec(episodes=_EVIDENCE_EPISODES))
         record1 = _CrashAfterPersistWorker(first_queue, store, backend=backend).run_once()
         assert record1 is not None
         assert record1.status is JobStatus.FAILED, "setup: attempt 1 must fail"
@@ -926,7 +934,7 @@ class TestCrashRetryVerdictOverwrite:
         # -- attempt 2: same run_id, artifact now regresses -------------------
         backend.flip_to_failing()
         second_queue = JobQueue()
-        second_queue.enqueue(_spec())
+        second_queue.enqueue(_spec(episodes=_EVIDENCE_EPISODES))
         record2 = JobWorker(second_queue, store, backend=backend).run_once()
         assert record2 is not None and record2.status is JobStatus.DONE
 
@@ -954,7 +962,7 @@ class TestCrashRetryVerdictOverwrite:
         backend = _ToggleBackend()
 
         first_queue = JobQueue(max_attempts=1)
-        first_queue.enqueue(_spec())
+        first_queue.enqueue(_spec(episodes=_EVIDENCE_EPISODES))
         crashed = _CrashAfterPersistWorker(first_queue, store, backend=backend).run_once()
         assert crashed is not None and crashed.status is JobStatus.FAILED
         approved = store.get(_JOB_ID)
@@ -964,7 +972,7 @@ class TestCrashRetryVerdictOverwrite:
         # Attempt 2 computes a BLOCK verdict that the store will refuse.
         backend.flip_to_failing()
         second_queue = JobQueue()
-        second_queue.enqueue(_spec())
+        second_queue.enqueue(_spec(episodes=_EVIDENCE_EPISODES))
         done = JobWorker(second_queue, store, backend=backend).run_once()
 
         assert done is not None and done.status is JobStatus.DONE

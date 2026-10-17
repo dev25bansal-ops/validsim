@@ -65,9 +65,16 @@ ADVERSARIAL_FIELDS = frozenset(
 #: ``regression_baseline_available``) another agent added in parallel with this
 #: file; they are included so this test reflects the real schema rather than
 #: failing for an unrelated addition. They are not asserted semantically here.
+#:
+#: ``checkpoint_sha256`` is the chain-of-custody digest. The API schema always
+#: *accepted* it on ``POST``, but nothing threaded it onto the record, so the
+#: key never appeared in a response. It is pinned here so that "the request
+#: accepts a digest" and "the response proves which artifact was scored" cannot
+#: drift apart again.
 EXPECTED_SCORECARD_KEYS = {
     "run_id",
     "checkpoint_id",
+    "checkpoint_sha256",
     "task_id",
     "composite_score",
     "success_rate",
