@@ -393,10 +393,10 @@ def test_div3b_post_save_taxonomy_mutation_does_not_rewrite_the_record(
 
 
 # ---------------------------------------------------------------------------
-# div-4: close() disables the SQLite store forever, but is a no-op in memory
+# div-4 (FIXED): close() used to brick SQLite while being a no-op in memory
 # ---------------------------------------------------------------------------
 #
-# Repro:
+# Repro (historical):
 #   python -c "from validsim.store.sqlite import SqliteValidationStore;"
 #              "s=SqliteValidationStore('x.db'); s.close(); s.count()"
 #   -> sqlite3.ProgrammingError: Cannot operate on a closed database.
@@ -404,10 +404,11 @@ def test_div3b_post_save_taxonomy_mutation_does_not_rewrite_the_record(
 # purpose is "present so callers can treat every create_store() backend
 # uniformly", and ``PostgresValidationStore.close`` implements the same
 # contract by *reopening on next use*. ``SqliteValidationStore.close`` instead
-# permanently bricks the object: every later method raises ProgrammingError
-# while the in-memory store answers normally. A ``finally: store.close()``
-# followed by any further use (or a second ``close()``) is therefore safe on
-# two backends and fatal on the third.
+# permanently bricked the object.
+#
+# Fix: ``SqliteValidationStore.close`` now reopens transparently on next use,
+# so all three backends answer identically after close and ``close()`` is
+# idempotent. The tests below are ordinary passing guards for that guarantee.
 # ---------------------------------------------------------------------------
 
 
@@ -433,7 +434,7 @@ def _probe_after_close(store: object) -> list:
 
 
 def test_div4_store_remains_usable_after_close(tmp_path: Path) -> None:
-    """Divergence: post-close behaviour -- no-op everywhere except SQLite."""
+    """Every backend answers identically after close (guard for the fix)."""
     mem = ValidationStore()
     lite = SqliteValidationStore(tmp_path / f"{_D4}.db")
     mem.save(_run("vrun-x"))
@@ -447,14 +448,23 @@ def test_div4_store_remains_usable_after_close(tmp_path: Path) -> None:
 
 
 def test_div4b_double_close_is_harmless_everywhere(tmp_path: Path) -> None:
-    """Divergence: ``close(); close()`` -- harmless twice, raises on SQLite."""
+    """``close(); close()`` must be harmless on every backend.
+
+    This asserted the *opposite* -- that SQLite raised ``ProgrammingError`` on
+    the second close -- while ``test_store_close_contract_agent`` asserted three
+    closes are harmless and the store still answers. Both could not hold. The
+    contract that survived is idempotent close (``SqliteValidationStore.close``
+    reopens transparently on next use, matching ``PostgresValidationStore`` and
+    the in-memory no-op), so a ``finally: store.close()`` followed by any
+    further use is safe everywhere. This is the guard for that guarantee.
+    """
     mem = ValidationStore()
     lite = SqliteValidationStore(tmp_path / f"{_D4}b.db")
     mem.close()
     mem.close()
     lite.close()
-    with pytest.raises(sqlite3.ProgrammingError):
-        lite.close()
+    lite.close()  # must not raise: close is idempotent on every backend
+    assert mem.count() == lite.count() == 0
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ from __future__ import annotations
 import dataclasses
 import threading
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -34,6 +35,7 @@ from validsim.engine.regression import RegressionReport
 from validsim.engine.safety import SafetyResult
 from validsim.engine.scorecard import Scorecard
 from validsim.sim.runner import EpisodeResult
+from validsim.store._frozen import freeze
 
 __all__ = [
     "DuplicateRunError",
@@ -172,59 +174,6 @@ class DuplicateRunError(Exception):
         super().__init__(f"run {run_id} already exists in the store")
 
 
-#: Recursion cap for :func:`_copy_value`. Real records are a handful of levels
-#: deep (``StoredRun`` -> episode -> summary dict), so this is a safety valve
-#: against a caller-supplied structure that cycles, not a working limit.
-_MAX_SNAPSHOT_DEPTH = 12
-
-
-def _copy_value(value: Any, *, _depth: int = 0) -> Any:
-    """Return *value* with every mutable container reachable from it rebuilt.
-
-    Only the containers this record actually contains are rebuilt -- ``dict``,
-    ``list``, ``tuple``, ``set`` -- plus any nested dataclass, so a new mutable
-    field is covered by construction rather than by someone remembering to add
-    it here. Immutable leaves (including the scorecard's ``tuple``-annotated
-    fields) are shared as-is because they cannot change.
-
-    The mutable fields actually present in a :class:`StoredRun` today are
-    ``episodes`` (list), ``evaluation.per_task_success`` and
-    ``evaluation.failure_taxonomy`` (dicts), ``scorecard.failure_taxonomy``
-    (dict), ``episode.joint_states_summary`` (dict) and ``regression.items``
-    (list). Every one of them is reachable from here.
-    """
-    if _depth >= _MAX_SNAPSHOT_DEPTH:
-        return value
-    if isinstance(value, dict):
-        return {key: _copy_value(item, _depth=_depth + 1) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_copy_value(item, _depth=_depth + 1) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_copy_value(item, _depth=_depth + 1) for item in value)
-    if isinstance(value, (set, frozenset)):
-        return type(value)(value)
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return _copy_dataclass(value, _depth=_depth + 1)
-    return value
-
-
-def _copy_dataclass(obj: Any, *, _depth: int = 0) -> Any:
-    """Structurally copy *obj*, rebuilding each of its init-able fields.
-
-    ``dataclasses.replace`` is a **shallow** copy: it rebuilds the wrapper but
-    shares every mutable field, which is exactly how the caller-reachable
-    mutables escaped the previous copy. Rebuilding each field through
-    :func:`_copy_value` closes that gap for this record, and skipping
-    ``init=False`` fields leaves the ones a caller cannot set alone.
-    """
-    changes = {
-        field.name: _copy_value(getattr(obj, field.name), _depth=_depth + 1)
-        for field in dataclasses.fields(obj)
-        if field.init
-    }
-    return dataclasses.replace(obj, **changes)
-
-
 def _snapshot(run: StoredRun) -> StoredRun:
     """Detach a run from every object its caller still holds a reference to.
 
@@ -239,20 +188,21 @@ def _snapshot(run: StoredRun) -> StoredRun:
     to make impossible, and the persistent backends never had the hole because
     they rebuild on read.
 
-    The copy is structural rather than a hand-enumerated list of fields, so a
-    mutable field added to :class:`StoredRun` or to any nested artifact is
-    covered by construction instead of by someone remembering to extend this
-    function -- the previous version enumerated two of the five reachable
-    mutables and so left the other three shared with the caller.
+    The detachment is a *freeze* rather than a copy (:mod:`validsim.store._frozen`):
+    the walk is structural, so a mutable field added to :class:`StoredRun` or to
+    any nested artifact is covered by construction, and the result has no
+    mutable container reachable from it. That second property is what makes the
+    read path safe -- see :class:`ValidationStore`'s ``Read-path immutability``
+    note for why the store shares the frozen record instead of copying it back
+    out.
 
-    Scalars are shared (they are immutable); every ``dict``/``list``/``tuple``/
-    ``set`` and every nested dataclass reachable from the record is rebuilt.
-    That includes the containers *inside* the nested artifacts --
-    ``episodes[i].joint_states_summary``, ``evaluation``'s two dicts and
-    ``regression.items`` -- which the persistent backends were always immune to,
-    because they serialise at save time.
+    Scalars are shared (they are immutable); every ``dict``/``list``/``tuple``
+    and every nested dataclass reachable from the record is rebuilt into an
+    immutable form. That includes the containers *inside* the nested artifacts --
+    ``episodes[i].joint_states_summary``, ``evaluation``'s two mappings and
+    ``regression.items``.
     """
-    return _copy_dataclass(run)
+    return freeze(run)
 
 
 @dataclass(frozen=True)
@@ -310,6 +260,24 @@ class ValidationStore:
        or re-dates what is stored, and it never raises for the duplicate.
     2. ``get``/``list_for_checkpoint``/``history`` return exactly the
        first-recorded object, so no read path can surface a rejected write.
+
+    **Read-path immutability.** A record a caller reads back is *immutable*: no
+    mutation made through it can change what the store returns later. That is a
+    guarantee about the store, and every backend satisfies it -- this one by
+    construction (a stored record has no mutable container reachable from it,
+    see :mod:`validsim.store._frozen`, so reads share it), and the persistent
+    ones by construction too (they rebuild from persisted JSON on every read, so
+    a mutation through their handle touches a private copy).
+
+    The two constructions differ in one visible way, and it is worth knowing
+    which side is which. On this backend the returned container *refuses* an
+    in-place mutation with ``TypeError``, because it is shared with every other
+    reader; on the persistent backends the same statement succeeds and is
+    silently discarded, because the container is a fresh private copy. Neither
+    can reach the store. The in-memory behaviour is the stricter of the two --
+    it fails loudly instead of hiding a caller's bug -- and
+    ``tests/test_store_read_immutability_agent.py`` pins the shared guarantee on
+    every backend, including that difference.
 
     **Why append-only and not last-write-wins.** The alternative -- a later
     ``save`` silently replacing the row -- was the historical behaviour of this
@@ -376,6 +344,33 @@ class ValidationStore:
         with self._lock:
             self._runs.setdefault(run.run_id, _snapshot(run))
         return run
+
+    def save_many(self, runs: Iterable[StoredRun]) -> list[StoredRun]:
+        """Record every run in ``runs``; return them unchanged, in order.
+
+        Semantically identical to calling :meth:`save` once per run -- the same
+        append-only rule applies, so an id already present keeps its original
+        record and the duplicate is not what later reads return. The default
+        implementation does exactly that loop.
+
+        It exists as a named operation because the *cost* differs by orders of
+        magnitude on a disk-backed backend. SQLite commits (and therefore
+        fsyncs) inside every :meth:`save`, so seeding 100 000 runs one at a time
+        measures ~15 minutes, while the same rows in a single transaction take
+        under a second. Backends that can batch override this method; the
+        observable contract does not change, which is what keeps the store
+        parity guarantee (see ``tests/test_store_divergence_agent.py``) intact.
+
+        Args:
+            runs: Runs to record, in order.
+
+        Returns:
+            The same runs, unchanged and in the same order.
+        """
+        materialised = list(runs)
+        for run in materialised:
+            self.save(run)
+        return materialised
 
     def save_exists(self, run: StoredRun) -> bool:
         """Record ``run`` unless its id is taken; return whether it was new.

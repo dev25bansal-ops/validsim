@@ -28,9 +28,12 @@ serialise on write and were never affected. That parity gap is what
 existing snapshot coverage pins only ``episodes`` and
 ``scorecard.failure_taxonomy`` -- precisely the two that were already copied.
 
-The fix is structural (``_copy_value`` / ``_copy_dataclass``): every mutable
-container reachable from the record is rebuilt, so a field added later is covered
-by construction rather than by remembering to extend a hand-written list.
+The fix is structural (``validsim.store._frozen.freeze``): every mutable
+container reachable from the record is replaced by an immutable one, so a field
+added later is covered by construction rather than by remembering to extend a
+hand-written list. Freezing (rather than copying) is also what lets the read path
+*share* the stored record instead of copying it back out -- see
+``tests/test_store_read_immutability_agent.py`` for that half.
 
 Every expected value here was measured by running the code, not inferred.
 
@@ -422,8 +425,13 @@ class TestImmutableFieldsKeepTheirTypes:
     def test_mutating_a_list_on_the_snapshot_does_not_touch_the_caller(self) -> None:
         """The reverse direction: the stored record is not a window onto the caller.
 
-        Guards the isolation symmetrically -- reading a mutable field out of the
-        stored record and mutating it must not reach back into the caller's object.
+        Guards the isolation symmetrically -- the record a read hands back must
+        not be reachable from the caller's object either.
+
+        Since the store now *shares* the frozen record with every reader
+        (``validsim.store._frozen``), the mutation is refused outright rather
+        than silently applied to a private copy. Both halves are asserted: the
+        write raises, and the caller's object is unchanged.
         """
         run = _block_run()
         store = ValidationStore()
@@ -431,11 +439,14 @@ class TestImmutableFieldsKeepTheirTypes:
         stored = store.get(run.run_id)
         assert stored is not None and stored.evaluation is not None
 
-        stored.evaluation.per_task_success["t1"] = 1.0
-        stored.evaluation.failure_taxonomy["injected"] = 1
+        with pytest.raises(TypeError, match="immutable"):
+            stored.evaluation.per_task_success["t1"] = 1.0
+        with pytest.raises(TypeError, match="immutable"):
+            stored.evaluation.failure_taxonomy["injected"] = 1
 
         assert run.evaluation.per_task_success["t1"] == 0.333
         assert "injected" not in run.evaluation.failure_taxonomy
+        assert stored.evaluation.per_task_success["t1"] == 0.333
 
 
 class TestSelfReferentialStructuresTerminate:
@@ -457,9 +468,9 @@ class TestSelfReferentialStructuresTerminate:
         cyclic: dict[str, Any] = {"level": 0}
         cyclic["self"] = cyclic
 
-        from validsim.store.memory import _copy_value
+        from validsim.store._frozen import freeze
 
-        copied = _copy_value(cyclic)
+        copied = freeze(cyclic)
         assert copied is not None
         assert copied["level"] == 0
         # The cap stopped the walk, so the cycle is broken somewhere below the
@@ -469,17 +480,17 @@ class TestSelfReferentialStructuresTerminate:
     def test_a_deeply_nested_structure_terminates(self) -> None:
         """Depth far beyond the cap must still return.
 
-        ``_MAX_SNAPSHOT_DEPTH`` is 12. A 200-level nested dict is well past it,
+        ``MAX_FREEZE_DEPTH`` is 12. A 200-level nested dict is well past it,
         and the point is that the copy bottoms out instead of recursing 200 deep
         or raising.
         """
-        from validsim.store.memory import _copy_value
+        from validsim.store._frozen import freeze
 
         deep: dict[str, Any] = {"leaf": 1}
         for _ in range(200):
             deep = {"child": deep}
 
-        copied = _copy_value(deep)
+        copied = freeze(deep)
         assert isinstance(copied, dict)
 
 

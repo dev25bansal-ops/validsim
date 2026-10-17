@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence, Type, TypeVar
@@ -172,6 +173,40 @@ def _regression_to_json(report: RegressionReport | None) -> str | None:
     return json.dumps([asdict(i) for i in report.items])
 
 
+#: The single append-only insert, shared by :meth:`save` and :meth:`save_many`
+#: so the two cannot drift. ``ON CONFLICT ... DO NOTHING`` (SQLite 3.24+) makes a
+#: duplicate id a rejected row rather than a rewritten verdict; it is
+#: byte-for-byte the clause :mod:`validsim.store.postgres` emits.
+_INSERT_SQL = (
+    "INSERT INTO validations "
+    "(run_id, checkpoint_id, task_id, composite_score, "
+    " deploy_decision, created_at, scorecard_json, "
+    " baseline_run_id, evaluation_json, safety_json, "
+    " episodes_json, regression_json) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT (run_id) DO NOTHING"
+)
+
+
+def _insert_params(run: StoredRun) -> tuple[Any, ...]:
+    """Positional parameters for :data:`_INSERT_SQL`, in column order."""
+    card = run.scorecard
+    return (
+        run.run_id,
+        run.checkpoint_id,
+        run.task_id,
+        card.composite_score,
+        card.deploy_decision,
+        run.created_at,
+        card.to_json(),
+        run.baseline_run_id,
+        json.dumps(run.evaluation.to_dict()),
+        json.dumps(run.safety.to_dict()),
+        _episodes_to_json(run.episodes),
+        _regression_to_json(run.regression),
+    )
+
+
 class SqliteValidationStore(ValidationStore):
     """Disk-backed store satisfying the :class:`ValidationStore` interface.
 
@@ -299,34 +334,42 @@ class SqliteValidationStore(ValidationStore):
         specifies -- including after a rejected duplicate, where the returned
         object is *not* what is stored. Use :meth:`save_exists` to detect that.
         """
-        card = run.scorecard
         with self._lock:
             conn = self._ensure_ready()
-            conn.execute(
-                "INSERT INTO validations "
-                "(run_id, checkpoint_id, task_id, composite_score, "
-                " deploy_decision, created_at, scorecard_json, "
-                " baseline_run_id, evaluation_json, safety_json, "
-                " episodes_json, regression_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (run_id) DO NOTHING",
-                (
-                    run.run_id,
-                    run.checkpoint_id,
-                    run.task_id,
-                    card.composite_score,
-                    card.deploy_decision,
-                    run.created_at,
-                    card.to_json(),
-                    run.baseline_run_id,
-                    json.dumps(run.evaluation.to_dict()),
-                    json.dumps(run.safety.to_dict()),
-                    _episodes_to_json(run.episodes),
-                    _regression_to_json(run.regression),
-                ),
-            )
+            conn.execute(_INSERT_SQL, _insert_params(run))
             conn.commit()
         return run
+
+    def save_many(self, runs: Iterable[StoredRun]) -> list[StoredRun]:
+        """Record every run in one transaction; return them unchanged, in order.
+
+        The append-only contract is identical to calling :meth:`save` per run
+        (``ON CONFLICT (run_id) DO NOTHING``, so an existing id keeps its
+        original record), but the *cost* is not: :meth:`save` commits -- and so
+        fsyncs -- once per call, which measures ~15 minutes for 100 000 rows,
+        whereas the same rows in a single transaction finish in under a second.
+        The bottleneck is entirely per-row durability, not the insert itself.
+
+        This matters because seeding a large store is the dominant cost of the
+        store-scale benchmarks, and an unbounded fixture cost is what stopped
+        ``tests/bench/baseline.json`` from ever being generated -- a benchmark
+        gate that cannot run measures nothing. See the base-class docstring for
+        the contract every backend shares.
+
+        Args:
+            runs: Runs to record, in order.
+
+        Returns:
+            The same runs, unchanged and in the same order.
+        """
+        materialised = list(runs)
+        if not materialised:
+            return materialised
+        with self._lock:
+            conn = self._ensure_ready()
+            conn.executemany(_INSERT_SQL, [_insert_params(run) for run in materialised])
+            conn.commit()
+        return materialised
 
     def save_exists(self, run: StoredRun) -> bool:
         """Record ``run`` unless its id is taken; return whether it was new.

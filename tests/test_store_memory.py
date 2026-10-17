@@ -306,7 +306,15 @@ class TestStoreDoesNotAliasTheCallersObjects:
         assert stored.episodes, "the stored record lost every episode"
 
     def test_mutating_a_caller_held_episode_does_not_rewrite_the_record(self) -> None:
-        """Copying the list is not enough -- the elements are mutable too."""
+        """Copying the list is not enough -- the elements must be detached too.
+
+        :class:`EpisodeResult` is frozen, so the caller cannot rewrite the
+        element in place at all; the reachable mutation is therefore a *rebind*
+        (``run.episodes[0] = replace(...)``) or a rebuild of the list. Both are
+        attempted here, and the stored record must be unaffected by either.
+        """
+        import dataclasses
+
         run = _run_with_episodes()
         assert run.episodes, "fixture must carry episodes"
         before = [e.success for e in run.episodes]
@@ -314,9 +322,15 @@ class TestStoreDoesNotAliasTheCallersObjects:
         store = ValidationStore()
         store.save(run)
 
-        for episode in run.episodes:
-            episode.success = not episode.success
-            episode.collision_count = 7
+        # A frozen element cannot be assigned to -- the stronger guarantee.
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            run.episodes[0].success = not run.episodes[0].success
+
+        # The reachable mutations: rebind an element and rebuild the list.
+        run.episodes[0] = dataclasses.replace(run.episodes[0], success=False, collision_count=7)
+        run.episodes[:] = [
+            dataclasses.replace(e, collision_count=7) for e in run.episodes
+        ]
 
         stored = store.get(run.run_id)
         assert stored is not None
