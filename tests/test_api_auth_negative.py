@@ -245,6 +245,58 @@ class TestProductionRefusesToStartUnauthenticated:
         assert _app().state.api_key_enabled is False
 
 
+class TestMetricsScrapePathIsGatedInProduction:
+    """The bare ``/metrics`` path fails closed in production.
+
+    Prometheus scrapes ``/metrics`` by convention and a stock scrape config
+    sends no credentials, so the path is public outside production. In
+    production it must not stay open by default: the series enumerate run,
+    approval and block counts plus request volume, which is operational data.
+    Operators whose scraper cannot send a key opt out explicitly.
+    """
+
+    def test_public_outside_production(self, clean_env: None) -> None:
+        client = _client()
+        assert client.get("/metrics").status_code == 200
+
+    def test_401_without_a_key_in_production(self, clean_env: None) -> None:
+        os.environ[ENV_ENV] = "production"
+        os.environ[ENV_KEY] = "secret-key"
+        client = _client()
+        assert client.get("/metrics").status_code == 401
+
+    def test_200_with_a_key_in_production(self, clean_env: None) -> None:
+        os.environ[ENV_ENV] = "production"
+        os.environ[ENV_KEY] = "secret-key"
+        client = _client()
+        response = client.get("/metrics", headers={API_KEY_HEADER: "secret-key"})
+        assert response.status_code == 200
+        assert "validsim_" in response.text
+
+    def test_explicit_opt_out_restores_the_public_scrape_path(
+        self, clean_env: None
+    ) -> None:
+        os.environ[ENV_ENV] = "production"
+        os.environ[ENV_KEY] = "secret-key"
+        os.environ["VALIDSIM_METRICS_PUBLIC"] = "1"
+        try:
+            client = _client()
+            assert client.get("/metrics").status_code == 200
+        finally:
+            os.environ.pop("VALIDSIM_METRICS_PUBLIC", None)
+
+    def test_a_false_opt_out_does_not_open_the_path(self, clean_env: None) -> None:
+        """An opt-out flag must fail closed on a non-truthy value."""
+        os.environ[ENV_ENV] = "production"
+        os.environ[ENV_KEY] = "secret-key"
+        os.environ["VALIDSIM_METRICS_PUBLIC"] = "false"
+        try:
+            client = _client()
+            assert client.get("/metrics").status_code == 401
+        finally:
+            os.environ.pop("VALIDSIM_METRICS_PUBLIC", None)
+
+
 class TestHealthRouteStaysReachable:
     """``/api/v1/health`` backs the container healthcheck, which has no key."""
 

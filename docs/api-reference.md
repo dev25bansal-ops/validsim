@@ -90,7 +90,7 @@ curl -H "X-API-Key: $VALIDSIM_API_KEY" http://127.0.0.1:8000/api/v1/validations
 > | Method | Path | Exposure |
 > |---|---|---|
 > | GET | `/api/v1/health` | Liveness/readiness configuration probe; safe for a container healthcheck that cannot present a credential. |
-> | GET | `/metrics` | Deliberately unauthenticated Prometheus scrape endpoint. It exposes run volumes, approval/block counts, the latest composite score, build information, and in-process HTTP request counts by status class, so operators can derive error/failure rates. |
+> | GET | `/metrics` | Prometheus scrape endpoint. Public outside production so a stock scrape config (which sends no credential) works. Under `VALIDSIM_ENV=production` it requires `X-API-Key` like every other route unless `VALIDSIM_METRICS_PUBLIC` is set truthy. It exposes run volumes, approval/block counts, the latest composite score, build information, and in-process HTTP request counts by status class, so operators can derive error/failure rates. |
 > | GET | `/` | The dashboard's static HTML shell only — no run data. This is the one public surface that can explain *why* a key is required: the SPA boots, reads `401` from its first `/api/v1` call, and renders the key prompt. Gating it would return bare `401` JSON with no page to host that prompt, leaving an operator no way to authenticate. Every `/api/v1` route, including `/api/v1/dashboard/summary` and run history, remains gated. |
 >
 > `GET /api/v1/metrics` is the auth-gated alternative and returns the same
@@ -122,7 +122,7 @@ Controlled by `VALIDSIM_CORS_ORIGINS`, read at `create_app()` time.
 
 | Variable | Default | Behaviour |
 |---|---|---|
-| `VALIDSIM_CORS_ORIGINS` | `*` | Comma-separated origin allow-list. Whitespace is trimmed and empty entries are dropped, so `"*"` and trailing commas behave sensibly. `*` keeps the previous allow-all behaviour. |
+| `VALIDSIM_CORS_ORIGINS` | *(empty)* | Comma-separated origin allow-list. Whitespace is trimmed and empty entries are dropped, so trailing commas behave sensibly. Empty means **no cross-origin access** — the bundled dashboard is same-origin and needs no entry. `*` restores allow-all for local development but is **refused when `VALIDSIM_ENV=production`** (SEC-007). |
 
 Middleware settings (fixed — not env-configurable):
 

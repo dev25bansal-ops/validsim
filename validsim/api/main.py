@@ -29,8 +29,10 @@ Deployment hardening is env-driven and read once at :func:`create_app` time:
   ``production`` (or ``prod``) refuses to start unless ``VALIDSIM_API_KEY`` is
   configured, so an unprotected API fails closed at boot instead of serving
   traffic.
-* ``VALIDSIM_CORS_ORIGINS`` — comma-separated CORS origin allow-list
-  (default ``"*"``, i.e. the previous allow-all behavior).
+* ``VALIDSIM_CORS_ORIGINS`` — comma-separated CORS origin allow-list.
+  Defaults to **empty**, i.e. no cross-origin access: the bundled dashboard is
+  same-origin, so it needs none. ``"*"`` is still accepted for local
+  development but is refused when ``VALIDSIM_ENV=production`` (SEC-007).
 * ``VALIDSIM_RATE_LIMIT`` — requests per ``VALIDSIM_RATE_WINDOW_SECONDS``
   window for write/sensitive routes. Protection is **on by default**
   (``60`` per ``60``s); an absent, unparsable, or negative value falls back to
@@ -43,6 +45,11 @@ Deployment hardening is env-driven and read once at :func:`create_app` time:
   periodic sweep of stale buckets.
 * ``VALIDSIM_RATE_WINDOW_SECONDS`` — sliding-window length in seconds
   (default ``60``).
+* ``VALIDSIM_METRICS_PUBLIC`` — opt-out from auth on the bare ``/metrics``
+  scrape path in production. Outside production ``/metrics`` is always public;
+  in production it requires ``X-API-Key`` like every other route unless this is
+  set to a truthy value (``1``/``true``/``yes``/``on``), so an operator whose
+  Prometheus cannot send a bearer token must opt in explicitly.
 * ``VALIDSIM_PIPELINE_CONCURRENCY`` — how many validation pipelines may run
   concurrently (default: see :data:`DEFAULT_PIPELINE_CONCURRENCY`). Excess
   requests are refused immediately with ``503`` + ``Retry-After`` instead of
@@ -771,6 +778,11 @@ def _execute_validation(request: ValidationRequest, store: ValidationStore) -> S
             request.checkpoint_id,
             store,
             baseline_run_id=request.baseline_run_id,
+            # Chain of custody: the request's checkpoint digest (already
+            # length-validated by the schema) is carried onto the scorecard so
+            # the verdict can be tied to one artifact, not just to a
+            # reusable ``checkpoint_id``.
+            checkpoint_sha256=request.checkpoint_sha256,
             # ``None`` preserves the engine default (85.0); an explicit value
             # from the request is honoured so the dashboard gate knob is live.
             threshold=(
@@ -819,6 +831,20 @@ def _validate_iso_filter(value: str | None, *, field: str) -> str | None:
             detail=f"invalid {field}: {value!r} is not a valid ISO-8601 timestamp",
         ) from exc
     return normalized
+
+
+#: Truthy spellings accepted for boolean environment flags.
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _env_flag(name: str) -> bool:
+    """Return ``True`` when environment variable ``name`` holds a truthy value.
+
+    Accepts ``1`` / ``true`` / ``yes`` / ``on`` (case-insensitive, surrounding
+    whitespace ignored). Everything else -- unset, blank, ``0``, ``false``, a
+    typo -- is ``False``, so an opt-in flag fails closed rather than open.
+    """
+    return (os.environ.get(name) or "").strip().lower() in _TRUTHY
 
 
 def _parse_cors_origins(raw: str) -> list[str]:
@@ -900,7 +926,15 @@ def create_app(store: ValidationStore | None = None) -> FastAPI:
             _RateLimitMiddleware,
             limiter=_SlidingWindowRateLimiter(rate_limit, rate_window),
         )
-    allow_origins = _parse_cors_origins(os.environ.get("VALIDSIM_CORS_ORIGINS", "*"))
+    # CORS. The default is an EMPTY allow-list, deliberately not ``"*"``. A
+    # wildcard let any web origin read every response and -- when auth is
+    # disabled -- drive the API from a browser, which the security catalog
+    # tracks as SEC-007. The bundled dashboard is served same-origin, so it
+    # needs no entry; a separately hosted front end opts in explicitly via
+    # ``VALIDSIM_CORS_ORIGINS``. ``"*"`` still works for local development but
+    # is refused in production, below, the same way a missing API key is.
+    raw_cors = os.environ.get("VALIDSIM_CORS_ORIGINS")
+    allow_origins = _parse_cors_origins(raw_cors if raw_cors is not None else "")
     application.state.cors_wildcard = "*" in allow_origins
     application.add_middleware(
         CORSMiddleware,
@@ -1008,6 +1042,15 @@ def create_app(store: ValidationStore | None = None) -> FastAPI:
         raise RuntimeError(
             f"VALIDSIM_ENV={deployment!r} requires VALIDSIM_API_KEY; refusing to "
             "start an API that would serve every route unauthenticated"
+        )
+    # SEC-007: a wildcard allow-list lets any origin read responses, which
+    # amplifies the auth gap above into a browser-reachable one. Development
+    # keeps the convenience; production must name its origins.
+    if application.state.cors_wildcard and deployment in AUTH_REQUIRED_ENVS:
+        raise RuntimeError(
+            f"VALIDSIM_ENV={deployment!r} refuses VALIDSIM_CORS_ORIGINS='*'; "
+            "list the allowed dashboard origins explicitly "
+            "(e.g. VALIDSIM_CORS_ORIGINS=https://gates.example.com)"
         )
     auth_log = get_logger("api.auth")
     if api_key is None:
@@ -1351,15 +1394,31 @@ def create_app(store: ValidationStore | None = None) -> FastAPI:
     # Metrics: the scrape endpoint is exposed twice.
     #   * /api/v1/metrics — included normally, so it inherits the same
     #     X-API-Key gate as the rest of the API.
-    #   * /metrics — the path Prometheus scrapes by convention, mounted so it
-    #     is reachable WITHOUT auth. The gate lives on the app router's
-    #     dependencies (merged into each route at include time), so we drop it
-    #     just for this include and restore it immediately after.
+    #   * /metrics — the path Prometheus scrapes by convention. Outside
+    #     production it stays open so a stock scrape config works. In
+    #     production it carries the same X-API-Key gate as everything else,
+    #     unless the operator opts out with VALIDSIM_METRICS_PUBLIC=1. The
+    #     series expose run/approval/block counts and request volume -- small,
+    #     but operational data an anonymous caller should not be able to
+    #     enumerate, and the default must fail closed like the API-key check.
+    #
+    #     The gate lives on the app router's dependencies (merged into each
+    #     route at include time), so we drop it for this include and restore it
+    #     immediately after, re-attaching it explicitly when the scrape path is
+    #     not public.
     application.include_router(metrics_router, prefix="/api/v1")
+    metrics_public = deployment not in AUTH_REQUIRED_ENVS or _env_flag(
+        "VALIDSIM_METRICS_PUBLIC"
+    )
     saved_dependencies = application.router.dependencies
     application.router.dependencies = []
     try:
-        application.include_router(metrics_router)
+        if metrics_public or api_key is None:
+            application.include_router(metrics_router)
+        else:
+            application.include_router(
+                metrics_router, dependencies=[Depends(require_api_key)]
+            )
     finally:
         application.router.dependencies = saved_dependencies
 

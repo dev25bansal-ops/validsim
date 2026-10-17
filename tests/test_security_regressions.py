@@ -43,10 +43,18 @@ def test_webhook_post_sends_json_content_type(monkeypatch: pytest.MonkeyPatch) -
     class _Response:
         status_code = 200
 
-    def _fake_post(url: str, *, content: str, headers: dict[str, str], timeout: float) -> Any:
+    def _fake_post(
+        url: str,
+        *,
+        content: str,
+        headers: dict[str, str],
+        timeout: float,
+        follow_redirects: bool,
+    ) -> Any:
         captured["url"] = url
         captured["content"] = content
         captured["headers"] = headers
+        captured["follow_redirects"] = follow_redirects
         return _Response()
 
     monkeypatch.setattr("validsim.notify.dispatcher.httpx.post", _fake_post)
@@ -57,6 +65,9 @@ def test_webhook_post_sends_json_content_type(monkeypatch: pytest.MonkeyPatch) -
 
     assert [r.ok for r in results] == [True]
     assert captured["headers"].get("Content-Type") == "application/json"
+    # A redirect would let a public host bounce the POST at an address the
+    # registration-time egress check never inspected (see notify/egress.py).
+    assert captured["follow_redirects"] is False
     # The body must still be valid JSON so a receiver can parse what we declared.
     assert json.loads(captured["content"])["run_id"] == "vrun-cafe1234"
 
@@ -73,7 +84,14 @@ def test_webhook_signature_is_computed_over_the_exact_body(
     class _Response:
         status_code = 200
 
-    def _fake_post(url: str, *, content: str, headers: dict[str, str], timeout: float) -> Any:
+    def _fake_post(
+        url: str,
+        *,
+        content: str,
+        headers: dict[str, str],
+        timeout: float,
+        follow_redirects: bool,
+    ) -> Any:
         captured["content"] = content
         captured["headers"] = headers
         return _Response()

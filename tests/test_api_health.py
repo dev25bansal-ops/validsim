@@ -29,6 +29,10 @@ _CONFIG_ENV = (
     "VALIDSIM_RATE_LIMIT",
     "VALIDSIM_RATE_WINDOW_SECONDS",
     "VALIDSIM_JOB_QUEUE",
+    # Deployment mode gates both the API-key requirement and the wildcard-CORS
+    # refusal, so a stray VALIDSIM_ENV=production in the ambient environment
+    # would otherwise make every case here fail at create_app() time.
+    "VALIDSIM_ENV",
 )
 
 #: The full expected key set of the readiness payload.
@@ -68,7 +72,9 @@ class TestHealthPayload:
 
         # Readiness fields reflect the shipped defaults.
         assert body["auth_enabled"] is False
-        assert body["cors_wildcard"] is True  # CORS allow-list defaults to "*"
+        # CORS ships closed: the default allow-list is empty, not "*", so the
+        # probe must not advertise a wildcard (SEC-007).
+        assert body["cors_wildcard"] is False
         # Write-route protection ships on; only an explicit 0 disables it.
         assert body["rate_limit"] == {
             "requests": DEFAULT_RATE_LIMIT,
@@ -100,7 +106,16 @@ class TestAuthEnabled:
 
 
 class TestCorsWildcard:
-    def test_true_by_default(self) -> None:
+    """CORS ships closed and refuses to reopen in production (SEC-007)."""
+
+    def test_false_by_default(self) -> None:
+        client = TestClient(create_app(ValidationStore()))
+        assert _health(client)["cors_wildcard"] is False
+
+    def test_true_only_when_star_is_requested(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_CORS_ORIGINS", "*")
         client = TestClient(create_app(ValidationStore()))
         assert _health(client)["cors_wildcard"] is True
 
@@ -110,6 +125,32 @@ class TestCorsWildcard:
         monkeypatch.setenv(
             "VALIDSIM_CORS_ORIGINS", "http://a.example,http://b.example"
         )
+        client = TestClient(create_app(ValidationStore()))
+        assert _health(client)["cors_wildcard"] is False
+
+    def test_an_empty_value_is_not_a_wildcard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blank must mean "no origins", never "fall back to allow-all"."""
+        monkeypatch.setenv("VALIDSIM_CORS_ORIGINS", "")
+        client = TestClient(create_app(ValidationStore()))
+        assert _health(client)["cors_wildcard"] is False
+
+    def test_production_refuses_a_wildcard_origin_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_ENV", "production")
+        monkeypatch.setenv("VALIDSIM_API_KEY", "secret-123")
+        monkeypatch.setenv("VALIDSIM_CORS_ORIGINS", "*")
+        with pytest.raises(RuntimeError, match="refuses VALIDSIM_CORS_ORIGINS"):
+            create_app(ValidationStore())
+
+    def test_production_accepts_an_explicit_origin_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_ENV", "production")
+        monkeypatch.setenv("VALIDSIM_API_KEY", "secret-123")
+        monkeypatch.setenv("VALIDSIM_CORS_ORIGINS", "https://gates.example.com")
         client = TestClient(create_app(ValidationStore()))
         assert _health(client)["cors_wildcard"] is False
 

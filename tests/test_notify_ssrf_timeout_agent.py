@@ -7,22 +7,32 @@ code path rather than a mocked approximation.
 
 Pinned here:
 
-* **SSRF.** ``register()`` (dispatcher.py:193-219) validates ``format`` and
-  ``min_severity`` but never the URL. ``_post()`` (dispatcher.py:269) hands that
-  URL straight to ``httpx.post``. An operator-supplied hook can therefore name a
-  loopback, RFC1918 or link-local address, and the scorecard JSON is POSTed to
-  it. The socket-level proof is in :class:`LoopbackTrap`; the delivery is
-  *blind* (the response body is discarded), which bounds the impact but not the
-  reachability.
-* **Scheme allowlist.** ``file://``, ``gopher://`` and even ``not-a-url`` are
-  accepted by ``register()`` with no error.
+* **SSRF — now FIXED.** ``register()`` originally validated ``format`` and
+  ``min_severity`` but never the URL, so an operator-supplied hook could name a
+  loopback, RFC1918 or link-local address and the scorecard JSON was POSTed to
+  it. Registration now applies the egress policy in
+  :mod:`validsim.notify.egress` and raises ``ValueError`` for any destination
+  that is not an absolute http(s) URL with a globally routable host. The tests
+  below assert the *refusal*; :class:`LoopbackTrap` and the
+  ``allow_private_hosts=True`` opt-in remain, because they are what prove the
+  refusal is a policy decision rather than a dead probe.
+* **Scheme allowlist — now FIXED.** ``file://``, ``gopher://``, ``ftp://`` and
+  ``not-a-url`` are all rejected by ``register()`` with ``ValueError``.
 * **Timeout/retry bound.** ``timeout=_TIMEOUT_S`` is a single float covering
   every phase, retried ``_MAX_RETRIES`` times, *serially*, per hook. The worst
   case is therefore ``(_MAX_RETRIES + 1) * _TIMEOUT_S + backoff`` per hook, and
-  ``dispatch()`` walks the hooks one at a time.
+  ``dispatch()`` walks the hooks one at a time. **Still open** — an operator who
+  registers many hooks multiplies the bound, and there is no per-dispatch
+  ceiling.
 * **No overall deadline.** httpx applies the read timeout *per read*, so a
   response body that trickles a byte at a time can occupy the caller far beyond
-  ``_TIMEOUT_S``.
+  ``_TIMEOUT_S``. **Still open.**
+
+The timeout findings need a real slow listener on ``127.0.0.1``, which the
+egress policy deliberately refuses, so those tests construct their dispatcher
+with ``allow_private_hosts=True``. That flag is the documented escape hatch for
+local receivers and is never enabled for a dispatcher built from untrusted
+configuration.
 
 Every "this path is safe" claim is paired with a **control** proving the probe
 can observe a violation, so a green run means "verified" rather than "blind".
@@ -30,7 +40,6 @@ can observe a violation, so a green run means "verified" rather than "blind".
 
 from __future__ import annotations
 
-import json
 import socket
 import threading
 import time
@@ -239,54 +248,47 @@ def http_post_stub(monkeypatch: pytest.MonkeyPatch):
 
 
 # ---------------------------------------------------------------------------
-# (1) SSRF: loopback / private targets are reachable through the public API.
+# (1) SSRF: loopback / private targets are refused at registration time.
 # ---------------------------------------------------------------------------
 class TestSsrfReachability:
-    """A webhook URL may name a private address, and it is really contacted."""
+    """A private webhook destination is refused before any socket is opened."""
 
-    def test_loopback_target_receives_the_scorecard(
+    def test_loopback_target_is_refused_and_never_contacted(
         self, trap: LoopbackTrap, scorecard: Scorecard
     ) -> None:
-        """FINDING -- loopback SSRF via an operator-supplied hook URL.
+        """FIXED -- the loopback hook is rejected at registration.
 
-        Reproduction: register a hook pointing at a loopback listener, dispatch,
-        and observe a real HTTP POST arrive carrying the whole scorecard.
+        The listener stays up for the whole test, so if the URL ever reached the
+        network layer ``trap.hits`` would be non-empty. Asserting it is empty is
+        what makes this a reachability test rather than a mock assertion.
         """
         dispatcher = WebhookDispatcher(live=True)
-        dispatcher.register("internal", trap.url)
+        with pytest.raises(ValueError, match="refusing webhook destination"):
+            dispatcher.register("internal", trap.url)
 
-        (result,) = dispatcher.dispatch(scorecard)
+        # Nothing was registered, so a dispatch is a no-op and the trap is silent.
+        assert dispatcher.dispatch(scorecard) == []
+        assert trap.hits == [], "the refused URL still reached the network"
 
-        assert result.ok is True and result.status_code == 200
-        assert len(trap.hits) == 1, f"expected one loopback request, got {trap.hits}"
-        hit = trap.hits[0]
-        assert hit["request_line"].startswith("POST /internal")
-        # The complete scorecard is delivered to the internal target.
-        assert hit["content_type"] == "application/json"
-        payload = json.loads(hit["body"])
-        assert payload["run_id"] == scorecard.run_id
-        assert payload["deploy_decision"] == "APPROVE"
-        assert payload["composite_score"] == scorecard.composite_score
-
-    def test_loopback_name_also_reaches_it(
+    def test_loopback_name_is_also_refused(
         self, trap: LoopbackTrap, scorecard: Scorecard
     ) -> None:
         """``localhost`` is ``127.0.0.1`` by another name."""
         dispatcher = WebhookDispatcher(live=True)
-        dispatcher.register("internal", f"http://localhost:{trap.port}/internal")
-        (result,) = dispatcher.dispatch(scorecard)
-        assert result.ok is True
-        assert len(trap.hits) == 1
+        with pytest.raises(ValueError, match="loopback hostname"):
+            dispatcher.register("internal", f"http://localhost:{trap.port}/internal")
+        assert trap.hits == []
 
     def test_control_the_trap_detects_a_real_request(
         self, trap: LoopbackTrap, scorecard: Scorecard
     ) -> None:
-        """CONTROL -- the trap is live in both directions.
+        """CONTROL -- the trap is live, so the refusals above mean something.
 
-        With the listener stopped the very same dispatch records nothing, so the
-        assertion above observes an actual connection.
+        With ``allow_private_hosts=True`` the very same loopback URL is accepted
+        and a real POST arrives. That proves the rejection is the egress policy
+        at work, not a broken listener or a stub that never fires.
         """
-        dispatcher = WebhookDispatcher(live=True)
+        dispatcher = WebhookDispatcher(live=True, allow_private_hosts=True)
         dispatcher.register("internal", trap.url)
         dispatcher.dispatch(scorecard)
         assert len(trap.hits) == 1, "control: a live listener must record a hit"
@@ -300,14 +302,13 @@ class TestSsrfReachability:
     def test_delivery_is_blind_so_the_response_cannot_be_relayed(
         self, trap: LoopbackTrap, scorecard: Scorecard
     ) -> None:
-        """Impact is bounded: the response body never reaches the caller.
+        """Impact stays bounded even for an explicitly permitted private target.
 
-        ``DeliveryResult`` keeps only ``status_code``/``error``, so the SSRF
-        cannot read an internal endpoint through ValidSim -- it is a blind write
-        plus a status-code oracle. That is why the finding sits below a
-        credential-exfiltration bug in severity.
+        ``DeliveryResult`` keeps only ``status_code``/``error``, so even a
+        deliberately allowed private hook cannot read an internal endpoint
+        through ValidSim -- it is a blind write plus a status-code oracle.
         """
-        dispatcher = WebhookDispatcher(live=True)
+        dispatcher = WebhookDispatcher(live=True, allow_private_hosts=True)
         dispatcher.register("internal", trap.url)
         (result,) = dispatcher.dispatch(scorecard)
         assert result.ok is True
@@ -336,10 +337,11 @@ class TestSsrfReachability:
             "",
         ],
     )
-    def test_register_accepts_any_scheme_without_complaint(self, url: str) -> None:
-        """FINDING -- no scheme allowlist, and not even a URL parse check."""
+    def test_register_refuses_any_non_http_scheme(self, url: str) -> None:
+        """FIXED -- only absolute http(s) URLs are accepted."""
         dispatcher = WebhookDispatcher(live=True)
-        dispatcher.register("x", url)  # must not raise
+        with pytest.raises(ValueError, match="refusing webhook destination"):
+            dispatcher.register("x", url)
         assert dispatcher.sent == []
 
     @pytest.mark.parametrize(
@@ -356,26 +358,24 @@ class TestSsrfReachability:
             "http://[fd00::1]:9/internal",
         ],
     )
-    def test_register_never_rejects_a_private_target(
+    def test_register_refuses_every_private_target(
         self, url: str, http_post_stub: Any, scorecard: Scorecard
     ) -> None:
-        """No address class is filtered -- neither at registration nor at dispatch.
+        """FIXED -- no address class in this list reaches the network layer.
 
         The transport is stubbed so this asserts *policy* (would ValidSim have
         refused?) rather than what the local OS does with the address. A blocked
-        target must never reach the network layer at all.
+        target must never reach the network layer at all, so ``seen`` must stay
+        empty -- not merely produce a failed delivery.
         """
         seen = http_post_stub()
         dispatcher = WebhookDispatcher(live=True)
-        dispatcher.register("x", url)  # registration itself must not raise
+        with pytest.raises(ValueError, match="refusing webhook destination"):
+            dispatcher.register("x", url)
 
         dispatcher.dispatch(scorecard)
 
-        assert len(seen) == 1, (
-            f"{url!r} was dispatched anyway -- if this is ever fixed, register() "
-            "should reject the URL and no POST should be attempted"
-        )
-        assert seen[0]["url"] == url
+        assert seen == [], f"{url!r} reached httpx.post despite being refused"
 
     def test_register_does_validate_the_fields_it_claims_to(self) -> None:
         """CONTROL -- ``register()`` is not a no-op: it does validate some input.
@@ -529,7 +529,9 @@ class TestTimeoutBound:
 
         threading.Thread(target=_blackhole, daemon=True).start()
         try:
-            dispatcher = WebhookDispatcher(live=True)
+            # A real slow listener on loopback is the only way to observe the
+            # retry bound; the egress policy refuses it by default, so opt in.
+            dispatcher = WebhookDispatcher(live=True, allow_private_hosts=True)
             dispatcher.register("blackhole", f"http://127.0.0.1:{port}/x")
             t0 = time.perf_counter()
             (result,) = dispatcher.dispatch(_simple_scorecard())
@@ -589,7 +591,7 @@ class TestTimeoutBound:
 
         threading.Thread(target=_trickle, daemon=True).start()
         try:
-            dispatcher = WebhookDispatcher(live=True)
+            dispatcher = WebhookDispatcher(live=True, allow_private_hosts=True)
             dispatcher.register("slow", f"http://127.0.0.1:{port}/x")
             t0 = time.perf_counter()
             (result,) = dispatcher.dispatch(_simple_scorecard())

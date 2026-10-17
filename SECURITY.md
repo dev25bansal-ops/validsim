@@ -264,6 +264,20 @@ environment variables and are read once at `create_app()` time. A control that i
   receivers can authenticate Slack/CI notifications instead of trusting the sender
   address. Delivery uses bounded retries with exponential backoff rather than an
   unbounded queue.
+- **Webhook egress policy (SSRF)** — a notification destination must be an
+  absolute `http(s)` URL whose host is globally routable. Loopback, link-local
+  (including the `169.254.169.254` instance-metadata address), RFC1918, CGNAT,
+  multicast, reserved, unspecified and IPv4-mapped-IPv6 spellings are refused, as
+  are the well-known cloud metadata hostnames and the private-use
+  `.internal`/`.local`/`.home.arpa` suffixes. The same policy backs both
+  `VALIDSIM_WEBHOOK_URLS` and `WebhookDispatcher.register()`, so the config path
+  and the programmatic API cannot drift. Redirects are explicitly not followed,
+  so a 302 cannot reach an address the policy never saw. **Residual:** a DNS name
+  that resolves to a private address is not caught, because the check is a pure
+  predicate and performs no lookup — pinning the resolved address at connect time
+  is the remaining hardening step. Local receivers during development require the
+  explicit `WebhookDispatcher(allow_private_hosts=True)` opt-in, which must never
+  be enabled for a dispatcher built from untrusted configuration.
 - **Strict schema validation at the boundary** — Pydantic v2 models are frozen and
   intentionally strict (`ConfigDict(frozen=True)`, bounded numeric ranges such as
   `dof` 1–40), so malformed configuration is rejected at the API/CLI edge rather than

@@ -55,7 +55,6 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
 
 from validsim.notify.dispatcher import (
     HookFormat,
@@ -63,6 +62,7 @@ from validsim.notify.dispatcher import (
     WebhookDispatcher,
     _LIVE_ENV,
 )
+from validsim.notify.egress import is_deliverable_url
 
 __all__ = [
     "HookSpec",
@@ -217,12 +217,16 @@ def _valid_url(url: str) -> bool:
     a bare hostname) is a misconfiguration, and POSTing a run's composite score
     to an arbitrary scheme handler is not something a config typo should be
     able to do.
+
+    The host is additionally checked against the egress policy in
+    :mod:`validsim.notify.egress`, so a destination naming loopback, link-local,
+    RFC1918 or otherwise non-global space is refused at config time rather than
+    at delivery time. Delegating keeps this path and
+    :meth:`~validsim.notify.dispatcher.WebhookDispatcher.register` -- the direct
+    API -- on one policy; a hardened env path beside a permissive API is exactly
+    the split that lets an SSRF through.
     """
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    return is_deliverable_url(url)
 
 
 def notify_config_from_env(environ: Mapping[str, str] | None = None) -> NotifyConfig:

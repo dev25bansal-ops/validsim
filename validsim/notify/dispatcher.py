@@ -55,6 +55,7 @@ from typing import Any, Literal
 import httpx
 
 from validsim.engine.scorecard import Scorecard
+from validsim.notify.egress import url_rejection_reason
 
 __all__ = [
     "DeliveryResult",
@@ -263,9 +264,26 @@ class WebhookDispatcher:
        send time.
     """
 
-    def __init__(self, live: bool | None = None) -> None:
-        """Create a dispatcher, remembering whether *live* was pinned."""
+    def __init__(
+        self, live: bool | None = None, allow_private_hosts: bool = False
+    ) -> None:
+        """Create a dispatcher, remembering whether *live* was pinned.
+
+        Args:
+            live: Pin live delivery on/off; ``None`` defers to
+                ``VALIDSIM_WEBHOOKS_LIVE`` at call time.
+            allow_private_hosts: Opt out of the egress policy in
+                :mod:`validsim.notify.egress`, permitting loopback, link-local
+                and RFC1918 destinations. Off by default, because the shipped
+                configuration surface is an operator-supplied URL and a
+                copy-pasted internal address must not become an SSRF. It exists
+                for the two callers that legitimately need a private target: a
+                local receiver during development, and the timeout/retry tests
+                that need a real slow listener on ``127.0.0.1``. Never enable it
+                for a dispatcher built from untrusted configuration.
+        """
         self._forced_live = live
+        self._allow_private_hosts = allow_private_hosts
         self._hooks: list[tuple[str, str, HookFormat, str | None, Severity]] = []
         self._sent: list[DeliveryResult] = []
 
@@ -312,6 +330,18 @@ class WebhookDispatcher:
             raise ValueError(f"unsupported hook format: {format!r}")
         if min_severity not in _SEVERITY_RANK:
             raise ValueError(f"unsupported min_severity: {min_severity!r}")
+        # Refuse at registration, not at delivery. A destination that names
+        # loopback, link-local, RFC1918 or otherwise non-global space would
+        # otherwise be POSTed a payload carrying run ids and verdicts from
+        # inside the deployment's own network -- the classic SSRF. Rejecting
+        # here means a bad hook can never reach the socket layer at all, and
+        # the operator learns at configure time rather than from a silent
+        # delivery result. See :mod:`validsim.notify.egress` for what the
+        # policy does and does not cover.
+        if not self._allow_private_hosts:
+            reason = url_rejection_reason(url)
+            if reason is not None:
+                raise ValueError(f"refusing webhook destination {url!r}: {reason}")
         self._hooks.append((name, url, format, secret, min_severity))
 
     def dispatch(self, scorecard: Scorecard) -> list[DeliveryResult]:
@@ -414,7 +444,17 @@ class WebhookDispatcher:
                 attempt_timeout = min(attempt_timeout, remaining)
             try:
                 response = httpx.post(
-                    url, content=body, headers=headers, timeout=attempt_timeout
+                    url,
+                    content=body,
+                    headers=headers,
+                    timeout=attempt_timeout,
+                    # Stated rather than inherited. httpx already defaults to
+                    # False, but a 302 from a public host to
+                    # http://169.254.169.254/ would defeat the registration-time
+                    # egress check if this ever flipped: the policy is applied
+                    # to the URL as written, so following a redirect would
+                    # contact an address it never saw.
+                    follow_redirects=False,
                 )
             except Exception as exc:  # noqa: BLE001 - never let delivery raise
                 last = DeliveryResult(name, url, False, None, str(exc), dry_run=False)

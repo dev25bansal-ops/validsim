@@ -49,9 +49,18 @@ class TestBasics:
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 
-    def test_cors_allows_origins(self, client: TestClient) -> None:
+    def test_cors_denies_origins_by_default(self, client: TestClient) -> None:
+        """CORS ships closed (SEC-007): no allow-list means no CORS header."""
         response = client.get("/api/v1/health", headers={"Origin": "http://localhost:3000"})
-        assert response.headers.get("access-control-allow-origin") == "*"
+        assert "access-control-allow-origin" not in response.headers
+
+    def test_cors_allows_a_configured_origin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VALIDSIM_CORS_ORIGINS", "http://localhost:3000")
+        client = TestClient(create_app(ValidationStore()))
+        response = client.get("/api/v1/health", headers={"Origin": "http://localhost:3000"})
+        assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
 
     def test_invalid_body_rejected(self, client: TestClient) -> None:
         bad = _request_body()

@@ -34,6 +34,11 @@ import pytest
 from validsim.engine.scorecard import Scorecard
 from validsim.notify.dispatcher import DeliveryResult, WebhookDispatcher
 
+#: A port nothing listens on, so a live send fails fast and visibly. Loopback is
+#: deliberate -- the point is that a dry run must not touch it at all -- which
+#: means the dispatcher needs the explicit private-host opt-in; without it
+#: ``register()`` refuses the destination outright (see
+#: :mod:`validsim.notify.egress`).
 _TRAP = "http://127.0.0.1:9/never"
 
 
@@ -57,7 +62,7 @@ def _card() -> Scorecard:
 
 
 def _dispatch(live: bool) -> DeliveryResult:
-    dispatcher = WebhookDispatcher(live=live)
+    dispatcher = WebhookDispatcher(live=live, allow_private_hosts=True)
     dispatcher.register("hook", _TRAP)
     (result,) = dispatcher.dispatch(_card())
     return result

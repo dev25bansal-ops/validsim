@@ -3,7 +3,8 @@
 ``VALIDSIM_API_KEY`` gates every ``/api/v1`` route behind an ``X-API-Key``
 header; when the variable is unset, auth is disabled entirely (the behavior
 the rest of the test-suite relies on). CORS origins come from
-``VALIDSIM_CORS_ORIGINS`` (comma-separated, default ``"*"``).
+``VALIDSIM_CORS_ORIGINS`` (comma-separated, default empty = no cross-origin
+access; ``"*"`` is opt-in and refused under ``VALIDSIM_ENV=production``).
 
 Both variables are read at :func:`create_app` time, so each test sets env,
 builds a fresh app, and restores the environment in a finally block.
@@ -247,8 +248,15 @@ class TestSchemaDocsAreGated:
 
 
 class TestCorsOrigins:
-    def test_default_allows_all(self, clean_env: None) -> None:
-        """Default CORS behavior (``"*"``) is preserved for existing tests."""
+    def test_default_denies_all(self, clean_env: None) -> None:
+        """The default is a closed allow-list, not ``"*"`` (SEC-007)."""
+        client = _client()
+        response = client.get("/api/v1/health", headers={"Origin": "http://a.test"})
+        assert "access-control-allow-origin" not in response.headers
+
+    def test_explicit_wildcard_still_allows_all(self, clean_env: None) -> None:
+        """``"*"`` remains available when asked for explicitly."""
+        os.environ[ENV_ORIGINS] = "*"
         client = _client()
         response = client.get("/api/v1/health", headers={"Origin": "http://a.test"})
         assert response.headers.get("access-control-allow-origin") == "*"

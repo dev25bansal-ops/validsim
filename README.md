@@ -74,7 +74,7 @@ deploy decision from process-local data. For the one-line local fix, run
 The API is deployment-hardened via environment variables, read at `create_app()` time:
 
 - `VALIDSIM_API_KEY` — when set, every `/api/v1` route requires a matching `X-API-Key` header (constant-time comparison, uniform 401). Unset = auth disabled (local dev / tests).
-- `VALIDSIM_CORS_ORIGINS` — comma-separated CORS origin allow-list (default `*`).
+- `VALIDSIM_CORS_ORIGINS` — comma-separated CORS origin allow-list (default **empty** = no cross-origin access; the bundled dashboard is same-origin. `*` = allow-all, refused when `VALIDSIM_ENV=production`).
 - `VALIDSIM_RATE_LIMIT` / `VALIDSIM_RATE_WINDOW_SECONDS` — per-client sliding-window budget for write/sensitive routes (default `60` per `60`s; set `VALIDSIM_RATE_LIMIT=0` to disable).
 
 List endpoints are paginated with `limit` (1–500, default 100) and `offset`:
@@ -144,7 +144,7 @@ interface, so the API and a separate worker process can drive the same queue.
 
 The API is instrumented for production operation:
 
-- **Prometheus metrics** — `GET /metrics` serves the text exposition format (also mounted auth-gated at `/api/v1/metrics`): `validsim_runs_total`, `validsim_approvals_total`, `validsim_blocks_total`, the `validsim_composite_score` gauge (latest run), `validsim_build_info{version=…}`, and `validsim_http_requests_total{class="2xx|3xx|4xx|5xx"}`. The run/approval/block/composite values are derived from the injected store in a single cheap pass, so a scrape performs no extra I/O.
+- **Prometheus metrics** — `GET /metrics` serves the text exposition format (also mounted auth-gated at `/api/v1/metrics`; in production the bare `/metrics` path requires `X-API-Key` too unless `VALIDSIM_METRICS_PUBLIC` is set): `validsim_runs_total`, `validsim_approvals_total`, `validsim_blocks_total`, the `validsim_composite_score` gauge (latest run), `validsim_build_info{version=…}`, and `validsim_http_requests_total{class="2xx|3xx|4xx|5xx"}`. The run/approval/block/composite values are derived from the injected store in a single cheap pass, so a scrape performs no extra I/O.
 - **Structured JSON logging** — `validsim.logging.configure_logging()` (called at `create_app()` time, idempotent) attaches exactly one handler that emits a single JSON object per record (`timestamp`, `level`, `logger`, `message` plus any structured `extra` fields); the level is controlled by `VALIDSIM_LOG_LEVEL`.
 - **Request tracing** — the outermost ASGI middleware reuses an inbound `X-Request-ID` or mints a `uuid4`, echoes it on every response, and logs one structured `http_request` line (`method`, `path`, `status`, `duration_ms`, `request_id`) while bumping the HTTP counter — so 401/429 produced by inner auth/rate-limit layers are still observed.
 
