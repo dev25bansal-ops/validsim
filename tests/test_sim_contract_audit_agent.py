@@ -683,7 +683,7 @@ class TestParserRejectsMalformations:
 
 
 class TestNonFiniteNumbers:
-    """NaN / Infinity handling on the wire.
+    """NaN / Infinity are rejected on the wire, in every numeric slot.
 
     ``NaN``, ``Infinity`` and ``-Infinity`` are **not** JSON (RFC 8259 has no
     literal for them), but Python's ``json.loads`` accepts them as an extension
@@ -694,12 +694,15 @@ class TestNonFiniteNumbers:
     ``json`` (or a hand-rolled encoder) can, and ``json.loads`` on the client
     happily produces them.
 
-    MEASURED: the parser accepts every one of them, in every numeric slot,
-    including the two safety observables. These are *characterization* tests,
-    not red ones: "the parser has no finiteness check" is a gap, not a
-    contradiction of any single doc sentence. See
-    ``TestXfailNonFiniteObservablesAreNotRejected`` for the part that *is*
-    contract-violating.
+    MEASURED (before the fix): the parser accepted every one of them, in every
+    numeric slot, including the two safety observables -- a ``NaN`` contact force
+    is not an absent reading but a number that turns every aggregate it enters
+    into ``NaN``, including the safety score the gate is built on. These tests
+    pinned that behaviour as characterization; they now pin the rejection.
+
+    The premise tests at the top are kept: they establish that the input really
+    can arrive, so a future "the parser rejects NaN" assertion cannot pass
+    vacuously by feeding it something ``json.loads`` would never produce.
     """
 
     @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
@@ -708,22 +711,24 @@ class TestNonFiniteNumbers:
         payload = '{"v": 0.0, "x": %s}' % token
         assert math_isnan_or_inf(json.loads(payload)["x"], token)
 
-    def test_parser_accepts_nan_in_max_contact_force_n(self) -> None:
-        parsed = _accepts(_payload(_clone(lambda e: e.update(max_contact_force_n=float("nan")))))
-        assert parsed[0].max_contact_force_n != parsed[0].max_contact_force_n  # NaN != NaN
+    def test_nan_contact_force_is_rejected(self) -> None:
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(max_contact_force_n=float("nan"))))
+        )
 
-    def test_parser_accepts_nan_in_min_human_distance_m(self) -> None:
-        """A *safety* observable goes NaN and the parser shrugs."""
-        parsed = _accepts(_payload(_clone(lambda e: e.update(min_human_distance_m=float("nan")))))
-        assert parsed[0].min_human_distance_m is not None
-        assert math_isnan_or_inf(parsed[0].min_human_distance_m, "NaN")
+    def test_nan_human_distance_is_rejected(self) -> None:
+        """A *safety* observable going NaN is the case that matters most."""
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(min_human_distance_m=float("nan"))))
+        )
 
-    def test_parser_accepts_infinity_in_duration_s(self) -> None:
-        parsed = _accepts(_payload(_clone(lambda e: e.update(duration_s=float("inf")))))
-        assert math_isinf(parsed[0].duration_s)
+    def test_infinite_duration_is_rejected(self) -> None:
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(duration_s=float("inf"))))
+        )
 
-    def test_parser_accepts_nan_inside_joint_states_summary(self) -> None:
-        parsed = _accepts(
+    def test_nan_inside_joint_states_summary_is_rejected(self) -> None:
+        assert "finite" in _rejects(
             _payload(
                 _clone(
                     lambda e: e.update(
@@ -732,25 +737,29 @@ class TestNonFiniteNumbers:
                 )
             )
         )
-        assert math_isnan_or_inf(parsed[0].joint_states_summary["position_rms"], "NaN")
 
-    def test_parser_accepts_float_overflow_to_infinity(self) -> None:
-        """``1e400`` is *valid* JSON that overflows a double to ``inf``."""
-        parsed = _accepts(_payload(_clone(lambda e: e.update(max_contact_force_n=1e400))))
-        assert math_isinf(parsed[0].max_contact_force_n)
+    def test_float_overflow_to_infinity_is_rejected(self) -> None:
+        """``1e400`` is *valid* JSON that overflows a double to ``inf``.
 
-    def test_bare_nan_token_round_trips_through_a_real_reply(self) -> None:
+        So the check cannot be a type check alone: this arrives as an ordinary
+        ``float``.
+        """
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(max_contact_force_n=1e400)))
+        )
+
+    def test_bare_nan_token_is_rejected_through_a_real_reply(self) -> None:
         """A stdlib-``json`` worker really can put a bare ``NaN`` on the wire.
 
         ``httpx.Response(json=...)`` refuses to *emit* it (it sets
-        ``allow_nan=False``), so the fake has to hand over raw content. This
-        is the only way a real worker could deliver a non-finite number to
-        this parser, and it succeeds.
+        ``allow_nan=False``), so the fake has to hand over raw content. This is
+        the only way a real worker could deliver a non-finite number to this
+        parser, and it is now rejected.
         """
         body = json.dumps(_payload(_clone(lambda e: e.update(max_contact_force_n=float("nan")))))
         assert '"max_contact_force_n": NaN' in body, "premise: bare NaN token emitted"
-        parsed = _post_text(body.encode("utf-8"))
-        assert math_isnan_or_inf(parsed[0].max_contact_force_n, "NaN")
+        with pytest.raises(SimWorkerError, match="finite"):
+            _post_text(body.encode("utf-8"))
 
     def test_httpx_cannot_even_encode_a_non_finite_reply(self) -> None:
         """Documents the one mitigation that does exist, and where it stops.
@@ -786,30 +795,65 @@ def math_isinf(value: float) -> bool:
 # ============================================================================
 
 
+def _human_in_wire(scenario: dict[str, Any]) -> bool:
+    """Whether a *wire* scenario describes a scene with a person in it.
+
+    The wire form drops ``name``, so the dict is rebuilt into a real
+    :class:`AdversarialScenario` and handed to the same predicate the client
+    validates with (:func:`validsim.sim.runner.human_in_scene`). Restating the
+    rule here would let the fake and the client drift, which is the exact failure
+    a shadow run exists to detect.
+    """
+    from validsim.sim.runner import human_in_scene
+
+    return human_in_scene(
+        AdversarialScenario(
+            id=scenario["id"],
+            category=scenario["category"],
+            name=scenario.get("name", scenario["id"]),
+            params=scenario.get("params", {}),
+            difficulty=scenario.get("difficulty", 0.5),
+        )
+    )
+
+
 def _blind_worker_transport(p_success: float, salt: int) -> httpx.MockTransport:
     """A worker that ignores every wire parameter and samples fresh Bernoulli(p).
 
-    It never reads ``checkpoint_id``, ``randomization_level`` or ``scenarios``
-    -- it echoes the seeds and level back (so the strict parser accepts it) and
-    draws an outcome that is statistically identical to, but *uncorrelated
-    with*, the mock's. It is contract-conformant and completely deaf.
+    It never reads ``checkpoint_id``, ``randomization_level`` or the scenarios'
+    *contents* -- it echoes the seeds and level back (so the strict parser
+    accepts it) and draws an outcome that is statistically identical to, but
+    *uncorrelated with*, the mock's. It is contract-conformant and completely
+    deaf.
+
+    The one thing it does read is each scenario's **category**, because the wire
+    contract requires a ``min_human_distance_m`` from a human-present scene and
+    ``null`` from every other one, and a contract violation is not the blindness
+    being measured here -- a rejected run would make the gate look sharper than
+    it is. Reading the category to *echo* the observable is not reading it to
+    *respond* to it: the outcome still ignores every scenario parameter.
     """
     rng = random.Random(salt)
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        count = int(body["episodes"]) + len(body["scenarios"])
+        nominal = int(body["episodes"])
+        scenarios = list(body["scenarios"])
+        count = nominal + len(scenarios)
         base = int(body["seed"])
         level = str(body["randomization_level"])
-        return httpx.Response(
-            200,
-            json={
-                "episodes": [
-                    _episode(base + i, success=rng.random() < p_success, level=level)
-                    for i in range(count)
-                ]
-            },
-        )
+        episodes = []
+        for i in range(count):
+            human = i >= nominal and _human_in_wire(scenarios[i - nominal])
+            episodes.append(
+                _episode(
+                    base + i,
+                    success=rng.random() < p_success,
+                    level=level,
+                    min_human_distance_m=0.42 if human else None,
+                )
+            )
+        return httpx.Response(200, json={"episodes": episodes})
 
     return httpx.MockTransport(handler)
 
@@ -997,70 +1041,83 @@ class TestShadowGatePower:
 
 
 # ============================================================================
-# 5. DOCUMENTED DEFECTS  (xfail(strict=True) -- these must keep failing)
+# 5. FORMERLY DOCUMENTED DEFECTS -- FIXED, AND PINNED AS FIXED
 # ============================================================================
+#
+# Each class below used to carry ``@pytest.mark.xfail(strict=True, reason=...)``
+# with the doc clause it violated. ``strict=True`` meant the test had to keep
+# failing, so the fix flipped every one of them to ``XPASS(strict)`` -- which is
+# exactly the workflow the module docstring describes: the moment a fix lands,
+# the suite goes red and the marker has to be removed. The markers are gone and
+# the assertions now pin the *fixed* behaviour, so a regression fails here
+# rather than silently re-opening the hole.
 
 
-class TestXfailFailureModeMustBeNullOnSuccess:
+class TestFailureModeMustBeNullOnSuccess:
     """docs §3: ``failure_mode`` "must be ``null`` on success".
 
-    MEASURED: not enforced. The parser validates the *taxonomy* of
-    ``failure_mode`` but never its agreement with ``success``, so a reply
-    claiming ``success: true, failure_mode: "collision"`` is accepted and
-    produces an internally contradictory :class:`EpisodeResult` --
-    simultaneously a success and a collision. Downstream that contradiction
-    feeds the failure-taxonomy distribution, which is one of the three signals
-    docs §5.3 says the shadow harness should track.
-
-    Reproduce::
-
-        python -m pytest tests/test_sim_contract_audit_agent.py -q -k XfailFailureMode
+    MEASURED (before the fix): not enforced. The parser validated the *taxonomy*
+    of ``failure_mode`` but never its agreement with ``success``, so a reply
+    claiming ``success: true, failure_mode: "collision"`` was accepted and
+    produced an internally contradictory :class:`EpisodeResult` --
+    simultaneously a success and a collision. Downstream that contradiction fed
+    the failure-taxonomy distribution, one of the three signals docs §5.3 says
+    the shadow harness should track.
     """
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{DEFECT}: docs sec.3 requires failure_mode null on success"
-    )
     def test_success_with_a_failure_mode_is_rejected(self) -> None:
         for mode in FAILURE_MODES:
-            _rejects(_payload(_clone(lambda e, m=mode: e.update(success=True, failure_mode=m))))
+            assert "failure_mode must be null on success" in _rejects(
+                _payload(_clone(lambda e, m=mode: e.update(success=True, failure_mode=m)))
+            )
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{DEFECT}: docs sec.3 requires failure_mode null on success"
-    )
     def test_success_episode_cannot_claim_a_collision(self) -> None:
+        """The sharpest form: one episode, two mutually exclusive verdicts."""
         reply = _payload(_clone(lambda e: e.update(success=True, failure_mode="collision")))
-        parsed = _accepts(reply)
-        assert not (parsed[0].success and parsed[0].failure_mode), (
-            "an episode is both a success and a collision -- the scorecard cannot "
-            "classify it and the failure distribution is silently wrong"
-        )
+        assert "failure_mode must be null on success" in _rejects(reply)
+
+    def test_a_failure_may_still_report_a_mode(self) -> None:
+        """The rule is one-directional: only *success* forbids a mode.
+
+        A failed episode with ``failure_mode: null`` is also legal -- the
+        contract says nothing is claimed about a failure's cause when the worker
+        does not know it -- so this pins that neither direction was over-tightened.
+        """
+        for mode in (None, "collision"):
+            parsed = _accepts(
+                _payload(_clone(lambda e, m=mode: e.update(success=False, failure_mode=m)))
+            )
+            assert parsed[0].success is False
+            assert parsed[0].failure_mode == mode
 
 
-class TestXfailNonFiniteObservablesAreNotRejected:
-    """The parser has no finiteness check on any numeric slot.
+class TestNonFiniteObservablesAreRejected:
+    """No numeric slot accepts a non-finite value (see :class:`TestNonFiniteNumbers`).
 
-    Not pinned to a single doc sentence, but it undermines the module's own
-    stated design rule: "A silently defaulted safety observable (contact
-    force, human proximity) would corrupt the scorecard, which is the one thing
-    this platform exists to prevent." A ``NaN`` contact force is worse than a
-    default -- it is a number that poisons every aggregate it enters.
+    Not pinned to a single doc sentence, but it protects the module's own stated
+    design rule: "A silently defaulted safety observable (contact force, human
+    proximity) would corrupt the scorecard, which is the one thing this platform
+    exists to prevent." A ``NaN`` contact force is worse than a default -- it is
+    a number that poisons every aggregate it enters.
     """
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: no math.isfinite check on the wire")
     def test_nan_contact_force_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(max_contact_force_n=float("nan")))))
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(max_contact_force_n=float("nan"))))
+        )
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: no math.isfinite check on the wire")
     def test_nan_human_distance_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(min_human_distance_m=float("nan")))))
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(min_human_distance_m=float("nan"))))
+        )
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: no math.isfinite check on the wire")
     def test_infinite_duration_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(duration_s=float("inf")))))
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(duration_s=float("inf"))))
+        )
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: no math.isfinite check on the wire")
     def test_nan_inside_joint_states_summary_is_rejected(self) -> None:
-        _rejects(
+        assert "finite" in _rejects(
             _payload(
                 _clone(
                     lambda e: e.update(
@@ -1070,51 +1127,93 @@ class TestXfailNonFiniteObservablesAreNotRejected:
             )
         )
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: no math.isfinite check on the wire")
     def test_float_overflow_to_infinity_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(max_contact_force_n=1e400))))
+        assert "finite" in _rejects(
+            _payload(_clone(lambda e: e.update(max_contact_force_n=1e400)))
+        )
+
+    def test_every_numeric_slot_rejects_nan(self) -> None:
+        """Parametrised over the slots, so a new numeric field cannot be missed.
+
+        ``joint_states_summary`` is checked separately above because its values
+        are nested rather than top-level.
+        """
+        for field in ("max_contact_force_n", "min_human_distance_m", "duration_s"):
+            assert "finite" in _rejects(
+                _payload(_clone(lambda e, f=field: e.update({f: float("nan")})))
+            ), f"{field} accepted NaN"
 
 
-class TestXfailNegativePhysicalQuantitiesAreNotRejected:
+class TestNegativePhysicalQuantitiesAreRejected:
     """A duration, a contact force or a human distance cannot be negative.
 
-    ``collision_count < 0`` *is* checked, which makes the omission of its
+    ``collision_count < 0`` *was* checked, which made the omission of its
     siblings look like an oversight rather than a policy: a worker reporting
     ``duration_s = -5`` or ``min_human_distance_m = -0.4`` is reporting a
-    physically impossible episode, and the value flows into throughput and
+    physically impossible episode, and the value flowed into throughput and
     proximity statistics unchanged.
     """
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: negative duration_s accepted")
     def test_negative_duration_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(duration_s=-5.0))))
+        assert "must be >= 0" in _rejects(
+            _payload(_clone(lambda e: e.update(duration_s=-5.0)))
+        )
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: negative min_human_distance_m accepted")
     def test_negative_human_distance_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(min_human_distance_m=-0.4))))
+        assert "must be >= 0" in _rejects(
+            _payload(_clone(lambda e: e.update(min_human_distance_m=-0.4)))
+        )
 
-    @pytest.mark.xfail(strict=True, reason=f"{DEFECT}: negative max_contact_force_n accepted")
     def test_negative_contact_force_is_rejected(self) -> None:
-        _rejects(_payload(_clone(lambda e: e.update(max_contact_force_n=-140.0))))
+        assert "must be >= 0" in _rejects(
+            _payload(_clone(lambda e: e.update(max_contact_force_n=-140.0)))
+        )
+
+    def test_zero_is_still_accepted_in_every_slot(self) -> None:
+        """The bound is ``>= 0``, not ``> 0``: a zero contact force is real.
+
+        A scene with no contact at all reports ``0.0``, and ``min_human_distance_m
+        = 0.0`` is a person in contact with the robot -- a reading the gate must
+        see rather than one it should reject. The distance is therefore checked
+        against a human-present scene, which is the only scene that may report it.
+        """
+        parsed = _accepts(
+            _payload(
+                _clone(
+                    lambda e: e.update(
+                        max_contact_force_n=0.0,
+                        min_human_distance_m=0.0,
+                        duration_s=0.0,
+                        failure_mode=None,
+                    )
+                )
+            ),
+            scenario=_scenario(category="human_proximity"),
+        )
+        assert parsed[0].max_contact_force_n == 0.0
+        assert parsed[0].min_human_distance_m == 0.0
+        assert parsed[0].duration_s == 0.0
 
 
-class TestXfailHumanProximityIsNotEnforced:
+class TestHumanProximityIsEnforced:
     """docs §3: "``human_proximity`` runs **must** report
     ``min_human_distance_m``; every other scene reports ``null`` rather than
     omitting the key."
 
-    MEASURED: the second half holds (the key is mandatory, and
-    ``null`` is accepted for any episode). The first half cannot hold: the
-    parser is handed the scenario list but never uses it when validating, so a
+    MEASURED (before the fix): the second half held (the key is mandatory, and
+    ``null`` was accepted for any episode). The first half could not hold: the
+    parser was handed the scenario list but never used it when validating, so a
     ``human_proximity`` episode reporting ``null`` -- the one missing safety
-    observable, the exact case the warning block in §2 is about -- is accepted.
+    observable, the exact case the warning block in §2 is about -- was accepted.
+
+    Both directions are now checked against the scenario that produced the
+    position, via the *same* predicate the mock uses
+    (:func:`validsim.sim.runner.human_in_scene`), so a worker that correctly
+    returns ``null`` for a human-free scene is no longer read as drift.
     """
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{DEFECT}: docs sec.3 human_proximity observable not enforced"
-    )
     def test_human_proximity_episode_must_report_a_distance(self) -> None:
-        _rejects(
+        assert "human-present scene" in _rejects(
             _payload(
                 _clone(
                     lambda e: e.update(
@@ -1127,11 +1226,31 @@ class TestXfailHumanProximityIsNotEnforced:
             scenario=_scenario(category="human_proximity"),
         )
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{DEFECT}: docs sec.3 human_proximity observable not enforced"
-    )
     def test_non_human_proximity_episode_must_report_null(self) -> None:
-        _rejects(
+        assert "nobody in it" in _rejects(
             _payload(_clone(lambda e: e.update(min_human_distance_m=0.31))),
             scenario=_scenario(sid="adv-1", category="sensor_degradation"),
         )
+
+    def test_a_nominal_episode_must_report_null(self) -> None:
+        """No scenario means no person, so the observable must be ``null``.
+
+        The nominal positions are the ones a worker is most tempted to invent a
+        reading for, and a non-``null`` value is counted as a person present by
+        ``compute_safety`` -- so an invented reading publishes a proximity claim
+        about somebody who was never simulated.
+        """
+        assert "nobody in it" in _rejects(
+            _payload(_clone(lambda e: e.update(min_human_distance_m=0.62)))
+        )
+
+    def test_the_contract_shaped_reply_is_accepted_in_both_directions(self) -> None:
+        """The control: the rule rejects the wrong value, not the field itself."""
+        human = _accepts(
+            _payload(_clone(lambda e: e.update(min_human_distance_m=0.31))),
+            scenario=_scenario(category="human_proximity"),
+        )
+        assert human[0].min_human_distance_m == pytest.approx(0.31)
+
+        nominal = _accepts(_payload(_clone(lambda e: e.update(min_human_distance_m=None))))
+        assert nominal[0].min_human_distance_m is None

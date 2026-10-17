@@ -24,7 +24,7 @@ import pytest
 
 from validsim.config import EnvironmentSpec, RobotSpec, TaskConfig
 from validsim.scenarios.generator import AdversarialScenario
-from validsim.sim.runner import MockIsaacBackend
+from validsim.sim.runner import MockIsaacBackend, human_in_scene
 from validsim.sim.shadow import (
     ContractCase,
     ShadowReport,
@@ -103,20 +103,55 @@ def _episode_json(seed: int, *, success: bool, level: str, **overrides: Any) -> 
     return episode
 
 
+def _human_in_request(scenario: dict[str, Any]) -> bool:
+    """Whether a wire scenario describes a scene with a person in it.
+
+    The wire form drops ``name``, so the dict is rebuilt into a real
+    :class:`AdversarialScenario` and handed to the *same* predicate the client
+    validates with (:func:`validsim.sim.runner.human_in_scene`). Restating the
+    rule here instead would let the fake and the client drift apart, which is the
+    exact failure a shadow run exists to detect.
+    """
+    return human_in_scene(
+        AdversarialScenario(
+            id=scenario["id"],
+            category=scenario["category"],
+            name=scenario.get("name", scenario["id"]),
+            params=scenario.get("params", {}),
+            difficulty=scenario.get("difficulty", 0.5),
+        )
+    )
+
+
 def _reply(build: Callable[[int, int, str], dict[str, Any]]) -> Handler:
     """A handler that replies with one episode per requested slot.
 
     ``build(seed, index, level)`` produces the episode object; the count and
     seeds mirror the request, so a well-formed build never trips the count or
-    seed-echo checks.
+    seed-echo checks. The proximity observable is filled in here rather than by
+    every builder, because it is a property of the *position* (nominal episodes
+    come first, adversarial ones after) and not of the episode's contents: docs
+    §3 requires a ``min_human_distance_m`` from a ``human_proximity`` run and
+    ``null`` from every other scene.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        count = int(body["episodes"]) + len(body["scenarios"])
+        nominal = int(body["episodes"])
+        scenarios = list(body["scenarios"])
+        count = nominal + len(scenarios)
         base = int(body["seed"])
         level = str(body["randomization_level"])
-        episodes = [build(base + i, i, level) for i in range(count)]
+        episodes = []
+        for i in range(count):
+            episode = build(base + i, i, level)
+            if i < nominal:
+                episode["min_human_distance_m"] = None
+            else:
+                episode["min_human_distance_m"] = (
+                    0.42 if _human_in_request(scenarios[i - nominal]) else None
+                )
+            episodes.append(episode)
         return httpx.Response(200, json={"episodes": episodes})
 
     return handler

@@ -334,7 +334,7 @@ _CONTACT_FAILURE_MODES: frozenset[str] = frozenset(
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class EpisodeResult:
     """Outcome of a single simulated episode (fully determined by ``seed``).
 
@@ -343,6 +343,19 @@ class EpisodeResult:
     ``max_contact_force_n``, ``min_human_distance_m`` — ``None`` when no human
     was in the scene), ``duration_s``, aggregated ``joint_states_summary``
     and the ``randomization_level`` applied.
+
+    Frozen, like every other artifact that ends up in a stored run
+    (:class:`~validsim.engine.evaluation.EvaluationResult`,
+    :class:`~validsim.engine.safety.SafetyResult`,
+    :class:`~validsim.engine.regression.RegressionReport`,
+    :class:`~validsim.engine.scorecard.Scorecard`,
+    :class:`~validsim.store.memory.StoredRun`). This one used to be the sole
+    exception, and that exception was load-bearing: a stored run keeps a list of
+    these, so ``store.get(run_id).episodes[0].success = False`` rewrote the
+    evidence behind a recorded verdict — no write, no lock, no log line. Freezing
+    the class is what lets the store hand out its records instead of copying
+    them (see :mod:`validsim.store._frozen`). Build a modified episode with
+    :func:`dataclasses.replace`.
     """
 
     episode_id: str
@@ -456,7 +469,7 @@ class MockIsaacBackend:
             max_force = rng.uniform(2.0, 42.0) * force_gain
 
         min_human_distance: float | None = None
-        if _human_in_scene(scenario):
+        if human_in_scene(scenario):
             nominal = _number(_flatten_params(scenario.params), "human_distance_m", 0.6)
             min_human_distance = round(max(0.02, nominal * rng.uniform(0.55, 1.65)), 3)
         # Every other scene has no human in it, so ``min_human_distance_m`` stays
@@ -542,12 +555,20 @@ def param_stress(scenario: AdversarialScenario | None) -> float:
     return max(0.0, min(1.0, float(stress(_flatten_params(scenario.params)))))
 
 
-def _human_in_scene(scenario: AdversarialScenario | None) -> bool:
+def human_in_scene(scenario: AdversarialScenario | None) -> bool:
     """Whether a person is physically present, i.e. a distance must be reported.
 
     ``docs/isaac-worker.md`` §3 requires a ``min_human_distance_m`` from every
     ``human_proximity`` run; an ``emergency_scenario`` that puts a person on the
     floor is the same situation under a different name, so it reports one too.
+
+    Public because it is the *contract predicate*, not an implementation detail:
+    :mod:`validsim.sim.isaac_worker` validates a worker's reply against the same
+    rule, and a shadow run is only meaningful if the mock and the client agree on
+    which scenes owe a proximity reading. Two copies of this rule would drift,
+    and the drift would show up as a phantom worker defect (docs §5 step 3 asks
+    the shadow harness to track this observable precisely because a worker that
+    correctly returns ``null`` reads as drift against a mock that invents one).
     """
     if scenario is None:
         return False
@@ -620,6 +641,7 @@ __all__ = [
     "FAILURE_MODES",
     "MockIsaacBackend",
     "SimulationBackend",
+    "human_in_scene",
     "param_stress",
     "run_validation",
     "stable_seed",

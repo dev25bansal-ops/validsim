@@ -34,15 +34,17 @@ Design decisions, all mirroring conventions already in the codebase:
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import fields as _dataclass_fields
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
 from validsim.config import TaskConfig
 from validsim.scenarios.generator import AdversarialScenario
-from validsim.sim.runner import FAILURE_MODES, EpisodeResult
+from validsim.sim.runner import FAILURE_MODES, EpisodeResult, human_in_scene
 
 __all__ = ["SimWorkerError", "IsaacWorkerBackend"]
 
@@ -171,8 +173,63 @@ def _want(
     )
 
 
+def _want_number(
+    item: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    allow_none: bool = False,
+    minimum: float | None = None,
+) -> float | None:
+    """Return ``item[key]`` as a **finite** float, optionally ``None``/bounded.
+
+    Three checks in one place, because all three are about a number a worker
+    reported and every one of them is a way a single field poisons an aggregate
+    downstream:
+
+    * **type** — ``bool`` is rejected (see :func:`_matches`), so a swapped
+      ``true`` where a number belongs does not silently read as ``1``.
+    * **finiteness** — ``NaN``/``Infinity`` are *accepted by* :func:`json.loads`
+      as bare non-standard tokens, so a worker built on stdlib ``json`` can put
+      them on the wire even though ``httpx`` would refuse to emit them. A ``NaN``
+      contact force is worse than a missing reading: it is a number that turns
+      every aggregate it enters into ``NaN``, including the safety score the
+      deploy gate is built on. ``1e400`` is *valid* JSON that overflows a double
+      to ``inf``, so the check cannot be a type check alone.
+    * **range** — a negative duration, contact force or human distance is a
+      physically impossible episode. ``collision_count`` was already checked,
+      which made its siblings' omission look like an oversight rather than a
+      policy: ``duration_s = -5`` flows straight into throughput statistics and
+      ``min_human_distance_m = -0.4`` into proximity statistics.
+
+    Raises:
+        SimWorkerError: On a type, finiteness or range deviation.
+    """
+    value = _want(item, key, label, (int, float), allow_none=allow_none)
+    if value is None:
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        raise _contract_error(
+            label,
+            f"field {key!r} must be a finite number, got {value!r}; NaN and "
+            "Infinity poison every aggregate they enter, and a safety "
+            "observable is not an exception",
+        )
+    if minimum is not None and number < minimum:
+        raise _contract_error(
+            label, f"field {key!r} must be >= {minimum:g}, got {number!r}"
+        )
+    return number
+
+
 def _want_summary(item: dict[str, Any], key: str, label: str) -> dict[str, float]:
-    """Return ``item[key]`` as a ``str -> float`` mapping, or raise."""
+    """Return ``item[key]`` as a ``str -> float`` mapping, or raise.
+
+    Every value must be finite for the same reason :func:`_want_number` insists
+    on it: the summary is aggregated into joint-effort and tracking statistics,
+    and one ``NaN`` reading is enough to make the whole aggregate ``NaN``.
+    """
     value = item[key]
     if not isinstance(value, dict):
         raise _contract_error(
@@ -186,12 +243,23 @@ def _want_summary(item: dict[str, Any], key: str, label: str) -> dict[str, float
             raise _contract_error(
                 label, f"field {key!r}[{name!r}] must be a number, got {number!r}"
             )
-        summary[name] = float(number)
+        as_float = float(number)
+        if not math.isfinite(as_float):
+            raise _contract_error(
+                label,
+                f"field {key!r}[{name!r}] must be a finite number, got {number!r}",
+            )
+        summary[name] = as_float
     return summary
 
 
 def _episode_from_dict(
-    item: Any, index: int, base_seed: int, *, expected_level: str | None = None
+    item: Any,
+    index: int,
+    base_seed: int,
+    *,
+    expected_level: str | None = None,
+    human_expected: bool | None = None,
 ) -> EpisodeResult:
     """Map one JSON episode object onto :class:`EpisodeResult`.
 
@@ -204,10 +272,14 @@ def _episode_from_dict(
         expected_level: The ``randomization_level`` requested, when the caller
             knows it; a worker silently running a different condition would
             mislabel every robustness number downstream.
+        human_expected: Whether a person was in this episode's scene, from
+            :func:`validsim.sim.runner.human_in_scene` applied to the scenario
+            that produced this position. ``None`` means the caller could not
+            determine it, and the proximity check is skipped rather than guessed.
 
     Raises:
-        SimWorkerError: On any structural, type, or semantic deviation from the
-            documented contract.
+        SimWorkerError: On any structural, type, finiteness, range or semantic
+            deviation from the documented contract.
     """
     label = f"episodes[{index}]"
     if not isinstance(item, dict):
@@ -228,17 +300,20 @@ def _episode_from_dict(
             "EpisodeResult field is mandatory on the wire (use null for the optional ones)",
         )
 
-    distance = _want(item, "min_human_distance_m", label, (int, float), allow_none=True)
     episode = EpisodeResult(
         episode_id=_want(item, "episode_id", label, (str,)),
         task_id=_want(item, "task_id", label, (str,)),
         seed=_want(item, "seed", label, (int,)),
         success=_want(item, "success", label, (bool,)),
         collision_count=_want(item, "collision_count", label, (int,)),
-        max_contact_force_n=float(_want(item, "max_contact_force_n", label, (int, float))),
-        min_human_distance_m=None if distance is None else float(distance),
+        max_contact_force_n=_want_number(
+            item, "max_contact_force_n", label, minimum=0.0
+        ),
+        min_human_distance_m=_want_number(
+            item, "min_human_distance_m", label, allow_none=True, minimum=0.0
+        ),
         failure_mode=_want(item, "failure_mode", label, (str,), allow_none=True),
-        duration_s=float(_want(item, "duration_s", label, (int, float))),
+        duration_s=_want_number(item, "duration_s", label, minimum=0.0),
         joint_states_summary=_want_summary(item, "joint_states_summary", label),
         randomization_level=_want(item, "randomization_level", label, (str,)),
     )
@@ -261,6 +336,34 @@ def _episode_from_dict(
             f"failure_mode {episode.failure_mode!r} is not in the ValidSim taxonomy "
             f"({', '.join(FAILURE_MODES)})",
         )
+    # docs §3: ``failure_mode`` "must be ``null`` on success". Without this, a
+    # reply claiming ``success: true, failure_mode: "collision"`` produced an
+    # internally contradictory episode -- simultaneously a success and a
+    # collision -- which then fed the failure-taxonomy distribution, one of the
+    # three signals the shadow harness tracks.
+    if episode.success and episode.failure_mode is not None:
+        raise _contract_error(
+            label,
+            f"reported success=true with failure_mode {episode.failure_mode!r}; "
+            "failure_mode must be null on success",
+        )
+    # docs §3: "``human_proximity`` runs must report ``min_human_distance_m``;
+    # every other scene reports ``null`` rather than omitting the key." Checked
+    # against the *scenario that produced this position* rather than against the
+    # reply, because the reply is exactly what is in question.
+    if human_expected is True and episode.min_human_distance_m is None:
+        raise _contract_error(
+            label,
+            "ran a human-present scene but reported min_human_distance_m=null; the "
+            "one safety observable such a scene owes is the distance to the person",
+        )
+    if human_expected is False and episode.min_human_distance_m is not None:
+        raise _contract_error(
+            label,
+            f"reported min_human_distance_m={episode.min_human_distance_m!r} for a scene "
+            "with nobody in it; a proximity reading for an unsimulated person is a "
+            "fabricated safety claim, so every non-human scene must report null",
+        )
     if episode.randomization_level not in _VALID_RANDOMIZATION:
         raise _contract_error(
             label,
@@ -277,9 +380,22 @@ def _episode_from_dict(
 
 
 def _episodes_from_reply(
-    data: Any, *, expected: int, base_seed: int, expected_level: str | None = None
+    data: Any,
+    *,
+    expected: int,
+    base_seed: int,
+    expected_level: str | None = None,
+    human_expected: Sequence[bool | None] | None = None,
 ) -> list[EpisodeResult]:
-    """Validate the top-level reply envelope and map it to episode results."""
+    """Validate the top-level reply envelope and map it to episode results.
+
+    ``human_expected[i]`` says whether the scene behind position ``i`` had a
+    person in it; the caller derives it from the scenarios it sent, so the check
+    is against the request rather than against the reply. A position the caller
+    could not classify is left unconstrained (``None``) rather than guessed at --
+    including when ``human_expected`` is shorter than the reply, so a caller that
+    omits it cannot turn a validation pass into an ``IndexError``.
+    """
     if not isinstance(data, dict):
         raise _contract_error("reply", f"must be a JSON object, got {type(data).__name__}")
     if "episodes" not in data:
@@ -299,8 +415,21 @@ def _episodes_from_reply(
             f"returned {len(raw)} episode(s) but {expected} were requested "
             f"(episodes + scenarios = {expected})",
         )
+
+    def expectation(position: int) -> bool | None:
+        """Whether position ``position`` owed a proximity reading, if known."""
+        if human_expected is None or position >= len(human_expected):
+            return None
+        return human_expected[position]
+
     return [
-        _episode_from_dict(item, i, base_seed, expected_level=expected_level)
+        _episode_from_dict(
+            item,
+            i,
+            base_seed,
+            expected_level=expected_level,
+            human_expected=expectation(i),
+        )
         for i, item in enumerate(raw)
     ]
 
@@ -421,7 +550,7 @@ class IsaacWorkerBackend:
             # one nominal episode plus one adversarial would return two results.
             episodes=0 if scenarios else 1,
         )
-        results = self._post_run(payload)
+        results = self._post_run(payload, [scenario] if scenario is not None else [])
         return results[0]
 
     def run_episodes(
@@ -481,7 +610,7 @@ class IsaacWorkerBackend:
             _scenarios_payload(scenario_list),
             episodes=episodes,
         )
-        return self._post_run(payload)
+        return self._post_run(payload, scenario_list)
 
     def is_alive(self) -> bool:
         """Probe ``GET /health``; ``True`` only for a 2xx answer.
@@ -539,8 +668,17 @@ class IsaacWorkerBackend:
         """Return auth headers (empty when no API key is configured)."""
         return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
-    def _post_run(self, payload: dict[str, Any]) -> list[EpisodeResult]:
-        """Send one run request and return the parsed, validated episodes."""
+    def _post_run(
+        self, payload: dict[str, Any], scenarios: Sequence[AdversarialScenario] = ()
+    ) -> list[EpisodeResult]:
+        """Send one run request and return the parsed, validated episodes.
+
+        ``scenarios`` are the adversarial scenarios that produced the trailing
+        positions of the reply. They are needed *here* rather than only in the
+        request body because the proximity contract is stated in terms of the
+        scene that was requested (see :func:`human_in_scene`), and a worker's
+        claim about a scene is exactly what is under validation.
+        """
         url = f"{self._require_base_url()}/episodes/run"
         response = self._transact(url, payload)
         try:
@@ -552,12 +690,17 @@ class IsaacWorkerBackend:
                 "See docs/isaac-worker.md for the exact episode schema the worker must speak.",
                 status_code=response.status_code,
             ) from exc
-        expected = int(payload["episodes"]) + len(payload["scenarios"])
+        nominal = int(payload["episodes"])
+        expected = nominal + len(payload["scenarios"])
         return _episodes_from_reply(
             data,
             expected=expected,
             base_seed=int(payload["seed"]),
             expected_level=str(payload["randomization_level"]),
+            # Nominal positions have no scenario, hence no person: the mock and
+            # the client agree on that because both call the same predicate.
+            human_expected=[human_in_scene(None)] * nominal
+            + [human_in_scene(s) for s in scenarios],
         )
 
     def _transact(self, url: str, payload: dict[str, Any]) -> httpx.Response:

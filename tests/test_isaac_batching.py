@@ -74,12 +74,28 @@ def _episode_json(**overrides: Any) -> dict[str, Any]:
     return episode
 
 
-def _seeded_batch(base_seed: int, count: int, **overrides: Any) -> list[dict[str, Any]]:
-    """``count`` contract-valid episodes echoing ``base_seed + i`` in order."""
+def _seeded_batch(
+    base_seed: int,
+    count: int,
+    *,
+    human_from: int | None = None,
+    **overrides: Any,
+) -> list[dict[str, Any]]:
+    """``count`` contract-valid episodes echoing ``base_seed + i`` in order.
+
+    ``human_from`` marks the first position whose scene contains a person
+    (adversarial scenarios are appended *after* the nominal episodes), so those
+    positions report the ``min_human_distance_m`` the contract owes them while
+    every nominal one reports ``null`` -- docs §3: "``human_proximity`` runs must
+    report ``min_human_distance_m``; every other scene reports ``null``".
+    """
     return [
         _episode_json(
             seed=base_seed + i,
             episode_id=f"pick-place-seed{base_seed + i:010d}",
+            min_human_distance_m=(
+                0.31 if human_from is not None and i >= human_from else None
+            ),
             **overrides,
         )
         for i in range(count)
@@ -156,7 +172,7 @@ class TestBatchHappyPath:
     def test_batch_with_scenarios_returns_episodes_plus_scenarios(self) -> None:
         """Nominal episodes come first, then one result per adversarial scenario."""
         scenarios = [_scenario("0000"), _scenario("0001")]
-        episodes = _seeded_batch(SEED, 4)  # 2 nominal + 2 adversarial = 4 results
+        episodes = _seeded_batch(SEED, 4, human_from=2)  # 2 nominal + 2 adversarial
         backend, seen = _backend(_ok(*episodes))
         results = backend.run_episodes(
             _task(), base_seed=SEED, episodes=2,
@@ -174,7 +190,9 @@ class TestBatchHappyPath:
 
     def test_scenario_only_batch(self) -> None:
         """episodes=0 with scenarios is valid: run only the injected scenarios."""
-        backend, seen = _backend(_ok(*_seeded_batch(SEED, 2, randomization_level="partial")))
+        backend, seen = _backend(
+            _ok(*_seeded_batch(SEED, 2, human_from=0, randomization_level="partial"))
+        )
         results = backend.run_episodes(
             _task(), base_seed=SEED, episodes=0,
             randomization_level="partial", scenarios=[_scenario("0000"), _scenario("0001")],

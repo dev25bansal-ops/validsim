@@ -150,7 +150,7 @@ class TestHappyPath:
         assert result.randomization_level == "partial"
 
     def test_request_body_matches_documented_contract(self) -> None:
-        backend, seen = _backend(_ok(_episode_json()))
+        backend, seen = _backend(_ok(_episode_json(min_human_distance_m=0.31)))
         backend.run_episode(_task(episodes=5, adversarial=1), seed=SEED,
                             randomization_level="full", scenario=_scenario())
         assert len(seen) == 1
@@ -213,7 +213,14 @@ class TestHappyPath:
         """The whole point: run_validation drives the worker like the mock."""
 
         def handler(request: httpx.Request) -> httpx.Response:
-            seed = _body(request)["seed"]
+            body = _body(request)
+            seed = body["seed"]
+            # The scenario *is* the episode on this path, so the request carries
+            # the human_proximity scenario exactly when a person is in the scene
+            # -- and the contract says such a run owes a distance reading.
+            scenarios = body.get("scenarios") or []
+            human = any(s.get("category") == "human_proximity" for s in scenarios)
+            failed = seed % 4 == 0
             return httpx.Response(
                 200,
                 json={
@@ -221,8 +228,10 @@ class TestHappyPath:
                         _episode_json(
                             seed=seed,
                             episode_id=f"pick-place-seed{seed:010d}",
-                            success=seed % 4 != 0,
-                            failure_mode=None if seed % 4 == 0 else "collision",
+                            success=not failed,
+                            # failure_mode is null on success, per docs §3.
+                            failure_mode="collision" if failed else None,
+                            min_human_distance_m=0.42 if human else None,
                         )
                     ]
                 },
@@ -235,6 +244,7 @@ class TestHappyPath:
         assert [r.seed for r in results] == [100, 101, 102, 103]
         assert len(seen) == 4  # one POST per episode, as the protocol implies
         assert [r.success for r in results] == [False, True, True, True]
+        assert results[3].min_human_distance_m == pytest.approx(0.42)
 
     def test_satisfies_backend_protocol(self) -> None:
         backend, _ = _backend(_ok(_episode_json()))
