@@ -1,0 +1,144 @@
+# =============================================================================
+# ValidSim — production / staging single-node stack
+#
+# Referenced by docs/production-deployment.md (Option 1: Single-Node Docker
+# Compose). This file previously did not exist even though the deployment guide
+# told operators to run `docker compose -f docker-compose.prod.yml up -d`; it is
+# now checked in so that documented command is real.
+#
+# Differences from the local dev stack (docker-compose.yml):
+#   * Uses the published GHCR image (built by .github/workflows/release.yml)
+#     instead of building from source on the host.
+#   * VALIDSIM_ENV=production -> the API REFUSES to start unless
+#     VALIDSIM_API_KEY is set (fail fast rather than serve unauthenticated).
+#   * Redis requires a password (redis-server --requirepass).
+#   * Every service declares a healthcheck; app services wait for
+#     service_healthy so the API/worker never race their dependencies.
+#
+# Required environment (set in an untracked .env next to this file — .gitignore
+# excludes .env/.env.* and *.key/*.pem, so real secrets are never committed):
+#   POSTGRES_PASSWORD, REDIS_PASSWORD, VALIDSIM_API_KEY  (strong secrets)
+# Optional:
+#   IMAGE_TAG (default: latest), POSTGRES_USER (default: validsim)
+#
+# NOTE: VALIDSIM_STORE=postgres and VALIDSIM_JOB_QUEUE=redis MUST be set on
+# BOTH api and worker. Without VALIDSIM_JOB_QUEUE=redis on the API, a submitted
+# job is enqueued into the API process' private in-memory queue and the worker
+# (which drains Redis) never sees it — the job stays `queued` forever with no
+# error. This mirrors the warning documented in docker-compose.yml.
+# =============================================================================
+
+name: validsim-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: validsim
+      POSTGRES_USER: ${POSTGRES_USER:-validsim}
+      # Required: abort with a clear message rather than start blank
+      # (matches docker-compose.yml's fail-fast behaviour).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    networks:
+      - validsim-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-validsim} -d validsim"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # Require authentication on the internal network.
+    command: redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - validsim-net
+    healthcheck:
+      # Ping through AUTH so a wrong-password connection is reported unhealthy
+      # rather than silently passing a bare TCP connect.
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    image: ghcr.io/abhijeet1267/validsim:${IMAGE_TAG:-latest}
+    restart: always
+    ports:
+      # Public bind is intentional for production. The API requires
+      # VALIDSIM_API_KEY when VALIDSIM_ENV=production, and /api/v1/health stays
+      # reachable for the healthcheck. Terminate TLS at a reverse proxy in
+      # front of this port for internet exposure.
+      - "8000:8000"
+    environment:
+      VALIDSIM_API_KEY: ${VALIDSIM_API_KEY:?set VALIDSIM_API_KEY}
+      VALIDSIM_ENV: production
+      # Both must match the worker's store/queue wiring (see header NOTE).
+      VALIDSIM_STORE: postgres
+      VALIDSIM_JOB_QUEUE: redis
+      VALIDSIM_PG_URL: postgresql://${POSTGRES_USER:-validsim}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/validsim
+      # NOTE: postgres:16-alpine ships with SSL disabled by default, so do NOT
+      # append ?sslmode=require until the server is configured with TLS.
+      VALIDSIM_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - validsim-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    image: ghcr.io/abhijeet1267/validsim:${IMAGE_TAG:-latest}
+    restart: always
+    # `validsim worker` is the top-level Typer command that drains the
+    # configured queue (VALIDSIM_JOB_QUEUE) and persists results to the store.
+    command: ["validsim", "worker"]
+    environment:
+      VALIDSIM_API_KEY: ${VALIDSIM_API_KEY:?set VALIDSIM_API_KEY}
+      VALIDSIM_ENV: production
+      # Same store/queue wiring as the api (see header NOTE).
+      VALIDSIM_STORE: postgres
+      VALIDSIM_JOB_QUEUE: redis
+      VALIDSIM_PG_URL: postgresql://${POSTGRES_USER:-validsim}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/validsim
+      VALIDSIM_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - validsim-net
+    # Liveness proxy for a non-HTTP process: confirm the worker can still
+    # reach the password-protected Redis queue it drains (AUTH then PING).
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,socket,sys; u=os.environ['VALIDSIM_REDIS_URL'].split('://')[-1].split('@')[-1].split('/'); cred=u[0].split(':'); h,_,p=u[1].partition(':'); s=socket.create_connection((h,int(p or 6379)),timeout=3); s.sendall(('AUTH %s %s\\r\\n'%(cred[0],cred[1] if len(cred)>1 else '')).encode()); s.sendall(b'PING\\r\\n'); ok=s.recv(64).splitlines()[-1].startswith(b'+PONG'); s.close(); sys.exit(0 if ok else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  postgres_data:
+    # Keep data outside the default project namespace so a rename does not orphan it.
+    name: validsim-postgres-data
+  redis_data:
+    name: validsim-redis-data
+
+networks:
+  validsim-net:
+    driver: bridge

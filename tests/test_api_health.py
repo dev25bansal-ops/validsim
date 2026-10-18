@@ -40,6 +40,7 @@ _EXPECTED_KEYS = {
     "rate_limit",
     "store_backend",
     "job_queue_backend",
+    "notify",
 }
 
 
@@ -78,6 +79,15 @@ class TestHealthPayload:
         assert body["job_queue_backend"] == "memory"
 
         assert set(body) == _EXPECTED_KEYS
+
+        # The notify section must be operator-visible but secret-free: only
+        # counts/flags, never webhook URLs or secrets (see NotifyConfig.summary).
+        notify = body["notify"]
+        assert set(notify) == {"enabled", "hook_count", "live", "hooks"}
+        assert notify["enabled"] is False
+        assert notify["hook_count"] == 0
+        assert notify["live"] == 0
+        assert notify["hooks"] == []
 
 
 class TestAuthEnabled:

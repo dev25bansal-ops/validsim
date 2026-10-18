@@ -14,17 +14,20 @@ For staging environments or small-scale deployments:
 # Pull latest image
 docker pull ghcr.io/abhijeet1267/validsim:latest
 
-# Configure environment variables
-export VALIDSIM_API_KEY="your-secure-api-key"
-export VALIDSIM_ENV="production"
-export VALIDSIM_PG_URL="postgresql://user:pass@host:5432/validsim"
-export VALIDSIM_REDIS_URL="redis://host:6379/0"
+# Generate secrets into .env — docker-compose.prod.yml requires
+# POSTGRES_PASSWORD, REDIS_PASSWORD and VALIDSIM_API_KEY and aborts if any is
+# unset. (.gitignore excludes .env, so secrets are never committed.)
+[ -f .env ] || touch .env
+grep -q '^POSTGRES_PASSWORD=' .env 2>/dev/null || echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)" >> .env
+grep -q '^REDIS_PASSWORD='    .env 2>/dev/null || echo "REDIS_PASSWORD=$(openssl rand -hex 32)"    >> .env
+grep -q '^VALIDSIM_API_KEY='  .env 2>/dev/null || echo "VALIDSIM_API_KEY=$(openssl rand -hex 32)"  >> .env
 
-# Start stack
+# Start stack (the file sets VALIDSIM_ENV=production, VALIDSIM_STORE=postgres
+# and VALIDSIM_JOB_QUEUE=redis for you)
 docker compose -f docker-compose.prod.yml up -d
 
-# Verify health
-curl -H "X-API-Key: $VALIDSIM_API_KEY" http://localhost:8000/api/v1/health
+# Verify health (production requires the key)
+curl -H "X-API-Key: $(grep '^VALIDSIM_API_KEY=' .env | cut -d= -f2)" http://localhost:8000/api/v1/health
 ```
 
 ---
@@ -76,83 +79,52 @@ Worker Process ← Redis (consume jobs) → Simulation Backend → Robot Fleet
 
 ### Option 1: Single-Node Docker Compose (Staging/SMB)
 
-Use `docker-compose.prod.yml` from repository root:
+Use `docker-compose.prod.yml` from repository root — the canonical file is
+checked in (it was previously referenced here but missing from the repository).
+Inspect it before deploying:
 
-```yaml
-version: "3.9"
-
-services:
-  postgres:
-    image: postgres:16-alpine
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: validsim
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    networks:
-      - validsim-net
-    restart: always
-
-  redis:
-    image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_data:/data
-    networks:
-      - validsim-net
-    restart: always
-
-  api:
-    image: ghcr.io/abhijeet1267/validsim:${IMAGE_TAG:-latest}
-    ports:
-      - "8000:8000"
-    environment:
-      - VALIDSIM_API_KEY=${VALIDSIM_API_KEY}
-      - VALIDSIM_ENV=production
-      - VALIDSIM_PG_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/validsim
-      - VALIDSIM_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - validsim-net
-    restart: always
-
-  worker:
-    image: ghcr.io/abhijeet1267/validsim:${IMAGE_TAG:-latest}
-    command: ["validsim", "worker"]
-    environment:
-      - VALIDSIM_API_KEY=${VALIDSIM_API_KEY}
-      - VALIDSIM_ENV=production
-      - VALIDSIM_PG_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/validsim
-      - VALIDSIM_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - validsim-net
-    restart: always
-
-volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  validsim-net:
-    driver: bridge
+```bash
+less docker-compose.prod.yml
 ```
+
+The stack defines four services (`postgres`, `redis`, `api`, `worker`), each
+with a healthcheck; the app services wait for `service_healthy` before starting.
+Key requirements encoded in the file:
+
+- **`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `VALIDSIM_API_KEY` are all
+  required** — Compose aborts if any is unset (fail-fast rather than start
+  insecure).
+- **`VALIDSIM_ENV=production`** makes an unset/blank `VALIDSIM_API_KEY` a
+  startup failure.
+- **`VALIDSIM_STORE=postgres` and `VALIDSIM_JOB_QUEUE=redis`** are set on **both**
+  the `api` and `worker`. Without `VALIDSIM_JOB_QUEUE=redis` on the API, a
+  submitted job is enqueued into the API process' private in-memory queue, the
+  worker (which drains Redis) never sees it, and the job stays `queued` forever
+  with no error.
+- Redis requires a password (`--requirepass`); the `api`/`worker` connect via
+  `redis://:<password>@redis:6379/0`.
+- The `api`/`worker` images come from GHCR
+  (`ghcr.io/abhijeet1267/validsim:<tag>`), published by
+  `.github/workflows/release.yml`.
 
 Deploy:
 
 ```bash
-# Generate secrets (run once)
-openssl rand -hex 32 > .env.POSTGRES_PASSWORD
-openssl rand -hex 32 > .env.REDIS_PASSWORD
-echo "VALIDSIM_API_KEY=$(openssl rand -hex 32)" >> .env
+# Generate secrets and write them to .env (run once). Compose reads
+# ${POSTGRES_PASSWORD}, ${REDIS_PASSWORD} and ${VALIDSIM_API_KEY} from the
+# project-dir .env file — writing them to separate .env.* files would leave the
+# variables empty and abort startup ("set POSTGRES_PASSWORD"). .gitignore
+# excludes .env/.env.* so these secrets are never committed.
+[ -f .env ] || touch .env
+grep -q '^POSTGRES_PASSWORD=' .env 2>/dev/null || echo "POSTGRES_PASSWORD=$(openssl rand -hex 32)" >> .env
+grep -q '^REDIS_PASSWORD='    .env 2>/dev/null || echo "REDIS_PASSWORD=$(openssl rand -hex 32)"    >> .env
+grep -q '^VALIDSIM_API_KEY='  .env 2>/dev/null || echo "VALIDSIM_API_KEY=$(openssl rand -hex 32)"  >> .env
 
 # Start
 docker compose -f docker-compose.prod.yml up -d
+
+# Verify health (with or without a key configured; production always has one)
+curl -H "X-API-Key: $VALIDSIM_API_KEY" http://localhost:8000/api/v1/health
 ```
 
 ### Option 2: Kubernetes (Production HA)

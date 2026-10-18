@@ -389,6 +389,7 @@ class TestRouteTableContract:
             "rate_limit",
             "store_backend",
             "job_queue_backend",
+            "notify",
         }
         assert payload["rate_limit"] == {"requests": 5, "window_seconds": 30.0}
 
