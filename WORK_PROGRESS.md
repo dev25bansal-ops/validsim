@@ -132,3 +132,18 @@ transport tests reviewed; real GPU execution still externally blocked
 (DGX Cloud credits). Nothing fabricated; no substitute implementation.
 
 
+**Phase 6 — verification (THIS SESSION, JUnit-evidenced):**
+- Full suite clean-env, 2026-10-18 (`215f1ef` + preserved notify edits in
+  tree): **tests=3076, failures=0, errors=0, skipped=68, passed=3008**
+  (JUnit XML). Prior "3003/69" was the pre-fix baseline; +4 net = 3 new
+  isolation regression tests + the preserved notify test additions.
+- Focused cohort (auth/health/security/logging/pipeline/wiring, 8 files):
+  **237 passed** clean; auth cohort **97 passed** under hostile env
+  (`VALIDSIM_API_KEY=poison-key` + `VALIDSIM_ENV=production` + store/queue/
+  CORS/rate-limit/PG/Redis overrides) — the exact scenario that previously
+  produced 120 failures.
+- Ruff `validsim tests`: **all checks passed**. `git diff --check`: clean.
+- CLI smoke (`python -m validsim.cli --help`): OK.
+- Prod + dev compose `config --quiet`: both **exit 0**.
+
+
