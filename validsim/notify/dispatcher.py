@@ -1,32 +1,28 @@
 """Webhook dispatch of completed scorecards to registered endpoints.
 
-This module is **implemented, configurable and tested, but not wired into any
-shipped entrypoint**. :func:`notify_run_completion` is the intended seam, and
-it resolves its destinations from :mod:`validsim.notify.config` — but nothing
-in the shipped code calls it. Its only callers today are the test suite, so no
-run, CLI command or API request reaches this layer, and setting
-``VALIDSIM_NOTIFY_ENABLED`` / ``VALIDSIM_WEBHOOK_URLS`` changes nothing on its
-own.
+This module is **implemented, configurable, tested, and wired into the
+run-completion flow**. :func:`validsim.engine.pipeline.run_and_score` calls
+:func:`notify_run_completion` after a run is newly persisted (the retry /
+duplicate path re-reads the stored record and deliberately does NOT
+re-notify, so one persisted run yields exactly one notification). The
+dispatcher is **inert by default**: with no environment set,
+:func:`notify_run_completion` returns an empty list without constructing a
+dispatcher or performing any network I/O.
 
-Connecting :func:`validsim.engine.pipeline.run_and_score` to
-:func:`notify_run_completion` is a **pending, deliberate step** rather than an
-oversight; the required patch is written up in ``docs/notify_wiring_patches.md``
-and is still outstanding. ``tests/test_notify_wiring_agent.py`` tracks it as
-``PENDING OWNER``. Do not read the switches below as evidence that a
-notification already fires — until the call site lands, this layer is dormant
-code, and the tests are what exercise it.
+Delivery is gated by two independent switches that both default to off:
+``VALIDSIM_NOTIFY_ENABLED`` decides *whether* a finished run notifies at all
+(see :func:`notify_run_completion`), and ``VALIDSIM_WEBHOOKS_LIVE`` decides
+whether a notification leaves the process. A destination alone is deliberately
+not consent to send.
 
 The dispatcher defaults to **dry-run**: it records what *would* be sent in the
 :data:`WebhookDispatcher.sent` list and performs no network I/O — the safe
 behaviour for tests and local runs. Live HTTP delivery is opt-in via the
 ``VALIDSIM_WEBHOOKS_LIVE=1`` environment variable (or the ``live`` constructor
-flag), which POSTs the scorecard JSON with a short timeout. Delivery failures
-are captured on the :class:`DeliveryResult` and never propagate to callers.
-
-Two independent switches gate delivery, and both default to off:
-``VALIDSIM_NOTIFY_ENABLED`` decides *whether* a finished run notifies at all
-(see :func:`notify_run_completion`), and ``VALIDSIM_WEBHOOKS_LIVE`` decides
-whether a notification leaves the process.
+flag), which POSTs the scorecard JSON with a short timeout and bounded
+retries (see :data:`_MAX_RETRIES`). Delivery failures are captured on the
+:class:`DeliveryResult` and never propagate to callers, so a webhook outage
+cannot lose or corrupt an already-persisted run result.
 
 Enhancements:
     * ``format="slack"`` hooks receive a Slack-compatible Block Kit payload

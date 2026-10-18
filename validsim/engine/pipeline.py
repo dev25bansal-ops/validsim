@@ -188,7 +188,8 @@ def run_and_score(
         stored = store.get(run_id)
         if stored is None:  # pragma: no cover - defensive
             raise RuntimeError(f"run {run_id} vanished from the store mid-save")
-        notify_run_completion(stored.scorecard)
+        # Notification is dispatched only on the new-save path below; a
+        # retry must not re-notify (avoids duplicate webhooks).
         return stored
     
     stored = store.save(candidate)

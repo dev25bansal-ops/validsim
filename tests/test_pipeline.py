@@ -363,3 +363,55 @@ class TestThreshold:
             else "BLOCK"
         )
         assert run.scorecard.deploy_decision == expected
+
+
+# ---------------------------------------------------------------------------
+# 8. Notification dispatch (regression guards for the wiring fix)
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationDuplication:
+    """run_and_score must dispatch exactly one run-completion notification per
+    persisted run, and must NOT re-notify when the same run_id is re-executed
+    (the duplicate / retry path re-reads the stored record instead).
+    """
+
+    def test_notifies_once_on_new_save(
+        self, store: ValidationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def _spy(scorecard: object) -> list:
+            calls.append(getattr(scorecard, "run_id", None))
+            return []
+
+        monkeypatch.setattr(
+            "validsim.engine.pipeline.notify_run_completion", _spy
+        )
+        run_and_score(
+            _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy01"
+        )
+        assert calls == ["vrun-nfy01"]
+
+    def test_does_not_re_notify_on_retry(
+        self, store: ValidationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def _spy(scorecard: object) -> list:
+            calls.append(getattr(scorecard, "run_id", None))
+            return []
+
+        monkeypatch.setattr(
+            "validsim.engine.pipeline.notify_run_completion", _spy
+        )
+        # First execution persists and notifies once.
+        run_and_score(
+            _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy02"
+        )
+        # Re-execution with the same id hits the duplicate path: the stored
+        # record is re-read and returned, but no second notification fires.
+        run_and_score(
+            _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy02"
+        )
+        assert calls == ["vrun-nfy02"]

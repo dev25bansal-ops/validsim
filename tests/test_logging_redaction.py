@@ -2,7 +2,7 @@
 
 Motivation
 ----------
-:class:`~validsim.logging.JsonLogFormatter` merged every caller-supplied
+:class:`~validsim._log.JsonLogFormatter` merged every caller-supplied
 ``extra={...}`` field into the emitted JSON **verbatim**. The stdlib's
 ``extra=`` argument is how every caller in this codebase attaches structured
 context (``api/main.py`` logs ``method``/``path``/``status``/``duration_ms``),
@@ -19,7 +19,7 @@ attaching.
 Contract
 --------
 A field whose **name** is known-sensitive has its **value** replaced with
-:data:`validsim.logging.REDACTED` before serialisation. Matching is on the
+:data:`validsim._log.REDACTED` before serialisation. Matching is on the
 normalised name (lower-cased, ``-`` and ``_`` removed) so ``API_KEY``,
 ``api-key`` and ``apiKey`` are all the same field. Redaction is
 **structural**: nested dicts, lists and tuples are walked, so a credential
@@ -291,3 +291,34 @@ class TestExistingBehaviourPreserved:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# Logging / import regression guard
+# ---------------------------------------------------------------------------
+
+
+class TestLoggingImportShadowingResolved:
+    """The ``validsim/logging.py`` -> ``validsim/_log.py`` rename must fully
+    remove the stdlib ``logging`` shadow: ``validsim.logging`` must no longer be
+    importable, and code inside the package that does ``import logging`` must
+    get the standard library, not the package's own (deleted) module.
+    """
+
+    def test_validsim_logging_is_no_longer_importable(self) -> None:
+        with pytest.raises(ModuleNotFoundError):
+            __import__("validsim.logging")
+
+    def test_stdlib_logging_is_reachable_from_inside_package(self) -> None:
+        import importlib
+
+        # Import a package submodule that historically did ``import logging``
+        # expecting the standard library. If ``validsim.logging`` still shadowed
+        # stdlib, this import would resolve to the (now-deleted) package module
+        # and fail or behave wrongly.
+        importlib.import_module("validsim.engine.pipeline")
+        import logging as stdlib_logging
+
+        assert stdlib_logging.DEBUG == 10
+        assert stdlib_logging.INFO == 20
+        assert callable(stdlib_logging.getLogger)
