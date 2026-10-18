@@ -74,4 +74,61 @@
 ## Next step
 Audit simulation backend (mock vs real Isaac — central to project purpose; check whether the 148 MB folder holds sim assets/checkpoints); review dashboard/PDF/comparison; audit deployment docs vs actual artifacts; document contribution statuses vs COMPLETION_REPORT.md; prepare merge plan.
 
+---
+
+## Local completion phase (2026-10-18, NO push/merge per user instruction)
+
+**Starting state verified:** branch `continuation/merge-prep` at `8105191`;
+`git rev-list --left-right --count origin/main...HEAD` = `0 27`
+(25 inherited from `founder2/platform-mvp` + 2 session commits).
+**Count discrepancy resolved:** the "23 commits" figure in the line above was
+stale — the true ahead-count at `025890c` was 25, plus the 2 new commits = 27.
+`founder2/platform-mvp...continuation/merge-prep` = `0 2`, as expected.
+Pre-existing uncommitted edits (notify-wiring xfail removal, pipeline/notify
+doc polish) were found in the tree and preserved untouched.
+
+**Phase 2 — env-dependent tests (ROOT CAUSE FOUND + FIXED):**
+- Reproduced at scale: `VALIDSIM_API_KEY=poison-key pytest tests/` →
+  **120 FAILED**. The suite-wide `_isolate_deployment_env` fixture in
+  `tests/conftest.py` cleared only 3 vars (`VALIDSIM_ENV/STORE/SQLITE_PATH`),
+  so any exported `VALIDSIM_*` (API key, store/queue selectors, …) silently
+  reconfigured every app the suite built. The single failure quoted in the
+  prior handover was the tip of this iceberg.
+- Fix: `_ISOLATED_ENV` now covers all 44 `VALIDSIM_*`/`POSTGRES_*`/`REDIS_*`
+  vars the package reads (deployment config only; `VALIDSIM_TEST_REDIS_URL`
+  deliberately excluded — it is test routing, needed by CI live tests).
+  `tests/test_api_health.py::TestDeploymentEnvIsolation` pins it: a
+  scanner test fails if any `validsim/` env var is missing from the list,
+  plus auth-present/absent behavior tests. Verified: auth cohort
+  (97 tests incl. health/auth/routes/negative/security) passes with a
+  hostile env (`VALIDSIM_API_KEY` + `VALIDSIM_ENV=production` + store/queue
+  overrides exported).
+- NOTE: `VALIDSIM_STORE=postgres` at *collection* time still breaks
+  collection (module-level `create_store()` in metrics/structure tests) —
+  pre-existing design, out of scope; CI never sets it globally.
+
+**Phase 3 — Redis CI coverage (ADDED):** new `redis` job in
+`.github/workflows/ci.yml` (redis:7-alpine service, health-gated,
+`VALIDSIM_TEST_REDIS_URL` on DB 9, cohort =
+`test_jobs.py::TestLiveRedisQueue` + `test_jobs_concurrency_agent.py` +
+`test_queue_depth.py::TestRedisDepthCap`), with a JUnit-parsed no-vacuous-pass
+probe (fails on any skip/failure, asserts non-trivial collection) and an
+artifact upload; `docker`/`compose` gates extended to `needs: [test,
+postgres, redis]`. Locally validated: YAML parses, gates correct; live
+cohort skips cleanly without a server (Docker unavailable on this host, so
+the CI job itself could not be executed — reported honestly).
+
+**Phase 4 — compose validation:** `docker compose -f
+docker-compose.prod.yml config --quiet` (dummy secrets) → **exit 0**.
+Docs reference the real file. No live smoke (no Docker) — NOT claimed.
+
+**Phase 5 — notify/pipeline:** audited, no new code needed. Persist-before-
+dispatch ordering, exactly-once-per-run, never-raises dispatcher, bounded
+retries, dry-run default, secret-free health — all already pinned by
+existing tests (46 wiring + pipeline duplication/failure tests).
+
+**Phase 7 — Isaac:** `isaac_worker.py` + `docs/isaac-worker.md` + 40 mock-
+transport tests reviewed; real GPU execution still externally blocked
+(DGX Cloud credits). Nothing fabricated; no substitute implementation.
+
 

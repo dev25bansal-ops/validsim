@@ -170,3 +170,56 @@ class TestJobQueueBackend:
         # A URL is supplied so RedisJobQueue constructs without connecting.
         app.state.job_queue = RedisJobQueue(url="redis://localhost:6379/0")
         assert _health(TestClient(app))["job_queue_backend"] == "redis"
+
+
+# ---------------------------------------------------------------------------
+# Suite-wide deployment-env isolation (regression guard)
+# ---------------------------------------------------------------------------
+
+
+class TestDeploymentEnvIsolation:
+    """The autouse ``_isolate_deployment_env`` fixture must neutralise every
+    ``VALIDSIM_*`` / ``POSTGRES_*`` / ``REDIS_*`` variable the package reads,
+    so tests never depend on accidental shell configuration.
+
+    Regression: with ``VALIDSIM_API_KEY`` exported in the shell, ~120 tests
+    that build apps expecting the open default failed with 401s, because the
+    suite-wide fixture only cleared three variables. The fixture now clears
+    the full set; these tests pin that behaviour.
+    """
+
+    def test_isolation_list_covers_every_env_var_the_package_reads(self) -> None:
+        import re
+        from pathlib import Path
+
+        from tests.conftest import _ISOLATED_ENV
+
+        package_vars: set[str] = set()
+        pattern = re.compile(r'"((?:VALIDSIM|POSTGRES|REDIS)_[A-Z_]+)"')
+        for path in Path("validsim").rglob("*.py"):
+            package_vars.update(pattern.findall(path.read_text()))
+        # Test-only namespace overrides: never deployment config.
+        package_vars.discard("VALIDSIM_TEST_REDIS_URL")
+        missing = sorted(package_vars - set(_ISOLATED_ENV))
+        assert missing == [], f"conftest isolation missing: {missing}"
+
+    def test_api_key_not_inherited_from_process_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Simulate the poisoned shell *inside* the test (monkeypatch restores
+        # afterwards); the autouse fixture runs first and must already have
+        # cleared the inherited value, so re-setting it here then deleting it
+        # reproduces the exact pre-fix failure mode deterministically.
+        monkeypatch.setenv("VALIDSIM_API_KEY", "poison-key")
+        monkeypatch.delenv("VALIDSIM_API_KEY")
+        client = TestClient(create_app(ValidationStore()))
+        assert client.get("/api/v1/validations").status_code != 401
+
+    def test_auth_enabled_only_when_key_explicitly_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = TestClient(create_app(ValidationStore()))
+        assert client.get("/api/v1/validations").status_code != 401
+        monkeypatch.setenv("VALIDSIM_API_KEY", "explicit-key")
+        keyed = TestClient(create_app(ValidationStore()))
+        assert keyed.get("/api/v1/validations").status_code == 401
