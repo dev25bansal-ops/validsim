@@ -415,3 +415,34 @@ class TestNotificationDuplication:
             _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy02"
         )
         assert calls == ["vrun-nfy02"]
+
+    def test_webhook_failure_does_not_lose_the_persisted_run(
+        self, store: ValidationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A raising notifier must not cost the run its persisted result.
+
+        ``notify_run_completion`` itself never raises, but this pins the
+        pipeline side of the contract: even if a future notifier (or the
+        monkeypatched seam) blows up, the finished run is already stored and
+        retrievable, because dispatch runs strictly after ``store.save``.
+        """
+
+        def _boom(scorecard: object) -> list:
+            raise ConnectionError("webhook host down")
+
+        monkeypatch.setattr("validsim.engine.pipeline.notify_run_completion", _boom)
+        # The pipeline deliberately lets notifier bugs surface (fail-loud in
+        # tests) rather than swallowing them — the guarantee is about the
+        # *stored* record, not about hiding the error.
+        with pytest.raises(ConnectionError, match="webhook host down"):
+            run_and_score(
+                _task(),
+                "ckpt-nfy",
+                store,
+                backend=_mock_backend(),
+                run_id="vrun-nfy03",
+            )
+        stored = store.get("vrun-nfy03")
+        assert stored is not None
+        assert stored.run_id == "vrun-nfy03"
+        assert stored.scorecard.deploy_decision in ("APPROVE", "BLOCK")

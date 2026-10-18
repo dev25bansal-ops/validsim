@@ -440,12 +440,11 @@ class WebhookDispatcher:
 def notify_run_completion(scorecard: Scorecard) -> list[DeliveryResult]:
     """Fan a completed run's scorecard out to every configured webhook.
 
-    This is the intended seam between a finished run and the notification layer,
-    but it is **not yet called from anywhere in the shipped code**. Its only
-    callers are in ``tests/``; :func:`validsim.engine.pipeline.run_and_score`
-    does not invoke it yet, so the layer is dormant in production. The pending
-    patch is documented in ``docs/notify_wiring_patches.md`` and tracked as
-    ``PENDING OWNER`` in ``tests/test_notify_wiring_agent.py``.
+    This is the seam between a finished run and the notification layer, and it
+    **is called from the shipped code**: :func:`validsim.engine.pipeline.run_and_score`
+    invokes it after a run is newly persisted (the retry / duplicate path
+    re-reads the stored record and deliberately does not re-notify). Its other
+    callers are in ``tests/``.
 
     The function itself is **inert by default**: with no environment set it
     returns an empty list without constructing a dispatcher, so wiring it in
