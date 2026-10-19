@@ -23,6 +23,11 @@ htmlcov/
 # Build pipeline outputs
 builds/
 
+# Frontend generated artifacts (Astro marketing site + dependency trees)
+node_modules/
+.astro/
+site/dist/
+
 # Test-run reports and local scratch output
 /*junit*.xml
 /pytest*.xml
