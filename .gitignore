@@ -37,6 +37,9 @@ site/dist/
 /_*.txt
 /*.log
 
+# Browser-test screenshots written to the repo root by a test run
+/auth-panel.png
+
 # Transient CLI/CI caches
 .tmp-ci-smoke/
 .validsim/

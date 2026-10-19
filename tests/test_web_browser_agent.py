@@ -176,7 +176,7 @@ def test_auth_panel_replaces_the_dashboard_when_a_key_is_required(browser) -> No
         body = page.inner_text("body")
         assert '"detail"' not in body
         assert '{"detail":' not in body
-        page.screenshot(path="auth-panel.png", full_page=True)
+        page.screenshot(path=str(_screenshot("auth-panel.png")), full_page=True)
         page.close()
     finally:
         server.terminate()
