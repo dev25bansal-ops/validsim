@@ -146,4 +146,45 @@ transport tests reviewed; real GPU execution still externally blocked
 - CLI smoke (`python -m validsim.cli --help`): OK.
 - Prod + dev compose `config --quiet`: both **exit 0**.
 
+---
+
+## Final verification pass (2026-10-19, branch `feature/website-simulation-completion`)
+
+**Full suite (clean env, JUnit-verified):** `pytest tests/ --cov` with
+junitxml → **total=3083, passed=3015, skipped=53, xfailed=15, xpassed=0,
+failures=0, errors=0**, exit 0. Authoritative record:
+`builds/junit-final.xml` (progress-dot counting undercounts by 1 for a
+special skip path — JUnit XML is the source of truth).
+
+**Coverage:** total **95.83%** ≥ 90% floor; gate log
+`/tmp/validsim-final-run.log` ends with "Required test coverage of 90%
+reached. Total coverage: 95.83%" (exit 0).
+
+**Lint:** ruff clean (verified prior session); `git diff --check` clean.
+
+**Website (Astro 5, `site/`):** `npm ci` + `npm run build` pass — 2 pages
+built (marketing + dashboard). `astro check` NOT runnable on this host:
+local Node is v18.20.8 and a transitive dependency (`string-width` via
+astro-check/yargs) uses the `/v` regex flag requiring Node 20+. Recorded
+as an environment limitation; no dependency changes made to force it.
+
+**Docker Compose:** dev `docker compose config --quiet` and prod
+`docker-compose.prod.yml config --quiet` both **exit 0** with dummy
+required secrets (read-only parse; no services started).
+
+**Repo hygiene (committed separately):** removed tracked
+`site/node_modules/**` + `site/.astro/**` (~6,475 lines of deletions) and
+~87 root scratch files (`_probe_*`, `_bak_*`, `_mutation_harness*`,
+`$null`, etc. — all owner-confirmed deleted in original main);
+`.gitignore` updated. No teammate work touched.
+
+**Docs:** notification wording fixes (`docs/runbook.md`,
+`vault/00 - Dashboard/Build Status.md`), README cross-platform Quick
+Start, and `CURRENT_STATUS.md` corrected (test totals → 3,083 / 95.83%;
+"2024-10-08" date typos → 2026-10-08; Git Context → current branch).
+
+**Known limitation (unchanged):** Isaac Sim real-GPU verification remains
+externally blocked (DGX Cloud credits). Mock transport + 40 transport
+tests stand in; nothing fabricated.
+
 

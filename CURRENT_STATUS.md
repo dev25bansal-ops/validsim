@@ -1,7 +1,8 @@
 # ValidSim — Current Status Report
 
 **Generated:** 2026-10-08  
-**Branch:** `false-account-e7705a6a` (synced with `main`)  
+**Last verified:** 2026-10-19 (full suite + coverage re-run, JUnit-verified; see `WORK_PROGRESS.md`)  
+**Branch:** `feature/website-simulation-completion` @ `aabbef0` (continuation branch; supersedes `false-account-e7705a6a`)  
 **Role:** Founder 2 — Platform/Product Engineering
 
 ---
@@ -16,7 +17,7 @@ ValidSim has a **substantial MVP foundation**. Founder 1 has implemented:
 - ✅ Job queue system (in-memory + Redis)
 - ✅ PDF report generation
 - ✅ Docker Compose setup (API + Redis + PostgreSQL + worker)
-- ✅ Comprehensive test suite (~330 tests)
+- ✅ Comprehensive test suite (3,083 tests, JUnit-verified 2026-10-19)
 - ✅ GitHub Actions CI/CD
 - ✅ Astro-based marketing dashboard v0
 
@@ -44,7 +45,7 @@ Founder 2's platform responsibilities are largely **already implemented**, requi
 | Failure UI | 🔴 MISSING | `validsim/engine/anomaly.py` (backend) | Founder 2 | Backend anomaly detection exists; no dedicated UI yet |
 | Reports (PDF/JSON) | ✅ IMPLEMENTED | `validsim/engine/pdf.py`, `validsim/engine/export.py` | Founder 1 | Full JSON export, PDF scorecard with executive summary |
 | Deployment Gate | ✅ IMPLEMENTED | `validsim/cli.py:gate()`, `validsim/engine/safety.py` | Shared | Deterministic decision logic, exit codes for CI |
-| Tests | ✅ IMPLEMENTED | `tests/` (330+ tests) | Shared | Unit, integration, API, CLI tests with ~95% coverage |
+| Tests | ✅ IMPLEMENTED | `tests/` (3,083 tests) | Shared | Unit, integration, API, CLI tests; 95.83% coverage (90% floor, 2026-10-19) |
 | CI/CD | ✅ IMPLEMENTED | `.github/workflows/`, `scripts/` | Founder 1 | Push/PR CI, nightly validation, build scripts |
 
 **Legend:** ✅ Fully implemented | 🟡 Partially implemented (backend exists) | 🔴 Not yet implemented
@@ -94,13 +95,13 @@ Based on evidence from code inspection, test results, and architecture:
 | Dimension | Score | Justification |
 |-----------|-------|--------------|
 | **Architecture** | 9/10 | Clean separation of concerns, multi-backend store design, solid abstractions, adapter pattern preserved Founder 1's work |
-| **Backend** | 10/10 | Production-ready FastAPI with auth, rate limiting, job queue, error handling, pagination, 3086 tests passing |
+| **Backend** | 10/10 | Production-ready FastAPI with auth, rate limiting, job queue, error handling, pagination, 3,083 tests passing |
 | **Frontend** | 8/10 | Static HTML dashboard with real API connectivity, loading/error/empty states, responsive CSS Grid layout |
 | **Simulation** | 8/10 | Mock Isaac works well for MVP; Founder 1's engine integrated intact without modifications |
 | **Evaluation** | 9/10 | Solid scoring, regression detection (p-values), safety metrics, anomaly detection engine |
 | **CLI** | 10/10 | Full-featured Typer CLI installed at `/opt/homebrew/bin/validsim`, all commands working, exit codes for CI |
 | **Database** | 9/10 | Flexible store abstraction, supports memory/SQLite/PostgreSQL, migrations ready |
-| **Testing** | 10/10 | 3086 tests across backend, CLI, API, engine, anomaly detection; ~95% coverage enforced |
+| **Testing** | 10/10 | 3,083 tests across backend, CLI, API, engine, anomaly detection; 95.83% coverage enforced at 90% floor |
 | **CI/CD** | 8/10 | Robust GitHub Actions, JUnit integration, nightly validation workflows |
 | **Security** | 8/10 | API key auth, CORS config, rate limiting, input validation present |
 | **UX** | 7/10 | CLI excellent; dashboard functional but missing PDF export button, comparison UI still TODO |
@@ -158,13 +159,13 @@ validsim worker                # Consume jobs
 ```
 
 ### Test Suite
-- **3086 tests** passing across backend, CLI, API, engine, and anomaly detection
-- **~95% coverage** enforced at 90% floor
+- **3,083 tests** across backend, CLI, API, engine, and anomaly detection (3,015 passed, 53 skipped, 15 xfailed, 0 failed — JUnit-verified 2026-10-19)
+- **95.83% coverage** enforced at 90% floor
 - Types: unit, integration, API, CLI, security, concurrency, edge cases
 
 ---
 
-## Dashboard UI — Completed (2024-10-08)
+## Dashboard UI — Completed (2026-10-08)
 
 **Status:** ✅ Static HTML dashboard fully implemented with real API connectivity
 
@@ -236,7 +237,7 @@ open http://localhost:8080
 
 ## Gaps & TODOs for Founder 2
 
-### High Priority ✅ COMPLETED (2024-10-08)
+### High Priority ✅ COMPLETED (2026-10-08)
 1. **Dashboard Refinement** - ✅ Complete
    - Implemented static HTML pages instead of Astro build chain
    - Real API connectivity verified against FastAPI endpoints
@@ -249,7 +250,7 @@ open http://localhost:8080
    - Failed episodes table with timestamps and error messages
    - Links to episode evidence where available
 
-### Medium Priority ✅ COMPLETED (2024-10-08)
+### Medium Priority ✅ COMPLETED (2026-10-08)
 1. **PDF Scorecard Download** - ✅ Complete
    - Added "📄 Scorecard (PDF)" button to run detail page header
    - Fetches from existing backend endpoint: `GET /api/v1/validations/{id}/scorecard.pdf`
@@ -305,7 +306,7 @@ open http://localhost:8080
 - ✅ **Simulation/Evaluation (Founder 1):** 18/20 - Full pipeline implemented, mock backend + Isaac adapter ready
 - ✅ **Core API/CLI:** 18/20 - FastAPI endpoints, Typer CLI commands complete with auth/rate-limiting
 - ✅ **Database/Store:** 16/18 - Memory/SQLite/PostgreSQL backends with unified abstraction
-- ✅ **Test Suite:** 16/18 - ~1,330 tests at 90%+ coverage target (1 known pre-existing divergence test failing)
+- ✅ **Test Suite:** 16/18 - 3,083 tests at 90% coverage floor (measured 95.83%, 0 failures — JUnit-verified 2026-10-19)
 - ✅ **Dashboard UI:** 15/15 - Static-first vanilla JS pages with real API connectivity, comparison viewer, failure analysis
 - ✅ **Documentation:** 12/12 - ARCHITECTURE.md + VALIDATION_SCHEMA.md provide comprehensive onboarding materials
 
@@ -335,16 +336,15 @@ open http://localhost:8080
 ## Git Context
 
 ```
-Branch: false-account-e7705a6a
-Base commit: 98cc723 chore: checkpoint working tree baseline
-Upstream origin/main: synced
-Working tree: clean (only .superset/ untracked)
+Branch: feature/website-simulation-completion (tip aabbef0 as of 2026-10-19)
+Fork point: 98cc723 chore: checkpoint working tree baseline
+Original upstream: https://github.com/dev25bansal-ops/validsim (main @ f0b476f, recorded at refs/tmp/original-main)
+Working tree: clean apart from doc updates and ignored untracked artifacts (builds/, site/dist/)
 ```
 
-When ready to create my branch:
-```bash
-git switch -c founder2/platform-mvp
-```
+Historical note: this document was originally written on the
+`false-account-e7705a6a` worktree branch; continuation work since then is
+recorded in `WORK_PROGRESS.md`.
 
 ---
 
