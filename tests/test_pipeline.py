@@ -363,3 +363,86 @@ class TestThreshold:
             else "BLOCK"
         )
         assert run.scorecard.deploy_decision == expected
+
+
+# ---------------------------------------------------------------------------
+# 8. Notification dispatch (regression guards for the wiring fix)
+# ---------------------------------------------------------------------------
+
+
+class TestNotificationDuplication:
+    """run_and_score must dispatch exactly one run-completion notification per
+    persisted run, and must NOT re-notify when the same run_id is re-executed
+    (the duplicate / retry path re-reads the stored record instead).
+    """
+
+    def test_notifies_once_on_new_save(
+        self, store: ValidationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def _spy(scorecard: object) -> list:
+            calls.append(getattr(scorecard, "run_id", None))
+            return []
+
+        monkeypatch.setattr(
+            "validsim.engine.pipeline.notify_run_completion", _spy
+        )
+        run_and_score(
+            _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy01"
+        )
+        assert calls == ["vrun-nfy01"]
+
+    def test_does_not_re_notify_on_retry(
+        self, store: ValidationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        def _spy(scorecard: object) -> list:
+            calls.append(getattr(scorecard, "run_id", None))
+            return []
+
+        monkeypatch.setattr(
+            "validsim.engine.pipeline.notify_run_completion", _spy
+        )
+        # First execution persists and notifies once.
+        run_and_score(
+            _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy02"
+        )
+        # Re-execution with the same id hits the duplicate path: the stored
+        # record is re-read and returned, but no second notification fires.
+        run_and_score(
+            _task(), "ckpt-nfy", store, backend=_mock_backend(), run_id="vrun-nfy02"
+        )
+        assert calls == ["vrun-nfy02"]
+
+    def test_webhook_failure_does_not_lose_the_persisted_run(
+        self, store: ValidationStore, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A raising notifier must not cost the run its persisted result.
+
+        ``notify_run_completion`` itself never raises, but this pins the
+        pipeline side of the contract: even if a future notifier (or the
+        monkeypatched seam) blows up, the finished run is already stored and
+        retrievable, because dispatch runs strictly after ``store.save``.
+        """
+
+        def _boom(scorecard: object) -> list:
+            raise ConnectionError("webhook host down")
+
+        monkeypatch.setattr("validsim.engine.pipeline.notify_run_completion", _boom)
+        # The pipeline deliberately lets notifier bugs surface (fail-loud in
+        # tests) rather than swallowing them — the guarantee is about the
+        # *stored* record, not about hiding the error.
+        with pytest.raises(ConnectionError, match="webhook host down"):
+            run_and_score(
+                _task(),
+                "ckpt-nfy",
+                store,
+                backend=_mock_backend(),
+                run_id="vrun-nfy03",
+            )
+        stored = store.get("vrun-nfy03")
+        assert stored is not None
+        assert stored.run_id == "vrun-nfy03"
+        assert stored.scorecard.deploy_decision in ("APPROVE", "BLOCK")

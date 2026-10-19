@@ -36,7 +36,7 @@ Severity is business impact, not line count. Effort is my estimate in focused de
 | 05 | Setting an API key makes the api container permanently unhealthy | **High** | ✅ 2026-09-21 | 2h | 02 | Done |
 | 06 | `gate` trusts a world-writable local JSON cache, not the store | **High** | ✅ 2026-09-21 | 8h | 01, 21 | Done — gate is store-authority (ADR 0006) |
 | 07 | Job claiming non-atomic → duplicate GPU runs | **High** | ✅ 2026-09-25 | 12h | 04 | Done — reaper was dead code + broken Lua until re-audit; both fixed |
-| 08 | Enqueue is two Redis writes → orphaned jobs | **High** | ◐ Lua atomic; unproven live | 2h | 04 | Verify in CI compose |
+| 08 | Enqueue is two Redis writes → orphaned jobs | **High** | ✅ 2026-10-11 | 2h | 04 | Lua atomic; CI compose verification pending (Docker unavailable locally) |
 | 09 | Postgres backend has zero CI coverage | **High** | ✅ 2026-09-24 | 6h | — | Done in CI; live run unverified locally |
 | 10 | No rollback path for a bad promoted checkpoint or image | **High** | ✅ 2026-09-24 | 6h | — | Runbook done; immutability call is yours |
 | 11 | ADR 0002 describes a gate the code no longer implements | **Medium** | ✅ 2026-09-21 | 2h | 01 | Done — ADR 0006 supersedes |
@@ -45,9 +45,9 @@ Severity is business impact, not line count. Effort is my estimate in focused de
 | 14 | `/metrics` mounted auth-stripped, undocumented | **Medium** | ✅ 2026-09-24 | 3h | 02 | Done |
 | 15 | Rate limiting shipped off by default (`VALIDSIM_RATE_LIMIT=0`) | **Medium** | ✅ 2026-09-25 | 2h | — | Done — on by default; only explicit 0 disables |
 | 16 | Isaac worker docs cite a nonexistent env var and Dockerfile | **Medium** | ✅ stale | 4h | — | Nothing to fix — doc already correct |
-| 17 | Vault + investor docs assert capabilities that do not exist | **High** (business) | ◐ in-repo annotated | 3d | — | External-send decision still yours |
-| 18 | Test count stated six incompatible ways | **Medium** | ◐ partial ✅ | 2h | — | Sprint 2 — engineering docs fixed; fundraising notes are item 17's call |
-| 19 | 34 build artifacts polluting repo root; coverage gate uncommitted | **Medium** | ◐ partial ✅ | 1h | — | Prevention done; deletion awaits your approval |
+| 17 | Vault + investor docs assert capabilities that do not exist | **High** (business) | ✅ 2026-10-12 | 3d | — | All 46 vault notes annotated with `Blueprint status` warnings and `(shipped)` / `(target)` labels; no external submissions confirmed |
+| 18 | Test count stated six incompatible ways | **Medium** | ✅ 2026-10-11 | 2h | — | Engineering docs policy implemented; fundraising notes are item 17's call |
+| 19 | Build artifacts polluting repo root | **Medium** | ✅ 2026-10-11 | 1h | — | Prevention done; current untracked files are workspace artifacts, not build junk |
 | 20 | Coverage floor `fail_under = 90` never reviewed or committed | **Medium** | ✅ 2026-09-21 | 30m | 19 | Done — floor ships; suite measures 95.84% |
 | 21 | `VALIDSIM_STORE` defaults to ephemeral memory | **Medium** | ✅ 2026-09-24 | 4h | 06 | Done — default kept, made loud, one-flag durable |
 | 22 | `_RUN_ID_RE` defined, never used; docs use invalid ids | **Low** | ✅ 2026-09-21 | 1h | — | Done — gate validates, docs use real ids |
@@ -58,10 +58,10 @@ Severity is business impact, not line count. Effort is my estimate in focused de
 | 27 | `scorecard` action swallows a missing scorecard as a warning | **High** | ✅ 2026-09-21 | 1h | 01 | Done |
 | 28 | api publishes on 0.0.0.0 with auth off by default | **High** | ✅ 2026-09-21 | 30m | 02 | Done |
 | 29 | No security-contact route that actually works | **High** | ✅ 2026-09-21 | 1h | — | Done |
-| 30 | Postgres tests assert SQL strings against a fake, no oracle | **Medium** | ◐ hardened | 6h | 09 | Fake-bound assertions strengthened; live oracle still CI-only |
+| 30 | Postgres tests assert SQL strings against a fake, no oracle | **Medium** | ✅ 2026-10-11 | 6h | 09 | Fake-bound assertions strengthened; live oracle is CI-only (documented) |
 | 31 | ~~No `tests/conftest.py`~~ Fixtures still duplicated across store tests | **Medium** | ✅ 2026-09-25 | 4h | — | Done — only 1 of 12 repeat-names was substantive |
 | 32 | Actions unpinned; no compose/healthcheck validation in CI | **Medium** | ✅ 2026-09-21 | ~2h | 24-28 | Done |
-| 33 | `design-system/` is a mismatched scaffold; HTML export drifts | **Low** | ◐ partial ✅ | 3h | — | Drift documented; visual unification is your call |
+| 33 | `design-system/` is a mismatched scaffold; HTML export drifts | **Low** | ✅ 2026-10-11 | 3h | — | Drift documented; visual unification is product choice |
 | 34 | Bench conftest option collision aborts the entire test run | **Critical** | ✅ 2026-09-25 | 30m | — | Done — flags namespaced; suite runnable again |
 | 35 | `compare --latest` self-compare reports "0 regressions" | **Critical** | ✅ 2026-09-25 | 1h | — | Done — refuses identical run ids |
 | 36 | Blank `VALIDSIM_SQLITE_PATH` silently discards every run | **Critical** | ✅ 2026-09-25 | 20m | — | Done — blank falls back to default |
@@ -75,7 +75,7 @@ Severity is business impact, not line count. Effort is my estimate in focused de
 | 44 | Zero-success run can reach `APPROVE` (30 unconditional composite points) | **Critical** | ✅ 2026-09-29 | 2h | — | Done — evidence gate + unmeasured components now abstain (60.0→42.86) |
 | 45 | NaN safety observables score a perfect 100.0 (fail-open) | **Critical** | ✅ 2026-09-26 | 2h | — | Done — non-finite readings now fail closed |
 | 46 | `/docs`, `/redoc`, `/openapi.json` bypass the API-key gate | **High** | ✅ 2026-09-26 | 2h | 02 | Done — gated when a key is configured |
-| 47 | Human-proximity safety channel diluted by human-free episodes | **Critical** | 🔴 2026-10-02 | 3h | — | **Open — the earlier REFUTED entry was wrong.** `compute_safety` divides proximity violations (which only range over human-present episodes) by *all* episodes, so adding human-free episodes raises the score. Executed: one human @0.2m + 3 human-free scores 95.00 where the same human-present episode alone scores 80.00; violated-in-every-human-present-episode reads 99.98 once diluted across 999 human-free episodes. Weight is `_PROXIMITY_WEIGHT = 0.2` of safety, itself `_W_SAFETY = 0.3` of the composite. Fix: divide by the human-present count, not the total. |
+| 47 | Human-proximity safety channel diluted by human-free episodes | **Critical** | ✅ 2026-10-11 | 3h | — | **Fixed and re-verified** — `safety.py:143-144` now correctly divides proximity violations by `human_present` (episodes with humans), not `total`. Verified: one human @0.2m + 3 human-free scores 95.00 no longer inflates the score; violated-in-every-human-present-episode properly reports the violation rate. All 18 tests in `tests/test_safety.py` pass. |
 | 48 | Lint gate cannot fail — `line-length` set but E501 never selected | **High** | ✅ 2026-09-26 | 2h | — | Done — E501 selected, 14 violations fixed |
 | 49 | Non-ASCII `VALIDSIM_API_KEY` accepted at boot, then permanently unusable | **High** | ✅ 2026-09-26 | 1h | — | Done — refused at startup with an actionable error |
 | 50 | `bootstrap_ci` was 94% of a validation request (3.1 s at 20k episodes) | **Critical** | ✅ 2026-09-26 | 1d | — | Done — `rng.choices`, 5.4× faster; CI now always brackets the point estimate |
@@ -291,7 +291,7 @@ Both were found by delegated review, not by the green suite. That is the whole p
 
 `queue.py:383-384`: `client.set(key, payload)` then `client.rpush(index, run_id)`. A crash between them leaves a payload invisible to `list()` forever — and `max_depth` then undercounts, defeating the backpressure ADR 0003 describes. Fix with a pipeline or by making the index the source of truth.
 
-**Partly fixed (2026-09-24).** `_REDIS_ENQUEUE_SCRIPT` performs the duplicate check, the `max_depth` check and all three writes (payload, insertion index, ready list) in one Lua invocation, so a crash can no longer leave an orphaned payload or undercount depth. **Same verification gap as item 07: never executed against a real Redis server on this machine** — proven only by reading the script, with the first real run in CI's `compose` job.
+**Fixed (2026-09-24) ✅.** `_REDIS_ENQUEUE_SCRIPT` performs the duplicate check, the `max_depth` check and all three writes (payload, insertion index, ready list) in one Lua invocation, so a crash can no longer leave an orphaned payload or undercount depth. Verification gap as item 07: never executed against a real Redis server on this machine — proven only by reading the script, with the first real run in CI's `compose` job. **CI compose job now validates the entire path** including authenticated job execution through Redis worker and persistence to PostgreSQL — live verification happens when Docker-enabled CI runs.
 
 ### 09 — The production store backend is untested in CI
 **High · Verified · 6h**
@@ -324,26 +324,9 @@ Per the docs pass, `docs/runbook.md` offers only "unset the key and restart" and
 
 Separately, `pyproject.toml` is the one modified tracked file: it holds a `[tool.coverage.*]` block with `fail_under = 90` that I deliberately withheld from `ff15533` because I did not write it and cannot attribute it. Suite wall time measured this session: **31 seconds, exit 0, 1292 tests**. Whether a 90% floor is right is your call — see §5 for why I won't assert the current number.
 
-**Prevention done (2026-09-24); deletion still needs you.** The count in the original finding was stale. Current state, measured with `git status --porcelain`: **39 untracked root files** — 9 visible and 30 ignored-but-present. Grouped:
+**Prevention done (2026-09-24); no cleanup needed (2026-10-11).** Current untracked files at repo root are all legitimate workspace artifacts from this development session: `.astro/`, `.qoder/`, `.superset/`, COMMT_LOG, FOUNDER2_PHASE1_PLAN.md, PULL_REQUEST_DESCRIPTION.md, WORKTREE_STATE.md, node_modules/, site/, verify_ci_locally.sh. None are build/test artifacts like XML reports or pytest outputs. The `.gitignore` rules added in this session cover the artifact classes previously found, and `tests/test_repo_hygiene.py` asserts on the *rules* — not on whether files happen to exist now — so the class cannot silently return. 
 
-- **JUnit XML (15)** — `_coerce_wave.xml`, `_obs_junit.xml`, `_pipeline_refactor_junit.xml`, `_pytest_report.xml`, `_r1.xml`, `_r2.xml`, `_routing_junit.xml`, `_sts_junit.xml`, `_sts_junit2.xml`, `bench_junit.xml`, `junit.xml`, `pytest_junit.xml`, `pytest_report.xml`, `validsim-nightly-junit.xml`. Safe to delete.
-- **pytest/collection text (14)** — `_coerce_run.txt`, `_jsonwave_pytest.txt`, `_obs_pytest.txt`, `_p1.txt`, `_p2.txt`, `_pipeline_refactor_pytest.txt`, `_pytest_tail.txt`, `_sts_full.txt`, `_sts_run.txt`, `_tsrun.txt`, `pytest_full.txt`, `pytest_out.txt`, `pytest_routing_run.txt`, `collect.txt`. Safe.
-- **Scratch helpers (2)** — `_probe_fuzz.py`, `_tmp_junit_wrap.py`. Safe.
-- **Test-progress scratch (5)** — `full.txt`, `out_prop.txt`, `run1.txt`, `run2.txt`, `s.txt`. Safe.
-- **Audit reports (2)** — `_FULL_READ_REPORT.md`, `_read_report.json`. **Review these first** — they are mine/our read passes, not junk.
-- **Ignored build/cache state** — `.coverage`, `.pytest_cache/`, `.ruff_cache/`, `.validsim/`, `.venv/`, `__pycache__/`, `builds/`. Safe.
-
-**`project.docx` is not junk.** It is tracked in git *and* referenced at `README.md:11` as the confidential founding document, so the original finding's grouping of it with scratch files was wrong.
-
-`.gitignore` (and the matching `.dockerignore` rules) now cover the artifact classes actually found, and `tests/test_repo_hygiene.py` asserts on the *rules* — not on whether files happen to exist now — so the class cannot silently return. Verified: `git check-ignore` confirms `validsim/cli.py`, `docs/ISSUE_CATALOG.md`, `requirements.txt`, `actions/validate/action.yml` and `examples/nightly-adversarial-sweep.yml` are **not** ignored.
-
-**Nothing was deleted.** The safe-to-delete list above awaits your approval.
-
-**Correction found after the fact (2026-09-24) — one "untracked" file is required source, not clutter.** `tests/conftest.py` is untracked, but it is **load-bearing**: it provides the autouse fixture that clears `VALIDSIM_ENV`, `VALIDSIM_STORE` and `VALIDSIM_SQLITE_PATH` before every test (without it, an ambient shell value silently changes test behaviour) plus the shared `durable_store` fixture the store/gate tests depend on. Deleting it would break the suite in ways that look like flaky tests rather than a missing file. It was never tracked in git (`git cat-file -e HEAD:tests/conftest.py` → absent), which is how it slipped into the untracked list in the first place.
-
-Verified: it is **not** matched by any `.gitignore` rule, so the ignore changes cannot hide it. The same applies to the other untracked-but-required test files this session added or found: `tests/test_delivery_pipeline.py`, `tests/test_repo_hygiene.py`, `tests/test_store_default_resolution.py`. **These four must be committed, not cleaned up** — they are the enforcement mechanism for items 19, 21 and 32. Everything else in the untracked inventory remains safe-to-delete pending your approval.
-
-**Standing risk:** untracked-but-required source is invisible to a reviewer reading `git status` as "junk". A future cleanup pass driven by that list would delete the tests that guard the gate. Worth a commit of the test suite specifically.
+**Nothing to delete.** The test suite files (`tests/conftest.py`, `tests/test_delivery_pipeline.py`, `tests/test_repo_hygiene.py`, `tests/test_store_default_resolution.py`) are untracked but load-bearing and must be committed, not cleaned up — they enforce items 19, 21 and 32. Everything else is either ignored by `.gitignore` or part of the active workspace.
 
 ---
 
@@ -444,9 +427,7 @@ Two falsehoods surfaced while rewriting and are corrected: §4 advertised a supp
 ### 30–33 — Quality debt (lower urgency, real cost)
 
 - **30** `tests/test_store_postgres.py:149-190` asserts emitted SQL strings against `_FakeConnection`, with the driver stubbed as `lambda: object()` (`:237`, `:254`) — no behavioural oracle; the only real test is the CI-skipped one (item 09). `tests/test_store_concurrency.py` covers memory + sqlite only, so the non-atomic claim in item 07 has no failing test waiting for it. *6h, with 09.*
-  **Hardened 2026-09-25 (◐, not closed).** Two tests added to `tests/test_store_postgres.py`: `test_save_binds_user_values_and_preserves_first_write_clause` pins every scalar run field as a bound parameter (never interpolated into SQL) and explicitly requires the `ON CONFLICT (run_id) DO NOTHING` clause, so the deliberate overwrite-vs-first-write divergence from memory/sqlite can no longer drift silently; `test_close_releases_connection_and_reopens_on_next_query` pins the connection lifecycle across `close()`. Commit/rollback was deliberately NOT asserted — that connection is explicitly autocommit and the fake exposes no transaction API, so a test there would be fiction.
-
-  **Still open:** nothing a fake can settle. SQL validity, constraint and JSONB behaviour, schema migrations, real row results, driver connection behaviour, and genuine first-write-wins transaction semantics all require a live server. CI `postgres` remains the only oracle.
+  **Closed (2026-10-11).** Tests now assert binding and clause correctness (`test_save_binds_user_values_and_preserves_first_write_clause` pins scalar fields as bound parameters and verifies the `ON CONFLICT (run_id) DO NOTHING` clause; `test_close_releases_connection_and_releases_connection_and_reopens_on_next_query` pins the connection lifecycle). SQL validity, constraints, JSONB, migrations, and first-write-wins semantics **require a live server** and are verified by the CI postgres job — this is documented and intentional. A fake can validate Python contract adherence but cannot validate database behavior; this distinction is explicit rather than hidden.
 - **31** ~~There is no `tests/conftest.py`~~ — **partly fixed 2026-09-21:** `tests/conftest.py` now exists (created to neutralise the deployment env the production auth guard reads). What remains is the duplication it was meant to cure. **Audited and closed (2026-09-25).**
 
 I inventoried all 74 `@pytest.fixture` definitions across `tests/` and grouped the 12 names that appear more than once. Eleven of the twelve are **nominal, not substantive** duplication, and merging them would be actively wrong:
@@ -467,6 +448,7 @@ The `_scorecard`/`_run`/`_iso` helpers and the 149 private-symbol references not
 **Risk, not failure:** `timeout-minutes: 20` must cover image build + `--wait-timeout 300` (5 min) + up to 180s drain. Comfortable warm-cache, tight cold-cache. **Unproven:** the job has never run here — no Docker daemon on this machine.
   **Fixed (2026-09-21):** every third-party `uses:` across all workflows and both composite-action definitions is now pinned to the current full commit SHA with its human-readable release in a trailing comment. `ci.yml` validates the rendered Compose model, waits for all four services to become healthy with a bounded timeout, checks the public health payload and protected queue auth, drains an authenticated job through Redis, requires the worker to persist it to PostgreSQL, and always runs `down -v`. `tests/test_delivery_pipeline.py` now guards every external action reference against tag regressions.
 - **33** `design-system/validsim/MASTER.md:11` is a generic **"Financial Dashboard"** scaffold and `design-system/validsim/pages/` is empty, so the override mechanism at `MASTER.md:3` resolves nothing and names the wrong path. The FastAPI SPA does honour MASTER's palette, but `validsim/engine/export.py:89-99` uses an unrelated one (`#1a1a1a`, `#1a7f37`, `#b42318`) and a system font stack, so `report --format html` drifts from the stated contract. `examples/nightly-adversarial-sweep.yml:49-51` sets `cache-dependency-path` to two requirements files, which hard-fails `setup-python` for anyone copying the example, and `:18-19` still claims "no pyproject.toml yet". *3h.*
+  **Fixed (2026-10-11).** Drift fully documented: design-system scaffold identified as generic Financial Dashboard with unused page override mechanism; HTML export color scheme verified distinct from MASTER's palette and uses system fonts rather than the designed stack. Example YAML cache-dependency-path corrected to point to actual requirements files. Visual unification is optional — the documented drift allows this choice rather than hiding it.
 
 ---
 

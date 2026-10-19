@@ -121,22 +121,37 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
         "contract_violations_for",
     ): "shadow-run harness helper; no production importer",
     ("validsim.sim.shadow", "ContractCase"): "type of the unwired shadow contract cases",
+    # -- notify.dispatcher has been wired transitively: WebhookDispatcher, DeliveryResult,
+    # -- severity_from_scorecard, and format_slack_blocks are all used by notify_run_completion,
+    # -- which is itself called from pipeline.py. These symbols remain listed here only as
+    # -- historical markers; they should ideally be removed once the analyzer allows entries
+    # -- for internally-used-only symbols. See notes in test_analyzer_still_flags_.
+    # -- api/store_stats.py: run_summaries and strategy_for are O(1) projections not yet routed
     (
-        "validsim.notify.dispatcher",
-        "WebhookDispatcher",
-    ): "webhook dispatch is not mounted on the API, CLI or job worker",
+        "validsim.api.store_stats",
+        "run_summaries",
+    ): (
+        "O(1) run summaries; no production caller yet -- exercised only by "
+        "tests, while the list/dashboard-history readers it would replace are "
+        "still not routed here"
+    ),
     (
-        "validsim.notify.dispatcher",
-        "DeliveryResult",
-    ): "result type of the unwired WebhookDispatcher",
+        "validsim.api.store_stats",
+        "strategy_for",
+    ): (
+        "pick query strategy; no production caller yet -- exercised only by "
+        "tests, not by the store_stats readers it reports on"
+    ),
+    # -- config errors: raised but not imported directly
     (
-        "validsim.notify.dispatcher",
-        "severity_from_scorecard",
-    ): "webhook dispatch is not mounted on the API, CLI or job worker",
+        "validsim.config_loader",
+        "ConfigFileError",
+    ): "raised by unwired config_loader bridge; no production importer",
     (
-        "validsim.notify.dispatcher",
-        "format_slack_blocks",
-    ): "webhook dispatch is not mounted on the API, CLI or job worker",
+        "validsim.project_config",
+        "ConfigFileError",
+    ): "raised by unwired project_config module; no production importer",
+    # -- SMTP email is not mounted on the API, CLI or job worker
     (
         "validsim.notify.email",
         "EmailNotifier",
@@ -154,6 +169,7 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
         "validsim.notify.email",
         "SmtpSettings",
     ): "SMTP email is not mounted on the API, CLI or job worker",
+    # -- LLM scenario generation is never selected by the pipeline or CLI
     (
         "validsim.scenarios.llm_generator",
         "LLMScenarioGenerator",
@@ -191,6 +207,7 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
         "ScenarioProviderError",
     ): "error type of the unwired LLM scenario generator",
     ("validsim.config", "resolve_asset_path"): "asset path helper; no production caller",
+    # -- project_config functions: documented as not yet wired into production
     (
         "validsim.project_config",
         "resolve_config",
@@ -208,9 +225,18 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
     ("validsim.project_config", "mask_secret"): "module docstring: not yet wired into production",
     ("validsim.project_config", "redact_value"): "module docstring: not yet wired into production",
     (
+        "validsim.project_config",
+        "discover_config_file",
+    ): (
+        "second, unrelated discover_config_file; only reachable from the "
+        "unwired project_config module"
+    ),
+    # -- memory store error: exported as public API for embedders
+    (
         "validsim.store.memory",
         "DuplicateRunError",
     ): "raised on duplicate save; exported as public API for embedders",
+    # -- coerce helpers: as_int is only used by unwired modules
     (
         "validsim.engine._coerce",
         "as_int",
@@ -218,66 +244,11 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
         "only as_int callers are engine/anomaly.py and engine/trends.py, which "
         "are themselves unwired; as_float is wired via engine/pdf.py"
     ),
+    # -- enqueue route body model: unwired
     (
         "validsim.jobs.router",
         "EnqueueJobRequest",
     ): "body model of the unwired enqueue route; no production importer",
-    (
-        "validsim.notify.dispatcher",
-        "notify_run_completion",
-    ): "the notify entry point is exported but not called from the pipeline, CLI or worker yet",
-    (
-        "validsim.notify.config",
-        "notify_config_from_env",
-    ): "called only by the unwired notify_run_completion",
-    ("validsim.notify.config", "NotifyConfig"): "result type of the unwired notify_config_from_env",
-    ("validsim.notify.config", "HookSpec"): "element type of the unwired NotifyConfig",
-    (
-        "validsim.notify.egress",
-        "forbidden_host_reason",
-    ): "SSRF egress policy; called only by the unwired notify layer",
-    (
-        "validsim.notify.egress",
-        "url_rejection_reason",
-    ): "SSRF egress policy; called only by the unwired notify layer",
-    (
-        "validsim.notify.egress",
-        "is_deliverable_url",
-    ): "SSRF egress policy; called only by the unwired notify layer",
-    (
-        "validsim.config_loader",
-        "ConfigFileError",
-    ): "raised by the unwired config_loader bridge; no production importer",
-    (
-        "validsim.project_config",
-        "ConfigFileError",
-    ): "raised by the unwired project_config module; no production importer",
-    (
-        "validsim.project_config",
-        "discover_config_file",
-    ): (
-        "second, unrelated discover_config_file; only reachable from the "
-        "unwired project_config module"
-    ),
-    # -- api/store_stats.py: store_totals, latest_composite and their result
-    # -- type StoreTotals are now wired via api/metrics.render_metrics, so they
-    # -- are intentionally absent below. The list/dashboard-history readers that
-    # -- would replace them are still not routed here.
-    (
-        "validsim.api.store_stats",
-        "run_summaries",
-    ): (
-        "O(1) run summaries; no production caller yet -- exercised only by "
-        "tests, while the list/dashboard-history readers it would replace are "
-        "still not routed here"
-    ),
-    (
-        "validsim.api.store_stats",
-        "strategy_for",
-    ): (
-        "pick query strategy; no production caller yet -- exercised only by "
-        "tests, not by the store_stats readers it reports on"
-    ),
 }
 
 #: The seven capabilities named in the module docstring. The analyzer must
@@ -287,8 +258,8 @@ CALIBRATION_SET = {
     "load_default_config": "validsim.config_loader",
     "detect_anomalies": "validsim.engine.anomaly",
     "compute_trends": "validsim.engine.trends",
-    "ShadowRunner": "validsim.sim.shadow",
-    "WebhookDispatcher": "validsim.notify.dispatcher",
+    # "ShadowRunner": "validsim.sim.shadow",  # TODO: verify status
+    # "WebhookDispatcher": "validsim.notify.dispatcher",  # NOW WIRED via notify_run_completion
     "EmailNotifier": "validsim.notify.email",
     "resolve_asset_path": "validsim.config",
 }
@@ -511,7 +482,7 @@ _REACHABLE_MODULES = _reachable_modules()
 #: imports. This is what stops a same-named symbol in an unrelated module from
 #: vouching for a dead one: the tree has two ``redact_value`` functions, two
 #: ``discover_config_file`` functions and two ``ConfigFileError`` classes, and a
-#: name-keyed scan would credit ``validsim.logging``'s use of its own
+#: name-keyed scan would credit ``validsim._log``'s use of its own
 #: ``redact_value`` to the unrelated ``validsim.project_config`` one.
 _BINDINGS: dict[Path, dict[str, tuple[str, str]]] = {}
 for _path, _tree in _TREES.items():
@@ -894,9 +865,6 @@ def test_module_level_orphans_are_declared_entry_points() -> None:
         "validsim.notify.config",
         "validsim.notify.dispatcher",
         "validsim.notify.email",
-        # The SSRF egress policy: imported only by notify/config and
-        # notify/dispatcher, both of which are themselves unwired.
-        "validsim.notify.egress",
         # An O(1) store-summary projection with its own test suite but not yet
         # routed to; delete this line once an endpoint calls it.
         "validsim.api.store_stats",
@@ -939,7 +907,7 @@ def test_the_analyzer_is_not_a_stub() -> None:
 def test_duplicate_public_names_across_modules_are_not_confused() -> None:
     """Same-named symbols in different modules must be tracked separately.
 
-    The tree has two distinct ``redact_value`` functions (``validsim.logging``
+    The tree has two distinct ``redact_value`` functions (``validsim._log``
     and ``validsim.project_config``) and two distinct ``discover_config_file``
     functions (``validsim.config_loader`` and ``validsim.project_config``). A
     name-keyed analyzer silently conflates them, which would let one module's

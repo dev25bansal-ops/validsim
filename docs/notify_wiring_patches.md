@@ -1,18 +1,15 @@
-# notify-wiring — patches OWNER must apply (outside `validsim/notify/`)
+# notify-wiring — OWNER patches (all three LANDED)
 
-Three edits complete this work. Each is a copy-paste block; each has a RED
-test already sitting in `tests/test_notify_wiring_agent.py`, marked
-`xfail(strict=False)` and tagged `PENDING OWNER`. **Delete the marker when you
-apply the patch** — pytest will then report `XPASS`, which is the signal that
-the wiring landed and the test is doing real work.
-
-Do all three, then run (no `-q` — `pytest.ini` already sets it, and a second
-one stacks to `-qq` and hides the pass/fail summary):
-    python -m pytest tests/test_notify_wiring_agent.py
+All three wirings below have landed in the shipped code, and the former
+`xfail(strict=False)` / `PENDING OWNER` markers in
+`tests/test_notify_wiring_agent.py` were removed — those tests now enforce the
+wiring instead of signalling it via XPASS. This document is kept as the
+historical record of what was applied and why (ordering matters: dispatch
+must run *after* persistence).
 
 ---
 
-## 1. `validsim/engine/pipeline.py` — dispatch on run completion
+## 1. `validsim/engine/pipeline.py` — dispatch on run completion — **LANDED**
 
 Unlocks RED test `TestReachability::test_notify_modules_are_loaded_by_the_shipped_entrypoints`.
 
@@ -59,7 +56,7 @@ had not yet been persisted, turning a notification outage into data loss.
 
 ---
 
-## 2. `validsim/api/main.py` — surface effective config on `/api/v1/health`
+## 2. `validsim/api/main.py` — surface effective config on `/api/v1/health` — **LANDED**
 
 Unlocks RED tests `TestHealthSurface::*` (2 tests).
 

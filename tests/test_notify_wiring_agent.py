@@ -106,18 +106,10 @@ def _scorecard(decision: str = "APPROVE", composite: float = 90.0) -> Scorecard:
 
 
 # ---------------------------------------------------------------------------
-# (1) Reachability
-# ---------------------------------------------------------------------------
-# PENDING OWNER: the two wirings below live outside validsim/notify/ and so are
-# outside this agent's edit scope. They are marked xfail (non-strict) so the
-# suite is green today and reports XPASS — a visible signal — the moment the
-# pipeline call and the health field land. Delete the marker then.
+# (1) Reachability — WIRED (was PENDING OWNER; both wirings landed, so the
+# former xfail markers were removed and this test now enforces the wiring).
 # ---------------------------------------------------------------------------
 class TestReachability:
-    @pytest.mark.xfail(
-        strict=False,
-        reason="PENDING OWNER: validsim/engine/pipeline.py must call notify_run_completion",
-    )
     def test_notify_modules_are_loaded_by_the_shipped_entrypoints(self) -> None:
         """The layer must be reachable from a real entrypoint, not just tests.
 
@@ -437,10 +429,6 @@ class TestLiveModeIsNotBootFrozen:
 # (6) Health surface
 # ---------------------------------------------------------------------------
 class TestHealthSurface:
-    @pytest.mark.xfail(
-        strict=False,
-        reason="PENDING OWNER: validsim/api/main.py health route must surface notify config",
-    )
     def test_health_reports_the_effective_notify_config(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -460,10 +448,6 @@ class TestHealthSurface:
         assert body["notify"]["enabled"] is False
         assert body["notify"]["hook_count"] == 0
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="PENDING OWNER: validsim/api/main.py health route must surface notify config",
-    )
     def test_health_reports_enabled_state_without_leaking_the_secret(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -475,9 +459,14 @@ class TestHealthSurface:
         monkeypatch.setenv("VALIDSIM_WEBHOOK_URLS", _SLACK_URL)
         monkeypatch.setenv("VALIDSIM_WEBHOOK_SECRETS", "super-secret-value")
         client = TestClient(create_app())
-        raw = client.get("/api/v1/health").text
-        assert '"enabled": true' in raw.replace("'", '"')
-        assert "super-secret-value" not in raw
+        response = client.get("/api/v1/health")
+        body = response.json()
+        assert body["notify"]["enabled"] is True
+        assert body["notify"]["hook_count"] == 1
+        # The probe is public, so the secret must appear nowhere — neither in
+        # the parsed structure nor in the raw bytes (URLs included).
+        assert "super-secret-value" not in response.text
+        assert _SLACK_URL not in response.text
 
 
 # ---------------------------------------------------------------------------

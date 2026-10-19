@@ -921,6 +921,33 @@ class TestFixedDefects:
         duplicates = [k for k, n in Counter(keys).items() if n > 1]
         assert not duplicates, f"duplicate els keys: {duplicates}"
 
+    # --- JOB_STATUS must cover every status the API can emit ----------------
+    def test_job_status_badges_cover_the_enum(self) -> None:
+        """`jobStatusBadge` falls back to the *queued* badge for an unknown
+        status, so a `JobStatus` member missing from `JOB_STATUS` renders a
+        terminal job as waiting-to-run. `dead` shipped exactly that way: the
+        dead-letter state (retries exhausted, will never run) looked pending."""
+        import re
+
+        from validsim.jobs.models import JobStatus
+
+        js = APP_JS.read_text(encoding="utf-8")
+        block = js.split("const JOB_STATUS = {", 1)[1].split("};", 1)[0]
+        mapped = set(re.findall(r"(\w+):\s*\{\s*cls:", block))
+        assert mapped, "no JOB_STATUS entries parsed; assertion would be vacuous"
+
+        missing = sorted(status.value for status in JobStatus if status.value not in mapped)
+        assert not missing, (
+            f"JobStatus members without a badge (they would render as queued): {missing}"
+        )
+
+        # And every badge class must have a style rule, or the word shows
+        # unstyled instead of as a recognisable badge.
+        css = STYLES_CSS.read_text(encoding="utf-8")
+        classes = set(re.findall(r'cls:\s*"(\w+)"', block))
+        unstyled = sorted(cls for cls in classes if f".badge-sm--{cls}" not in css)
+        assert not unstyled, f"JOB_STATUS classes without a CSS rule: {unstyled}"
+
     # --- every $() lookup in app.js resolves to an id in the markup ---------
     def test_every_element_app_js_looks_up_exists_in_the_markup(self) -> None:
         """A typo'd id yields null, and the first property write on it throws

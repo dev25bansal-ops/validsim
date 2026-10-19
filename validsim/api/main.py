@@ -116,7 +116,8 @@ from validsim.engine.export import scorecard_to_html, scorecard_to_markdown
 from validsim.engine.pdf import scorecard_pdf_bytes
 from validsim.engine.pipeline import DEFAULT_THRESHOLD, BaselineNotFoundError, run_and_score
 from validsim.engine.regression import compare
-from validsim.logging import configure_logging, get_logger
+from validsim._log import configure_logging, get_logger
+from validsim.notify.config import notify_config_from_env
 from validsim.sim import create_backend
 from validsim.sim.runner import run_validation, stable_seed
 from validsim.store import create_store
@@ -1142,6 +1143,7 @@ def create_app(store: ValidationStore | None = None) -> FastAPI:
             "rate_limit": getattr(state, "rate_limit_config", None),
             "store_backend": _store_backend_name(getattr(state, "store", None)),
             "job_queue_backend": _job_queue_backend_name(getattr(state, "job_queue", None)),
+            "notify": notify_config_from_env().summary(),
         }
 
     @application.post("/api/v1/validations", status_code=201)

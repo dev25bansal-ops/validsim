@@ -37,7 +37,7 @@ from validsim.config import EnvironmentSpec, RobotSpec, TaskConfig
 from validsim.engine.pipeline import run_and_score
 from validsim.jobs.models import JobRecord, JobSpec, JobStatus
 from validsim.jobs.queue import JobQueue, _plus_seconds, _report_dead_letter, _retry_delay_seconds
-from validsim.logging import get_logger
+from validsim._log import get_logger
 from validsim.sim import create_backend
 from validsim.sim.runner import SimulationBackend, run_validation
 from validsim.store.memory import StoredRun, ValidationStore

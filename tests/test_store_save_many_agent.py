@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.bench.fixtures import prototype_run
+from bench.fixtures import prototype_run
 from validsim.store.memory import StoredRun, ValidationStore
 from validsim.store.sqlite import SqliteValidationStore
 

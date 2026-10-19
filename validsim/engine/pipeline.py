@@ -39,6 +39,7 @@ from validsim.engine.evaluation import evaluate
 from validsim.engine.regression import compare
 from validsim.engine.safety import compute_safety
 from validsim.engine.scorecard import build_scorecard
+from validsim.notify.dispatcher import notify_run_completion
 from validsim.scenarios.generator import ScenarioGenerator
 from validsim.sim import create_backend as _default_create_backend
 from validsim.sim.runner import (
@@ -194,5 +195,13 @@ def run_and_score(
         stored = store.get(run_id)
         if stored is None:  # pragma: no cover - defensive
             raise RuntimeError(f"run {run_id} vanished from the store mid-save")
+        # Notification is dispatched only on the new-save path below; a
+        # retry must not re-notify (avoids duplicate webhooks).
         return stored
-    return candidate
+    
+    stored = store.save(candidate)
+    # Run-completion notification. Inert unless VALIDSIM_NOTIFY_ENABLED and
+    # VALIDSIM_WEBHOOK_URLS are both set, and never raises, so the default
+    # path is unchanged and a broken webhook cannot fail a finished run.
+    notify_run_completion(scorecard)
+    return stored

@@ -99,6 +99,8 @@
     jobsMeta: $("jobs-meta"),
     themeToggle: $("theme-toggle"),
     themeToggleText: $("theme-toggle-text"),
+    downloadPdfBtn: $("download-pdf-btn"),
+    pdfBtnLabel: $("pdf-btn-label"),
   };
 
   /* ------------------------------------------------------------------ */
@@ -903,11 +905,18 @@
 
   // Colour is never the sole signal: every badge pairs a distinct hue with an
   // inline icon and the literal status word.
+  // Every JobStatus enum value needs an entry here: `jobStatusBadge` falls
+  // back to "queued" for unknown keys, so a missing status (e.g. `dead`, the
+  // dead-letter terminal state) would render as *waiting to run* — telling an
+  // operator a poisoned job is pending when it will never run again. The
+  // contract test in tests/test_web_presentation_agent.py pins this map
+  // against the enum.
   const JOB_STATUS = {
     queued: { cls: "queued", icon: "queued" },
     running: { cls: "running", icon: "running" },
     done: { cls: "done", icon: "approve" },
     failed: { cls: "failed", icon: "block" },
+    dead: { cls: "dead", icon: "block" },
   };
 
   function jobStatusBadge(status) {
@@ -1166,6 +1175,62 @@
       els.main.focus({ preventScroll: true });
     });
   }
+
+  /* ------------------------------------------------------------------ */
+  /* PDF download: fetch and trigger blob download                      */
+  /* ------------------------------------------------------------------ */
+
+  if (els.downloadPdfBtn) {
+    els.downloadPdfBtn.addEventListener("click", async () => {
+      if (!currentRunId) return;
+
+        // Disable button and show loading state
+      els.downloadPdfBtn.setAttribute("disabled", "");
+      els.pdfBtnLabel.textContent = "Downloading...";
+
+      try {
+        const response = await fetch(`/api/v1/validations/${currentRunId}/scorecard.pdf`, {
+          headers: authHeaders(),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const filename = `${currentRunId}-scorecard.pdf`;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        els.pdfBtnLabel.textContent = "Download PDF";
+        announce(`PDF downloaded: ${filename}`);
+      } catch (err) {
+        els.pdfBtnLabel.textContent = "Download PDF";
+        els.downloadPdfBtn.removeAttribute("disabled");
+        announce(`Failed to download PDF: ${err.message}`, "assertive");
+      }
+    });
+  }
+
+  // Update button state whenever run ID changes
+  const originalRenderScorecard = renderScorecard;
+  renderScorecard = function(card, durationLabel) {
+    const result = originalRenderScorecard(card, durationLabel);
+    if (els.downloadPdfBtn) {
+      if (currentRunId) {
+        els.downloadPdfBtn.removeAttribute("disabled");
+      } else {
+        els.downloadPdfBtn.setAttribute("disabled", "");
+      }
+    }
+    return result;
+  };
 
   /* ------------------------------------------------------------------ */
   /* Bootstrap                                                            */

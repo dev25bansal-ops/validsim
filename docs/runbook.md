@@ -254,23 +254,23 @@ an unknown run id is not possible — unknown runs return 404.
 
 ### 4.4 Webhook delivery failures
 
-> [!warning] Nothing in this repository delivers a scorecard for you — yet
-> `WebhookDispatcher` and `EmailNotifier` have **no production caller**. The
-> configuration surface now exists (`validsim/notify/config.py`, reading
-> `VALIDSIM_NOTIFY_ENABLED` + `VALIDSIM_WEBHOOK_URLS` and siblings), but
-> `run_and_score` does not import `validsim.notify`, so nothing dispatches. There
-> is no `POST /api/v1/webhooks` route and no CLI flag. A `validsim run` therefore
-> sends nothing, and setting the notify variables does not change that.
+> [!warning] Webhooks dispatch on run completion — only when opted in
+> `run_and_score` calls `notify_run_completion(scorecard)` after a run is
+> *newly* persisted, so a completed run sends its scorecard when the
+> configuration is on. Both switches must be on — `VALIDSIM_NOTIFY_ENABLED`
+> (a recognised truthy value) *and* at least one `VALIDSIM_WEBHOOK_URLS` —
+> and an unrecognised value (`maybe`) counts as off. On top of that, the
+> dispatcher is **dry-run unless `VALIDSIM_WEBHOOKS_LIVE=1`**. A dry-run result
+> always reports `ok=True`, so a "successful" delivery that nobody received
+> almost always means one of those three is off rather than that the endpoint
+> rejected anything.
 >
-> **Before following the steps below, confirm you are actually calling it.** If
-> you expected the platform to notify on its own, that capability does not exist
-> yet; §4.4 below applies only to code you have written that calls
-> `dispatcher.dispatch(scorecard)`. Two independent switches must both be on —
-> `VALIDSIM_NOTIFY_ENABLED` *and* at least one `VALIDSIM_WEBHOOK_URLS` — and an
-> unrecognised value (`maybe`) counts as off. On top of that, the dispatcher is
-> **dry-run unless `VALIDSIM_WEBHOOKS_LIVE=1`**. A dry-run result always reports
-> `ok=True`, so a "successful" delivery that nobody received almost always means
-> one of those three is off rather than that the endpoint rejected anything.
+> `EmailNotifier` still has **no production caller**, and there is no
+> `POST /api/v1/webhooks` route and no CLI flag — the environment surface is
+> the only activation path. The retry/duplicate path does not re-notify, and
+> the dispatcher never raises, so a misconfigured webhook cannot fail a
+> finished run. The steps below apply to that run-completion dispatch and to
+> any code of your own that calls `dispatcher.dispatch(scorecard)` directly.
 
 1. **Is live mode on?** Delivery defaults to **dry-run** (nothing is sent).
    Set `VALIDSIM_WEBHOOKS_LIVE=1` (or construct `WebhookDispatcher(live=True)`).

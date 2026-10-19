@@ -23,7 +23,60 @@ from validsim.store.memory import StoredRun, ValidationStore
 from validsim.store.sqlite import SqliteValidationStore
 
 #: Env vars cleared before every test so ambient shell config cannot leak in.
-_ISOLATED_ENV = ("VALIDSIM_ENV", "VALIDSIM_STORE", "VALIDSIM_SQLITE_PATH")
+#: This covers every ``VALIDSIM_*`` / ``POSTGRES_*`` / ``REDIS_*`` variable the
+#: package reads at runtime (API auth, CORS, rate limits, store/queue selection,
+#: backend URLs, notification/SMTP/LLM/worker settings). Tests that need a value
+#: set it explicitly with ``monkeypatch.setenv`` (which runs after this fixture
+#: and is undone automatically). Without this, e.g. an exported
+#: ``VALIDSIM_API_KEY`` silently enables auth for the whole session and ~120
+#: tests that build apps expecting the open default fail.
+_ISOLATED_ENV = (
+    "POSTGRES_DB",
+    "POSTGRES_PASSWORD",
+    "POSTGRES_USER",
+    "REDIS_PASSWORD",
+    "VALIDSIM_API_KEY",
+    "VALIDSIM_ASSET_ROOT",
+    "VALIDSIM_BACKEND",
+    "VALIDSIM_CACHE_FILE",
+    "VALIDSIM_CONFIG",
+    "VALIDSIM_CORS_ORIGINS",
+    "VALIDSIM_ENV",
+    "VALIDSIM_ISAAC_WORKER_KEY",
+    "VALIDSIM_ISAAC_WORKER_URL",
+    "VALIDSIM_JOB_LEASE_SECONDS",
+    "VALIDSIM_JOB_MAX_ATTEMPTS",
+    "VALIDSIM_JOB_MAX_RECLAIMS",
+    "VALIDSIM_JOB_QUEUE",
+    "VALIDSIM_JOB_QUEUE_MAX_DEPTH",
+    "VALIDSIM_JOB_RETRY_BACKOFF_SECONDS",
+    "VALIDSIM_LLM_API_KEY",
+    "VALIDSIM_LLM_BASE_URL",
+    "VALIDSIM_LLM_ENABLED",
+    "VALIDSIM_LLM_MODEL",
+    "VALIDSIM_LOG_LEVEL",
+    "VALIDSIM_METRICS_PUBLIC",
+    "VALIDSIM_NOTIFY_ENABLED",
+    "VALIDSIM_PG_URL",
+    "VALIDSIM_PIPELINE_CONCURRENCY",
+    "VALIDSIM_RATE_LIMIT",
+    "VALIDSIM_RATE_WINDOW_SECONDS",
+    "VALIDSIM_REDIS_URL",
+    "VALIDSIM_SMTP_FROM",
+    "VALIDSIM_SMTP_HOST",
+    "VALIDSIM_SMTP_PASSWORD",
+    "VALIDSIM_SMTP_PORT",
+    "VALIDSIM_SMTP_TLS",
+    "VALIDSIM_SMTP_USER",
+    "VALIDSIM_SQLITE_PATH",
+    "VALIDSIM_STORE",
+    "VALIDSIM_THREAD_LIMITER_TOKENS",
+    "VALIDSIM_WEBHOOK_FORMATS",
+    "VALIDSIM_WEBHOOK_MIN_SEVERITY",
+    "VALIDSIM_WEBHOOK_SECRETS",
+    "VALIDSIM_WEBHOOK_URLS",
+    "VALIDSIM_WEBHOOKS_LIVE",
+)
 
 DEFAULT_RUN_ID = "vrun-cafe1234"
 DEFAULT_CHECKPOINT_ID = "ckpt-1"

@@ -10,7 +10,7 @@ This repository contains the ValidSim MVP codebase, the founding blueprint, and 
 |---|---|
 | `project.docx` | Confidential founding document (19-section startup blueprint) |
 | `vault/` | Obsidian vault — the full blueprint as interconnected notes (open this folder in Obsidian) |
-| `validsim/` | Python platform MVP: config models, simulation runner (mock Isaac backend), adversarial scenarios (difficulty bias + `coverage()`), evaluation/safety/regression/scorecard/benchmark/trends/anomaly engines, async job queue (in-memory + Redis, depth-bounded), FastAPI API (API-key auth + CORS + rate limiting + Prometheus `/metrics` + structured JSON logging + `X-Request-ID` tracing), Typer CLI, and a Slack webhook + SMTP email dispatcher that is **configured but never dispatched** (see [Notification dispatch](#notification-dispatch-configurable-not-yet-dispatched) — no shipped entrypoint calls it) |
+| `validsim/` | Python platform MVP: config models, simulation runner (mock Isaac backend), adversarial scenarios (difficulty bias + `coverage()`), evaluation/safety/regression/scorecard/benchmark/trends/anomaly engines, async job queue (in-memory + Redis, depth-bounded), FastAPI API (API-key auth + CORS + rate limiting + Prometheus `/metrics` + structured JSON logging + `X-Request-ID` tracing), Typer CLI, and a Slack webhook + SMTP email dispatcher — the webhook channel is dispatched by `run_and_score` on run completion (opt-in, dry-run by default), while the email channel still has no production caller (see [Notification dispatch](#notification-dispatch-wired-into-the-run-pipeline)) |
 | `tests/` | pytest suite covering every module. **No test count is quoted here on purpose** — a hand-copied number goes stale on the next commit, and the figure has already contradicted itself across this repo's docs four separate times (338 / 601 / 1,230 / 1,274 / 1,328 / 1,330). `python -m pytest tests/` prints the current totals; `python -m pytest tests/ --collect-only -q` counts collected tests without running any, and a collection count is not a pass count (skipped and xfailed tests are collected but never pass). Coverage is gated at a 90% floor in CI (`fail_under` in `pyproject.toml`) — treat 90% as the gate and the current `TOTAL` line as the number to keep near, not a fixed target |
 | `scripts/build.ps1` | Continuous build entrypoint: venv bootstrap, deps, tests, publishes status to the vault |
 | `.github/workflows/` | CI (on push/PR) + nightly validation pipeline |
@@ -46,6 +46,38 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 docker compose up --build
 ```
 
+### Quick Start — macOS / Linux
+
+The PowerShell block above is the continuous-build entrypoint on Windows; on
+macOS/Linux bootstrap the same `.venv` and drive the suite through `make`:
+
+```bash
+# Bootstrap + test (the vault Build Status regeneration is part of build.ps1)
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+make test   # or: make cov for the CI-equivalent run with the 90% coverage floor
+
+# Run the API + dashboard v0 (dashboard at http://127.0.0.1:8000/)
+.venv/bin/python -m uvicorn validsim.api.main:app --reload
+
+# CLI: validate a checkpoint (mock backend in MVP)
+.venv/bin/python -m validsim.cli run --task bin_picking --episodes 1000 --adversarial 50 --environment mock-scene
+
+# CLI: render a human-readable report for the latest run (markdown | html)
+.venv/bin/python -m validsim.cli report --latest --format markdown
+
+# CLI: delete a stored run (CLI parity for DELETE; --run-id or --latest, exits 2 if absent)
+.venv/bin/python -m validsim.cli delete --latest
+
+# CLI: async job queue — enqueue a job, list the queue, run a worker (mock backend)
+.venv/bin/python -m validsim.cli job enqueue --checkpoint ckpt-42 --task bin_picking --episodes 1000
+.venv/bin/python -m validsim.cli jobs
+.venv/bin/python -m validsim.cli worker --once
+
+# Containers (api + redis + postgres + CPU job worker)
+docker compose up --build
+```
+
 ### Validation store
 
 Local library and CLI runs use the in-memory store when `VALIDSIM_STORE` is
@@ -59,6 +91,10 @@ For durable local history, set one variable before the run and gate commands:
 $env:VALIDSIM_STORE = "sqlite"
 ```
 
+```bash
+export VALIDSIM_STORE="sqlite"
+```
+
 SQLite then creates `validsim.db` in the current directory; set
 `VALIDSIM_SQLITE_PATH` to choose another location. `VALIDSIM_STORE=postgres`
 uses the durable PostgreSQL store when `VALIDSIM_PG_URL` is configured. The
@@ -66,7 +102,8 @@ local `actions/validate` action already selects SQLite automatically.
 
 `validsim gate` refuses the memory backend and exits `2` rather than making a
 deploy decision from process-local data. For the one-line local fix, run
-`$env:VALIDSIM_STORE = "sqlite"` before the earlier `validsim run` and
+`$env:VALIDSIM_STORE = "sqlite"` (PowerShell) or `export VALIDSIM_STORE="sqlite"`
+(macOS/Linux) before the earlier `validsim run` and
 `validsim gate`; for CI, `actions/validate` sets the same option for you.
 
 ### API Hardening & Pagination
@@ -82,7 +119,7 @@ List endpoints are paginated with `limit` (1–500, default 100) and `offset`:
 - `GET /api/v1/validations?limit&offset` — newest-first summaries with `{"total", "limit", "offset", "items"}`.
 - `GET /api/v1/models?limit&offset` — model registry (one row per checkpoint, latest composite/decision).
 
-### Notification dispatch (configurable, not yet dispatched)
+### Notification dispatch (wired into the run pipeline)
 
 `validsim/notify/` implements two complete, tested channels — `WebhookDispatcher`
 (`notify/dispatcher.py`: Slack Block Kit or raw JSON, optional HMAC-SHA256 body
@@ -90,14 +127,17 @@ signing via `X-ValidSim-Signature`, severity routing, retry with exponential
 backoff) and `EmailNotifier` (`notify/email.py`: SMTP, multipart HTML+text
 scorecard bodies, header-injection guards).
 
-**Neither channel is dispatched by a validation run today.** The configuration
-surface exists and is documented below, but `run_and_score` — the one function
-the API, CLI and job worker all funnel through — does not import `validsim.notify`
-and never calls a dispatcher. There is also no `POST /api/v1/webhooks` route and
-no CLI flag. So setting any of the variables below configures the layer without
-activating it: nothing is sent, and no run is affected.
+**The webhook channel is wired into the run pipeline; the email channel is
+not.** `run_and_score` — the one function the API, CLI and job worker all
+funnel through — imports `validsim.notify.dispatcher` and calls
+`notify_run_completion(scorecard)` after a run is *newly* persisted. The
+retry/duplicate path re-reads the stored record and deliberately does not
+re-notify, so a run is notified at most once, and the dispatcher never raises,
+so a misconfigured webhook cannot fail a finished run. `EmailNotifier` still
+has **no production caller**. There is also no `POST /api/v1/webhooks` route
+and no CLI flag, so the environment surface below is the only activation path.
 
-Once dispatch is wired, the design is fail-closed on two independent switches,
+The design is fail-closed on two independent switches,
 and **both** must be set:
 
 | Variable | Meaning | Default |
@@ -211,7 +251,7 @@ drain the queue, and stream progress over SSE until the run is persisted.
 - [x] Week 1: repo, Docker, CI/CD pipeline
 - [x] Weeks 2–5 skeleton: episode runner (mock), randomization, evaluation, safety, regression, scorecard
 - [x] Weeks 4/6: scenario generator, API, CLI, SQLite persistent store, scorecard Markdown/HTML exports
-- [~] **Webhook dispatcher** (`notify/dispatcher.py` + `notify/config.py`) — implemented, tested and now *configurable* via `VALIDSIM_NOTIFY_ENABLED` + `VALIDSIM_WEBHOOK_URLS`, but **still not dispatched**: `run_and_score` does not import `validsim.notify`, so no run sends a scorecard. See [Notification dispatch](#notification-dispatch-configurable-not-yet-dispatched).
+- [x] **Webhook dispatcher** (`notify/dispatcher.py` + `notify/config.py`) — implemented, tested and now *dispatched*: `run_and_score` calls `notify_run_completion(scorecard)` after a run is newly persisted (exactly once per run — the retry path does not re-notify, and the dispatcher never raises). Opt-in via `VALIDSIM_NOTIFY_ENABLED` + `VALIDSIM_WEBHOOK_URLS`, dry-run unless `VALIDSIM_WEBHOOKS_LIVE=1`. See [Notification dispatch](#notification-dispatch-wired-into-the-run-pipeline).
 - [x] Week 6: **GitHub Actions plugin prototype** (`actions/validate`, `actions/scorecard`, `examples/robot-validation.yml`, `docs/github-actions.md`)
 - [~] **LLM adversarial scenario generator** (`scenarios/llm_generator.py` — OpenAI-compatible provider, strict schema validation, deterministic rule-based fallback, env-driven factory `create_scenario_generator()`). **Implemented and tested, but not reachable from a validation run**: `engine/pipeline.py:131` hardcodes `ScenarioGenerator(seed=seed).generate(...)`, so scenario generation is deterministic and rule-based on every shipped path (API, CLI, job worker). Setting `VALIDSIM_LLM_ENABLED` + `VALIDSIM_LLM_API_KEY` changes nothing until the pipeline routes through the factory.
 - [x] Week 5 upgrade: **PostgreSQL store** (`store/postgres.py` — JSONB + indexed columns, `VALIDSIM_STORE=postgres`)
@@ -223,7 +263,7 @@ drain the queue, and stream progress over SSE until the run is persisted.
 - [x] **API hardening** — env-driven API-key auth (`VALIDSIM_API_KEY` → `X-API-Key`) + configurable CORS (`VALIDSIM_CORS_ORIGINS`)
 - [x] **Paginated list endpoints** — `GET /api/v1/validations` and `GET /api/v1/models` with `limit`/`offset`
 - [x] **CLI `report` command** — `validsim report --latest --format markdown|html`; `run` gains `--environment` (scene profile)
-- [~] **Slack webhooks** — Block Kit payloads, optional HMAC-SHA256 signing (`X-ValidSim-Signature`), retry with exponential backoff, severity routing, plus an operator-facing config surface. **Not dispatched by any run** — the dispatcher is dry-run by default and nothing in the run path calls it (see [Notification dispatch](#notification-dispatch-configurable-not-yet-dispatched)).
+- [x] **Slack webhooks** — Block Kit payloads, optional HMAC-SHA256 signing (`X-ValidSim-Signature`), retry with exponential backoff, severity routing, plus an operator-facing config surface. Dispatched by `run_and_score` on run completion (opt-in, dry-run by default; the email channel still has no production caller) — see [Notification dispatch](#notification-dispatch-wired-into-the-run-pipeline).
 - [~] **LLM scenario category-coverage guarantee** — missing adversarial categories are auto-topped-up from the deterministic fallback. Implemented on the `LLMScenarioGenerator` path, which no run takes; the rule-based generator guarantees full category coverage by construction (it cycles categories by index), so any `n ≥ 12` is already complete.
 - [x] **Postgres store full-detail parity** — `VALIDSIM_STORE=postgres` now matches the SQLite store's full-detail output (drop-in replacement)
 - [x] **Multi-stage Dockerfile + `requirements-dev.txt`** — slim non-root runtime image; dev deps (pytest, ruff, pytest-cov) split out of the runtime image
@@ -233,7 +273,7 @@ drain the queue, and stream progress over SSE until the run is persisted.
 - [x] **Dashboard Job Queue panel** — SPA polls `/api/v1/jobs` every 3s with an inline enqueue form
 - [x] **Scenario difficulty bias + `coverage()`** — `ScenarioGenerator(difficulty_bias=…)` eases/hardens sampled difficulty without perturbing the RNG stream; `coverage()` returns per-category counts for a batch
 - [x] **Benchmark `compare_scorecards`** — `engine/benchmark.py` head-to-head comparison of two scorecards (composite/success/safety/robustness deltas + winners, overall verdict by composite), exported from the `validsim.engine` facade
-- [~] **Email notification channel** — `notify/email.py` `EmailNotifier` (SMTP, dry-run by default, multipart HTML+text scorecard bodies). Implemented and tested, but like the webhook dispatcher it has **no production caller**; live delivery additionally requires `EmailNotifier(dry_run=False)` plus `VALIDSIM_SMTP_*`, which no shipped surface sets.
+- [~] **Email notification channel** — `notify/email.py` `EmailNotifier` (SMTP, dry-run by default, multipart HTML+text scorecard bodies). Implemented and tested, but it still has **no production caller**; live delivery additionally requires `EmailNotifier(dry_run=False)` plus `VALIDSIM_SMTP_*`, which no shipped surface sets.
 - [x] **Coverage gate in CI** — the suite runs under `pytest-cov` on every push/PR, publishes `coverage.xml`, and fails the build below 90% line/branch coverage. (The previously quoted "baseline ≈95%" was an undated snapshot; the enforced number is the 90% floor — read the current `TOTAL` line for the real figure.)
 - [x] **`.env.example` + Docker `worker` service** — committed environment template; `docker-compose.yml` adds a CPU job worker that drains the Redis queue into the shared store
 - [x] **CLI `delete` command** — `validsim delete --run-id … | --latest` removes a stored run from the configured store (exit `0` on success, `2` when absent), giving the destructive `DELETE` endpoint full CLI parity
