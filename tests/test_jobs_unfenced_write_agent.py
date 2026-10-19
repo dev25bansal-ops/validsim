@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import pytest
 
@@ -51,6 +53,44 @@ def _spec(run_id: str = "vrun-unfenced-1") -> JobSpec:
 def _raw(server: Any) -> Any:
     """A bare client on the shared fake server -- another process."""
     return fakeredis.FakeStrictRedis(server=server, decode_responses=True)
+
+
+@contextmanager
+def _captured() -> Iterator[Callable[[], list[logging.LogRecord]]]:
+    """Capture ``validsim.jobs`` log records.
+
+    ``validsim`` sets ``propagate = False``, so pytest's ``caplog`` (attached to
+    the root logger) can never see these records. Same reasoning as
+    ``_captured_records`` in ``test_jobs_worker.py`` and ``_captured`` in
+    ``test_jobs_claim_deadletter_agent.py``; mirrored here so all three files
+    observe the emission identically.
+
+    Capturing at ``validsim.jobs`` is faithful: a handler on an ancestor logger
+    still sees records logged on the descendant ``validsim.jobs.queue`` through
+    ordinary propagation, and ``propagate = False`` only stops propagation *past*
+    ``validsim``. Nothing about the production code changes -- the records
+    yielded here are the very ones an operator's JSON handler receives.
+    """
+    records: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger("validsim.jobs")
+    root = logging.getLogger("validsim")
+    previous_root_level = root.level
+    previous_logger_level = logger.level
+    handler = _Collector(level=logging.DEBUG)
+    root.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    try:
+        yield lambda: list(records)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_logger_level)
+        root.setLevel(previous_root_level)
 
 
 class _RacingClient:
@@ -203,9 +243,7 @@ def test_unfenced_write_gives_up_loudly_when_outraced_every_time(server: Any) ->
     assert final.error is None, "the losing writer's error was recorded"
 
 
-def test_dead_transition_reports_once_after_a_retry(
-    server: Any, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_dead_transition_reports_once_after_a_retry(server: Any) -> None:
     """The dead-letter signal still fires, and still fires exactly once."""
     owner = _queue(server, _raw(server))
     job_id = owner.enqueue(_spec()).job_id
@@ -219,9 +257,13 @@ def test_dead_transition_reports_once_after_a_retry(
         _write(client, owner, dataclasses.replace(record, attempt=record.attempt + 1))
 
     racing = _queue(server, _RacingClient(_raw(server), bump_once))
-    with caplog.at_level("WARNING"):
+    with _captured() as captured:
         updated = racing.update_status(job_id, JobStatus.DEAD, error="budget gone")
 
     assert updated is not None and updated.status is JobStatus.DEAD
-    announced = [r for r in caplog.records if "dead-lettered" in r.getMessage()]
-    assert len(announced) == 1, caplog.messages
+    announced = [r for r in captured() if "dead-lettered" in r.getMessage()]
+    assert len(announced) == 1, [r.getMessage() for r in captured()]
+    # The signal must be a WARNING an alerting rule can match on, and must
+    # carry the structured flag an aggregator scrapes without parsing prose.
+    assert announced[0].levelno >= logging.WARNING
+    assert getattr(announced[0], "validsim_job_dead_lettered", False) is True
