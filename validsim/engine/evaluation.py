@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -52,6 +53,18 @@ def evaluate(episodes: Sequence[EpisodeResult]) -> EvaluationResult:
 
     Returns:
         An :class:`EvaluationResult`; all-zero counts for an empty sequence.
+
+    ``duration_s`` readings that are not finite (``NaN``/``inf`` from a
+    backend that failed to measure) are excluded from the mean rather than
+    averaged in: one non-finite value makes ``statistics.fmean`` return
+    ``NaN``, which then persists as a ``NaN`` token in the store's
+    ``evaluation_json`` (invalid JSON), renders as ``null`` over the API, and
+    poisons every regression comparison this run is ever baselined against.
+    A non-finite duration is a failed *reading*, not a measurement -- the
+    same rule :func:`validsim.engine.safety.compute_safety` applies to force
+    and distance. If no episode reported a usable duration the mean is
+    ``0.0``, the documented "no duration recorded" shape that
+    ``validsim.engine.regression._duration_item`` already special-cases.
     """
     total = len(episodes)
     if total == 0:
@@ -71,6 +84,7 @@ def evaluate(episodes: Sequence[EpisodeResult]) -> EvaluationResult:
     taxonomy: Counter[str] = Counter(
         e.failure_mode for e in episodes if not e.success and e.failure_mode
     )
+    finite_durations = [e.duration_s for e in episodes if math.isfinite(e.duration_s)]
 
     return EvaluationResult(
         total_episodes=total,
@@ -80,5 +94,7 @@ def evaluate(episodes: Sequence[EpisodeResult]) -> EvaluationResult:
             task: sum(vals) / len(vals) for task, vals in sorted(by_task.items())
         },
         failure_taxonomy=dict(taxonomy.most_common()),
-        mean_duration_s=statistics.fmean(e.duration_s for e in episodes),
+        mean_duration_s=(
+            statistics.fmean(finite_durations) if finite_durations else 0.0
+        ),
     )

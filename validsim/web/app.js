@@ -905,11 +905,18 @@
 
   // Colour is never the sole signal: every badge pairs a distinct hue with an
   // inline icon and the literal status word.
+  // Every JobStatus enum value needs an entry here: `jobStatusBadge` falls
+  // back to "queued" for unknown keys, so a missing status (e.g. `dead`, the
+  // dead-letter terminal state) would render as *waiting to run* — telling an
+  // operator a poisoned job is pending when it will never run again. The
+  // contract test in tests/test_web_presentation_agent.py pins this map
+  // against the enum.
   const JOB_STATUS = {
     queued: { cls: "queued", icon: "queued" },
     running: { cls: "running", icon: "running" },
     done: { cls: "done", icon: "approve" },
     failed: { cls: "failed", icon: "block" },
+    dead: { cls: "dead", icon: "block" },
   };
 
   function jobStatusBadge(status) {

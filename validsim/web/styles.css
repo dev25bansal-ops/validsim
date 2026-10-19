@@ -794,6 +794,10 @@ main {
 .badge-sm--running svg { animation: vs-spin 1.2s linear infinite; transform-origin: center; }
 .badge-sm--done { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-line); }
 .badge-sm--failed { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-line); }
+/* Dead-letter: retries exhausted, the job will never run again. Same bad
+   palette as `failed` (both are terminal failures) but its own class so the
+   literal "dead" word never collapses into the failed style. */
+.badge-sm--dead { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-line); }
 
 /* Job Queue panel ----------------------------------------------------------- */
 .enqueue-form {
