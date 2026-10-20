@@ -86,6 +86,17 @@
     taxonomyEmpty: $("taxonomy-empty"),
     historyBody: $("history-tbody"),
     historyStats: $("history-stats"),
+    comparisonForm: $("comparison-form"),
+    comparisonBtn: $("comparison-btn"),
+    comparisonBtnLabel: $("comparison-btn-label"),
+    comparisonBaseline: $("comparison-baseline"),
+    comparisonStatus: $("comparison-status"),
+    comparisonMeta: $("comparison-meta"),
+    comparisonEmpty: $("comparison-empty"),
+    comparisonTableWrap: $("comparison-table-wrap"),
+    comparisonBody: $("comparison-tbody"),
+    comparisonCaption: $("comparison-caption"),
+    comparisonNote: $("comparison-note"),
     trendsMeta: $("trends-meta"),
     trendLatest: $("t-latest"),
     trendDelta: $("t-delta"),
@@ -448,6 +459,10 @@
     els.runMeta.textContent = view.meta;
 
     currentRunId = V.text(card && card.run_id);
+    // A comparison is only meaningful against the run it was requested for.
+    // Loading a different run invalidates the table on screen, so it is
+    // cleared here rather than left to be misread as the new run's result.
+    resetComparisonPanel();
     renderTaxonomy(view.taxonomyRows);
     highlightHistoryRow(currentRunId);
     return view;
@@ -692,6 +707,206 @@
   function renderTrendsError(message) {
     renderTrendsEmpty("Trends unavailable: " + message);
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Model comparison                                                    */
+  /* ------------------------------------------------------------------ */
+
+  /* Ad-hoc regression comparison between the loaded run and a baseline run
+   * the operator names (POST /api/v1/validations/{run_id}/compare).
+   *
+   * The decision logic lives in view-core.js so it can be asserted without a
+   * browser; this file only wires it to the DOM.
+   *
+   * Three states are rendered deliberately and distinctly:
+   *   - empty  : no run loaded, or the user has not chosen a baseline yet;
+   *   - error  : the request failed (unknown baseline id, no API key, ...);
+   *   - loaded : the comparison table with its severity column.
+   * Conflating any two of them would make a failed comparison look like a
+   * clean one, which is the one mistake this panel must not make. */
+
+  const COMPARISON_SEVERITY_CLASS = {
+    info: "cmp-sev--info",
+    warning: "cmp-sev--warning",
+    critical: "cmp-sev--critical",
+  };
+
+  const COMPARISON_SEVERITY_WORD = {
+    info: "no change",
+    warning: "warning",
+    critical: "critical",
+  };
+
+  let comparisonInFlight = false;
+
+  function setComparisonStatus(message, kind) {
+    if (!els.comparisonStatus) return;
+    els.comparisonStatus.textContent = message;
+    els.comparisonStatus.className = "run-status comparison-status" + (kind ? " is-" + kind : "");
+    els.comparisonStatus.hidden = !message;
+  }
+
+  function setComparisonBusy(isBusy) {
+    if (!els.comparisonBtn) return;
+    els.comparisonBtn.classList.toggle("is-loading", isBusy);
+    els.comparisonBtn.setAttribute("aria-busy", String(isBusy));
+    if (els.comparisonBtnLabel) {
+      els.comparisonBtnLabel.textContent = isBusy ? "Comparing\u2026" : "Compare";
+    }
+  }
+
+  /* Put the panel back into its empty state: no table, a one-line
+   * explanation of what to do next. Used on load, on run change and on a
+   * failed comparison — a stale table left on screen after an error would
+   * misattribute the previous result to the new baseline. */
+  function renderComparisonEmpty(message) {
+    if (els.comparisonBody) els.comparisonBody.textContent = "";
+    if (els.comparisonTableWrap) els.comparisonTableWrap.hidden = true;
+    if (els.comparisonEmpty) {
+      els.comparisonEmpty.hidden = false;
+      els.comparisonEmpty.textContent = message;
+    }
+  }
+
+  /* Clear the comparison panel because the run it described changed.
+   * Called from renderScorecard, which runs before this function is
+   * declared in source order — a function declaration is hoisted to the top
+   * of its scope, so the call is safe. */
+  function resetComparisonPanel() {
+    renderComparisonEmpty("Load a run and pick a baseline to see a metric-by-metric comparison.");
+    setComparisonStatus("", "");
+    if (els.comparisonMeta) {
+      els.comparisonMeta.textContent = "Compare the loaded run against a baseline run";
+    }
+  }
+
+  function renderComparisonError(message) {
+    renderComparisonEmpty("Comparison failed: " + message);
+    if (els.comparisonMeta) els.comparisonMeta.textContent = "Comparison unavailable";
+  }
+
+  /* Render one comparison row.
+   *
+   * All cells are written with textContent: a run id and a metric name come
+   * from the API and from operator input, so they must render as characters
+   * and never become markup. */
+  function renderComparisonRow(item) {
+    const tr = document.createElement("tr");
+    if (item.significant && item.severity !== "info") {
+      // The severity class lets the row's left rule match the badge colour.
+      tr.className = "cmp-row--significant cmp-row--" + item.severity;
+    }
+
+    const metric = document.createElement("td");
+    metric.textContent = item.label;
+    tr.appendChild(metric);
+
+    const before = document.createElement("td");
+    before.className = "num";
+    before.textContent = item.before;
+    tr.appendChild(before);
+
+    const after = document.createElement("td");
+    after.className = "num";
+    after.textContent = item.after;
+    tr.appendChild(after);
+
+    const delta = document.createElement("td");
+    delta.className = "num";
+    delta.textContent = item.deltaText;
+    tr.appendChild(delta);
+
+    const p = document.createElement("td");
+    p.className = "num";
+    p.textContent = item.pText;
+    tr.appendChild(p);
+
+    const severity = document.createElement("td");
+    const word = COMPARISON_SEVERITY_WORD[item.severity] || item.severity;
+    const badge = document.createElement("span");
+    badge.className = "cmp-sev " + (COMPARISON_SEVERITY_CLASS[item.severity] || "cmp-sev--info");
+    // The word carries the meaning; the colour only reinforces it, so the
+    // table stays readable without colour perception (WCAG 1.4.1).
+    badge.textContent = word;
+    severity.appendChild(badge);
+    tr.appendChild(severity);
+
+    return tr;
+  }
+
+  function renderComparison(payload) {
+    const view = V.comparisonView(payload);
+    if (els.comparisonBody) els.comparisonBody.textContent = "";
+
+    if (!view.hasItems) {
+      renderComparisonEmpty("No comparable metrics were returned for this pair of runs.");
+      if (els.comparisonMeta) els.comparisonMeta.textContent = "No comparable metrics";
+      return;
+    }
+
+    for (const item of view.items) {
+      els.comparisonBody.appendChild(renderComparisonRow(item));
+    }
+
+    if (els.comparisonEmpty) els.comparisonEmpty.hidden = true;
+    if (els.comparisonTableWrap) els.comparisonTableWrap.hidden = false;
+
+    const summary = V.comparisonSummarySentence(view);
+    if (els.comparisonMeta) els.comparisonMeta.textContent = summary;
+    // The caption is the table's accessible name; it names both runs so the
+    // table is intelligible when read out of context.
+    if (els.comparisonCaption) {
+      els.comparisonCaption.textContent =
+        "Metric comparison between baseline run " + view.baselineId +
+        " and run " + view.runId + ". " + summary;
+    }
+    if (els.comparisonNote) {
+      els.comparisonNote.textContent =
+        "Delta is the run value minus the baseline value. p-value is the " +
+        "significance estimate from the engine's permutation test; it is " +
+        "shown as n/a for metrics compared descriptively.";
+    }
+  }
+
+  async function runComparison(baselineId) {
+    if (!currentRunId) {
+      setComparisonStatus("Load a run before comparing.", "error");
+      renderComparisonEmpty("Load a run and pick a baseline to see a metric-by-metric comparison.");
+      return;
+    }
+    if (comparisonInFlight) return;
+    comparisonInFlight = true;
+    setComparisonBusy(true);
+    setComparisonStatus("Comparing run " + currentRunId + " against " + baselineId + " \u2026", "busy");
+    try {
+      const payload = await fetchJSON(
+        "/api/v1/validations/" + encodeURIComponent(currentRunId) + "/compare",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ baseline_id: baselineId }),
+        }
+      );
+      renderComparison(payload);
+      setComparisonStatus(V.comparisonSummarySentence(V.comparisonView(payload)), "ok");
+    } catch (err) {
+      if (err instanceof AuthRequired) { showAuthRequired(); return; }
+      renderComparisonError(err.message);
+      setComparisonStatus("Comparison failed: " + err.message, "error");
+    } finally {
+      comparisonInFlight = false;
+      setComparisonBusy(false);
+    }
+  }
+
+  els.comparisonForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (comparisonInFlight) return;
+    if (!els.comparisonForm.reportValidity()) return;
+    const baselineId = els.comparisonBaseline.value.trim();
+    if (!baselineId) return;
+    await runComparison(baselineId);
+  });
 
   function decisionBadge(decision) {
     const safe = V.safeDecision(decision);

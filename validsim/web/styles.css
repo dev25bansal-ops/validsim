@@ -46,6 +46,8 @@
   --bad-bg: rgba(248, 113, 113, 0.12);
   --bad-line: rgba(248, 113, 113, 0.45);
   --warn: #FBBF24;         /* 11.2:1 on --bg-panel (AAA) */
+  --warn-bg: rgba(251, 191, 36, 0.12);
+  --warn-line: rgba(251, 191, 36, 0.45);
   /* Contrast-safe blue for small text sitting on tinted surfaces. */
   --info-text: #60A5FA;    /*  7.4:1 on --bg-panel ·  6.4:1 on the running tint */
   --info-bg: rgba(59, 130, 246, 0.12);
@@ -132,6 +134,8 @@ html[data-theme="light"] {
   --bad-bg: rgba(185, 28, 28, 0.10);
   --bad-line: rgba(185, 28, 28, 0.40);
   --warn: #B45309;
+  --warn-bg: rgba(180, 83, 9, 0.10);
+  --warn-line: rgba(180, 83, 9, 0.40);
   --info-text: #1D4ED8;
   --info-bg: rgba(29, 78, 216, 0.10);
   --info-line: rgba(29, 78, 216, 0.45);
@@ -798,6 +802,50 @@ main {
    palette as `failed` (both are terminal failures) but its own class so the
    literal "dead" word never collapses into the failed style. */
 .badge-sm--dead { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-line); }
+
+/* Model comparison panel ---------------------------------------------------- */
+.comparison-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-md);
+  align-items: end;
+  margin-bottom: var(--space-lg);
+}
+@media (min-width: 768px) {
+  .comparison-form { grid-template-columns: minmax(220px, 1fr) auto; }
+}
+.comparison-status { margin-bottom: var(--space-lg); }
+
+/* Severity badge in the comparison table.
+   Each variant carries a literal word ("no change" / "warning" / "critical"),
+   so the severity is never signalled by hue alone (WCAG 1.4.1). */
+.cmp-sev {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-code);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cmp-sev--info { color: var(--text-mid); background: var(--tint-neutral); }
+.cmp-sev--warning { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-line); }
+.cmp-sev--critical { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-line); }
+
+/* A significant regression is marked by a left rule on the row, so the
+   emphasis survives a screen reader (which reads the severity word) and a
+   greyscale print. */
+.cmp-row--significant td:first-child {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+.cmp-row--significant.cmp-row--warning td:first-child {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.cmp-row--significant.cmp-row--critical td:first-child {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
 
 /* Job Queue panel ----------------------------------------------------------- */
 .enqueue-form {

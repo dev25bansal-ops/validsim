@@ -148,6 +148,26 @@ class _LoadedViewCore:
         return call("signedPoints", value)
 
     @staticmethod
+    def comparison_view(payload: Any) -> dict[str, Any]:
+        return call("comparisonView", payload)
+
+    @staticmethod
+    def normalise_comparison_item(raw: Any) -> dict[str, Any]:
+        return call("normaliseComparisonItem", raw)
+
+    @staticmethod
+    def comparison_summary_sentence(view: Any) -> str:
+        return call("comparisonSummarySentence", view)
+
+    @staticmethod
+    def comparison_format_p_value(p: Any) -> str:
+        return call("comparisonFormatPValue", p)
+
+    @staticmethod
+    def comparison_metric_label(metric: Any) -> str:
+        return call("comparisonMetricLabel", metric)
+
+    @staticmethod
     def raw(script: str) -> Any:
         """Escape hatch for an assertion the named methods do not cover."""
         return run_view_core(script)

@@ -293,6 +293,56 @@
       </div>
     </section>
 
+    <section class="panel comparison-panel" aria-labelledby="comparison-title">
+      <div class="panel-head">
+        <h2 id="comparison-title">Model Comparison</h2>
+        <p id="comparison-meta" class="panel-meta">Compare the loaded run against a baseline run</p>
+      </div>
+
+      <form id="comparison-form" class="comparison-form" aria-labelledby="comparison-form-title" autocomplete="off" novalidate>
+        <h2 id="comparison-form-title" class="is-visually-hidden">Compare the loaded run against a baseline run</h2>
+        <div class="field">
+          <label for="comparison-baseline">Baseline run id</label>
+          <input class="input" id="comparison-baseline" name="baseline_id" type="text"
+                 placeholder="vrun-1a2b3c4d" required maxlength="256"
+                 pattern="vrun-[0-9a-fA-F]{8}" aria-describedby="comparison-baseline-hint">
+          <p class="field-hint" id="comparison-baseline-hint">The run id of the baseline to compare against, e.g. vrun-1a2b3c4d</p>
+        </div>
+        <button class="btn-run" id="comparison-btn" type="submit" aria-busy="false">
+          <svg class="btn-spinner" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="42 16"/>
+          </svg>
+          <svg class="btn-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h10M4 17h6"/>
+          </svg>
+          <span class="btn-label" id="comparison-btn-label">Compare</span>
+        </button>
+      </form>
+
+      <p id="comparison-status" class="run-status comparison-status" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+
+      <p id="comparison-empty" class="empty-note">Load a run and pick a baseline to see a metric-by-metric comparison.</p>
+
+      <!-- Scrollable region: focusable so keyboard users can scroll it (WCAG 2.1.1). -->
+      <div class="table-scroll" id="comparison-table-wrap" tabindex="0" role="region" aria-labelledby="comparison-title" hidden>
+        <table class="data-table comparison-table" aria-describedby="comparison-note">
+          <caption id="comparison-caption" class="is-visually-hidden">Metric comparison between the baseline run and the loaded run</caption>
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col" class="num">Baseline</th>
+              <th scope="col" class="num">Run</th>
+              <th scope="col" class="num">Delta</th>
+              <th scope="col" class="num">p-value</th>
+              <th scope="col">Severity</th>
+            </tr>
+          </thead>
+          <tbody id="comparison-tbody"></tbody>
+        </table>
+      </div>
+      <p id="comparison-note" class="is-visually-hidden"></p>
+    </section>
+
     <section class="panel taxonomy-panel" aria-labelledby="taxonomy-title">
       <div class="panel-head">
         <h2 id="taxonomy-title">Failure Taxonomy</h2>

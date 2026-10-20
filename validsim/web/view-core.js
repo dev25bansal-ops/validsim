@@ -225,6 +225,171 @@
   /* Scorecard view model                                              */
   /* ---------------------------------------------------------------- */
 
+  /* ---------------------------------------------------------------- */
+  /* Model comparison view model                                       */
+  /* ---------------------------------------------------------------- */
+
+  /* The regression engine classifies each metric comparison with one of
+   * these three severities (see validsim/engine/regression.py). The rank
+   * lets us fold a list of items into a single "worst severity" without
+   * string comparisons, so the dashboard never claims "warning" when the
+   * engine actually said "critical".
+   *
+   * The engine's vocabulary is "info" / "warning" / "critical". The
+   * notification layer uses a different word for the middle band
+   * ("warn", see validsim/notify/dispatcher.py); both are accepted here
+   * and normalised to the engine's spelling, so a payload from either
+   * producer ranks identically. */
+  var COMPARISON_SEVERITY_RANK = { info: 0, warning: 1, warn: 1, critical: 2 };
+
+  /* Canonical severity spelling used everywhere the dashboard renders one. */
+  var COMPARISON_SEVERITY_CANONICAL = { info: "info", warning: "warning", warn: "warning", critical: "critical" };
+
+  /* Human labels for the metrics the engine knows how to compare. An
+   * unknown metric falls back to its raw key rather than being dropped —
+   * the operator still needs to see which metric moved. */
+  var COMPARISON_METRIC_LABELS = {
+    success_rate: "Success rate",
+    mean_duration_s: "Mean duration",
+    composite_score: "Composite score",
+  };
+
+  function comparisonMetricLabel(metric) {
+    if (typeof metric === "string" && COMPARISON_METRIC_LABELS[metric]) {
+      return COMPARISON_METRIC_LABELS[metric];
+    }
+    return typeof metric === "string" && metric ? metric : "metric";
+  }
+
+  /* Render a metric's absolute value at the precision the engine stores it
+   * at: success_rate is a 0-1 fraction (4dp in the store), mean_duration_s
+   * is seconds, composite_score is a 0-100 score. */
+  function comparisonFormatValue(metric, value) {
+    var v = num(value);
+    if (v === null) return UNKNOWN_TEXT;
+    if (metric === "success_rate") return pct(v);
+    if (metric === "mean_duration_s") return v.toFixed(3) + " s";
+    if (metric === "composite_score") return score2(v);
+    return v.toFixed(2);
+  }
+
+  /* Signed delta between baseline and run. A positive success-rate delta is
+   * an improvement; the same sign convention applies to duration and score,
+   * where positive means the run was slower / scored higher. The regression
+   * engine's own severity call is what decides whether that is *bad*, so the
+   * dashboard never second-guesses the sign itself. */
+  function comparisonFormatDelta(metric, delta) {
+    var v = num(delta);
+    if (v === null) return EM_DASH;
+    if (metric === "success_rate") return signedPoints(v);
+    var sign = v > 0 ? "+" : "";
+    if (metric === "mean_duration_s") return sign + v.toFixed(3) + " s";
+    return sign + v.toFixed(2);
+  }
+
+  /* p-values below the conventional 0.001 threshold are reported as an
+   * inequality rather than "0.000", because "0.000" reads like an exact
+   * zero and would overstate what the test established. */
+  function comparisonFormatPValue(p) {
+    var v = num(p);
+    if (v === null) return "n/a";
+    if (v < 0.001) return "<0.001";
+    return v.toFixed(3);
+  }
+
+  /* Normalise one comparison item into the exact strings the table renders.
+   * Every field is coerced through the helpers above so a malformed API
+   * response degrades to "unavailable" instead of "NaN" on screen. */
+  function normaliseComparisonItem(raw) {
+    var item = raw && typeof raw === "object" ? raw : {};
+    var metric = typeof item.metric === "string" && item.metric ? item.metric : "metric";
+    var rawSeverity = item.severity;
+    var severity = COMPARISON_SEVERITY_RANK[rawSeverity] !== undefined
+      ? COMPARISON_SEVERITY_CANONICAL[rawSeverity]
+      : "info";
+    return {
+      metric: metric,
+      label: comparisonMetricLabel(metric),
+      before: comparisonFormatValue(metric, item.before),
+      after: comparisonFormatValue(metric, item.after),
+      deltaText: comparisonFormatDelta(metric, item.delta),
+      pText: comparisonFormatPValue(item.p_value),
+      significant: item.significant === true,
+      severity: severity,
+      severityRank: COMPARISON_SEVERITY_RANK[rawSeverity] !== undefined
+        ? COMPARISON_SEVERITY_RANK[rawSeverity]
+        : 0,
+    };
+  }
+
+  /* Build the whole comparison view model from an API response. Tolerates a
+   * missing/!Array items field so a partial response still renders an
+   * empty table rather than throwing inside the renderer. */
+  function comparisonView(raw) {
+    var source = raw && typeof raw === "object" ? raw : {};
+    var rawItems = Array.isArray(source.items) ? source.items : [];
+    var items = rawItems.map(normaliseComparisonItem);
+    var worst = "info";
+    var worstRank = 0;
+    var significantCount = 0;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      /* The engine counts a *regression* as an item that is both
+       * statistically significant and worse than "info"; a significant
+       * "info" item (e.g. an improvement) is not a regression. Mirror
+       * that rule so the count on screen matches the server's. */
+      if (it.significant && it.severity !== "info") significantCount += 1;
+      if (it.severityRank > worstRank) {
+        worstRank = it.severityRank;
+        worst = it.severity;
+      }
+    }
+    /* The server may declare a worst severity that outranks any single
+     * item's (it can aggregate context the item list does not carry).
+     * Honour it when it does. */
+    var declared = source.worst_severity;
+    if (
+      COMPARISON_SEVERITY_RANK[declared] !== undefined
+      && COMPARISON_SEVERITY_RANK[declared] > worstRank
+    ) {
+      worst = COMPARISON_SEVERITY_CANONICAL[declared];
+    }
+    /* Prefer the server's own count when present: it is authoritative and
+     * counts regressions, not merely significant items. */
+    var serverCount = num(source.significant_count);
+    if (serverCount !== null) significantCount = serverCount;
+    return {
+      runId: text(source.run_id, "unknown run"),
+      baselineId: text(source.baseline_id, "unknown baseline"),
+      items: items,
+      significantCount: significantCount,
+      worstSeverity: worst,
+      hasItems: items.length > 0,
+    };
+  }
+
+  /* One-sentence summary of a comparison, for the panel's status line. */
+  function comparisonSummarySentence(view) {
+    if (!view || typeof view !== "object") return "Comparison unavailable.";
+    if (!view.hasItems) return "No comparable metrics were returned for this pair of runs.";
+    /* Run ids are long opaque strings; the tail is the part an operator
+     * can correlate with the run list. */
+    function shortId(id) {
+      var s = text(id, "unknown");
+      return s.length > 12 ? s.slice(-8) : s;
+    }
+    var a = shortId(view.baselineId);
+    var b = shortId(view.runId);
+    if (!view.significantCount) {
+      return "No significant regressions between " + a + " and " + b
+        + "; worst severity " + view.worstSeverity + ".";
+    }
+    var noun = view.significantCount === 1 ? "regression" : "regressions";
+    return view.significantCount + " statistically significant " + noun
+      + " between " + a + " and " + b
+      + "; worst severity " + view.worstSeverity + ".";
+  }
+
   /* Whitelist the decision. The API's own type is Literal["APPROVE","BLOCK"];
    * anything else must not be able to inject markup into the verdict banner,
    * so an unrecognised value degrades to PENDING (neutral, and visibly not a
@@ -480,6 +645,11 @@
     decisionWord: decisionWord,
     scorecardView: scorecardView,
     runSummarySentence: runSummarySentence,
+    comparisonView: comparisonView,
+    normaliseComparisonItem: normaliseComparisonItem,
+    comparisonSummarySentence: comparisonSummarySentence,
+    comparisonFormatPValue: comparisonFormatPValue,
+    comparisonMetricLabel: comparisonMetricLabel,
     normaliseHistory: normaliseHistory,
     summaryText: summaryText,
     computeTrends: computeTrends,
