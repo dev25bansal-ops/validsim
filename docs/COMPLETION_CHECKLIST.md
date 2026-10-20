@@ -33,11 +33,11 @@ Last updated **2026-10-20**.
 
 | # | Item | Status | Evidence |
 |---|------|--------|----------|
-| C1 | Feature branch committed locally | ✅ | HEAD `a2511bcb…` on `feature/website-simulation-completion` |
-| C2 | Feature branch on authorized remote | ✅ | `git ls-remote dev25bansal-ops/validsim` → `a2511bc… feature/website-simulation-completion` (== local HEAD) |
+| C1 | Feature branch committed locally | ✅ | Docs commit `7f23566…` on `feature/website-simulation-completion` (verify live via AGENT_PROGRESS §6) |
+| C2 | Feature branch on authorized remote | ✅ | `git ls-remote dev25bansal-ops/validsim` → feature branch == local HEAD (fast-forward `a2511bc → 7f23566` this session) |
 | C3 | `main` untouched; no force-push; no auto-PR | ✅ | Remote `main` = `2ee374c…` (unchanged); no force-push issued; no PR auto-created |
-| C4 | Remote contains the published commit | ✅ | Remote feature-branch SHA identical to local HEAD `a2511bc…` |
-| C5 | New-session commits also pushed | 🟡 | Conditional: applies only if this session adds commits. See D3. |
+| C4 | Remote contains the published commit | ✅ | Remote feature-branch SHA identical to local HEAD (verified post-push this session) |
+| C5 | New-session commits also pushed | ✅ | This session's docs commit(s) pushed & verified; remote feature branch == local HEAD |
 
 ## D. Reporting (required)
 
