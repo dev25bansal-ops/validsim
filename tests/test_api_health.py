@@ -83,11 +83,20 @@ class TestHealthPayload:
         # The notify section must be operator-visible but secret-free: only
         # counts/flags, never webhook URLs or secrets (see NotifyConfig.summary).
         notify = body["notify"]
-        assert set(notify) == {"enabled", "hook_count", "live", "hooks"}
+        assert set(notify) == {"enabled", "hook_count", "live", "hooks", "email"}
         assert notify["enabled"] is False
         assert notify["hook_count"] == 0
         assert notify["live"] == 0
         assert notify["hooks"] == []
+
+        # The email channel reports a count, never the addresses themselves:
+        # a recipient list is personally identifying.
+        email = notify["email"]
+        assert set(email) == {"configured", "recipient_count", "live", "min_severity"}
+        assert email["configured"] is False
+        assert email["recipient_count"] == 0
+        assert email["live"] == 0
+        assert email["min_severity"] is None
 
 
 class TestAuthEnabled:

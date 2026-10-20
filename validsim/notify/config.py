@@ -63,8 +63,10 @@ from validsim.notify.dispatcher import (
     WebhookDispatcher,
     _LIVE_ENV,
 )
+from validsim.notify.email import _EMAIL_RE
 
 __all__ = [
+    "EmailSpec",
     "HookSpec",
     "NotifyConfig",
     "notify_config_from_env",
@@ -80,6 +82,14 @@ ENV_SECRETS = "VALIDSIM_WEBHOOK_SECRETS"
 ENV_FORMATS = "VALIDSIM_WEBHOOK_FORMATS"
 #: Comma-separated per-hook severity thresholds, paired with :data:`ENV_URLS`.
 ENV_MIN_SEVERITY = "VALIDSIM_WEBHOOK_MIN_SEVERITY"
+
+#: Comma-separated email recipients for the SMTP channel.
+ENV_EMAIL_TO = "VALIDSIM_SMTP_TO"
+#: Severity threshold for the SMTP channel.
+ENV_EMAIL_MIN_SEVERITY = "VALIDSIM_SMTP_MIN_SEVERITY"
+#: When ``"1"``, the SMTP channel performs real delivery. Otherwise it is a
+#: dry run that records what *would* have been sent.
+ENV_EMAIL_LIVE = "VALIDSIM_SMTP_LIVE"
 
 #: Values accepted as "on" for :data:`ENV_ENABLED`. Anything else is off.
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -122,16 +132,35 @@ class HookSpec:
 
 
 @dataclass(frozen=True)
+class EmailSpec:
+    """One configured SMTP destination.
+
+    Attributes:
+        to: Recipient addresses, in declaration order.
+        min_severity: Lowest severity this channel wants (``info`` receives all).
+        live: Whether this channel performs real SMTP delivery. When ``False``
+            the delivery is recorded without any socket I/O.
+    """
+
+    to: tuple[str, ...]
+    min_severity: Severity = "info"
+    live: bool = False
+
+
+@dataclass(frozen=True)
 class NotifyConfig:
     """The effective notification configuration, resolved from the environment.
 
     Attributes:
         enabled: Whether run-completion dispatch may fire at all.
         hooks: Configured destinations, in declaration order.
+        email: The configured SMTP channel, or ``None`` when no recipients are
+            configured.
     """
 
     enabled: bool = False
     hooks: tuple[HookSpec, ...] = ()
+    email: EmailSpec | None = None
 
     @property
     def hook_count(self) -> int:
@@ -159,12 +188,23 @@ class NotifyConfig:
         path, so printing it on a public probe would leak it. The counts and
         flags below are what an operator actually needs to confirm that a
         configuration took effect.
+
+        Recipient addresses are withheld for the same reason a destination URL
+        is: an address list is personally identifying, and a health probe is
+        not the place to publish one. Only the *count* is reported, so an
+        operator can still confirm that recipients were picked up.
         """
         return {
             "enabled": self.enabled,
             "hook_count": self.hook_count,
             "live": 1 if _live_from_env() else 0,
             "hooks": [],
+            "email": {
+                "configured": self.email is not None,
+                "recipient_count": len(self.email.to) if self.email else 0,
+                "live": 1 if (self.email and self.email.live) else 0,
+                "min_severity": self.email.min_severity if self.email else None,
+            },
         }
 
 
@@ -225,6 +265,45 @@ def _valid_url(url: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
+def _valid_email(recipient: str) -> bool:
+    """Whether *recipient* is a safe single address.
+
+    Delegates to the same pattern the email notifier itself enforces, so
+    configuration cannot accept an address that delivery would later reject.
+    That pattern is deliberately conservative: it rejects whitespace, ``< >``,
+    CR/LF, quotes and separators — exactly the characters that enable SMTP
+    header injection or recipient smuggling.
+    """
+    return bool(_EMAIL_RE.match(recipient))
+
+
+def _email_from_env(environ: Mapping[str, str]) -> EmailSpec | None:
+    """Resolve the SMTP channel from *environ*, or ``None`` if unconfigured.
+
+    The channel is configured by the presence of at least one valid recipient
+    in :data:`ENV_EMAIL_TO`. An address that fails validation is **dropped**
+    rather than raising: one malformed recipient must not disable the valid
+    ones, and a delivery attempt would fail on it anyway.
+
+    The channel is dry-run by default. :data:`ENV_EMAIL_LIVE` must be set to
+    ``"1"`` for real SMTP delivery, mirroring the webhook channel's
+    ``VALIDSIM_WEBHOOKS_LIVE`` gate — a configured recipient is not consent to
+    send mail.
+    """
+    recipients = _split(environ.get(ENV_EMAIL_TO, ""))
+    if not recipients:
+        return None
+    valid = tuple(addr for addr in recipients if _valid_email(addr))
+    if not valid:
+        return None
+
+    severity = environ.get(ENV_EMAIL_MIN_SEVERITY, "").strip().lower()
+    if severity not in ("info", "warn", "critical"):
+        severity = "info"
+    live = environ.get(ENV_EMAIL_LIVE, "").strip() == "1"
+    return EmailSpec(to=valid, min_severity=severity, live=live)  # type: ignore[arg-type]
+
+
 def notify_config_from_env(environ: Mapping[str, str] | None = None) -> NotifyConfig:
     """Resolve the effective notification configuration from *environ*.
 
@@ -272,4 +351,8 @@ def notify_config_from_env(environ: Mapping[str, str] | None = None) -> NotifyCo
         )
 
     enabled = environ.get(ENV_ENABLED, "").strip().lower() in _TRUTHY
-    return NotifyConfig(enabled=enabled, hooks=tuple(hooks))
+    return NotifyConfig(
+        enabled=enabled,
+        hooks=tuple(hooks),
+        email=_email_from_env(environ),
+    )

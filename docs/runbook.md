@@ -84,6 +84,11 @@ All configuration is env-driven and read at use time (or at `create_app()` /
 | `VALIDSIM_LLM_API_KEY` | *(unset)* | Bearer token for the LLM provider. **Its presence selects the LLM scenario generator**; unset ⇒ deterministic rule-based generator (no network I/O). |
 | `VALIDSIM_LLM_MODEL` | `gpt-4o-mini` | Chat model for adversarial scenario generation. |
 | `VALIDSIM_WEBHOOKS_LIVE` | *(unset)* | Set to `1` to enable real webhook HTTP delivery. Unset ⇒ dry-run: deliveries are recorded, no network I/O. |
+| `VALIDSIM_NOTIFY_ENABLED` | *(unset)* | Master switch for run-completion notification dispatch. Only `1`/`true`/`yes`/`on` turns it on; anything else (including a typo) counts as **off**. Must be on **and** a destination configured. |
+| `VALIDSIM_WEBHOOK_URLS` | *(unset)* | Comma-separated webhook destinations. A URL alone is not consent to send — `VALIDSIM_NOTIFY_ENABLED` must also be on. |
+| `VALIDSIM_SMTP_TO` | *(unset)* | Comma-separated email recipients for the email channel. A recipient alone is not consent to send — `VALIDSIM_NOTIFY_ENABLED` must also be on. Addresses failing validation are dropped, not fatal. |
+| `VALIDSIM_SMTP_MIN_SEVERITY` | `info` | Severity routing threshold for the email channel (`info`/`warn`/`critical`). Shares the webhook channel's severity decision, so both agree on whether an event was worth sending. |
+| `VALIDSIM_SMTP_LIVE` | *(unset)* | Set to exactly `1` to enable real SMTP delivery. Unset ⇒ dry-run: the mail that *would* be sent is recorded, no socket is opened. Independent of `VALIDSIM_WEBHOOKS_LIVE`, which governs the webhook channel only. |
 | `VALIDSIM_CACHE_FILE` | `.validsim/scorecards.json` | Local JSON scorecard cache used by the CLI's `status` / `scorecard` / `report` commands. Human-facing only: `gate` never reads it (see §3), because any process that can write the file can forge a verdict. |
 | `VALIDSIM_JOB_QUEUE` | `memory` | Async job queue backend: `memory` \| `redis`. Must match between the API and every worker — if the API enqueues into its private in-memory queue the job sits `queued` forever with no error. |
 | `VALIDSIM_JOB_QUEUE_MAX_DEPTH` | `1000` | Maximum jobs the queue holds before `enqueue` raises `QueueFullError` and `POST /api/v1/jobs` returns `503`. Must be a positive integer; malformed raises `ValueError`. |
@@ -264,7 +269,11 @@ an unknown run id is not possible — unknown runs return 404.
 > almost always means one of those three is off rather than that the endpoint
 > rejected anything.
 >
-> `EmailNotifier` still has **no production caller**, and there is no
+> `EmailNotifier` **is** dispatched by the same call site: the email channel
+> needs `VALIDSIM_NOTIFY_ENABLED` on *and* at least one `VALIDSIM_SMTP_TO`
+> recipient, and it is dry-run unless `VALIDSIM_SMTP_LIVE=1`. It shares the
+> webhook channel's severity decision, so a mail and a webhook about the same
+> run agree on whether the event was worth sending. There is still no
 > `POST /api/v1/webhooks` route and no CLI flag — the environment surface is
 > the only activation path. The retry/duplicate path does not re-notify, and
 > the dispatcher never raises, so a misconfigured webhook cannot fail a
@@ -288,6 +297,26 @@ an unknown run id is not possible — unknown runs return 404.
 5. **Slack format?** `format="slack"` hooks send Block Kit payloads, not raw
    JSON — pointing a `json` receiver at a Slack URL (or vice versa) yields
    receiver-side 4xx.
+
+**Email channel.** The email channel shares every switch above except the live
+gate, which is separate, and it reports through the same `DeliveryResult`
+type, so one `notify_run_completion` call returns one result per destination.
+
+1. **Is live mode on?** `VALIDSIM_SMTP_LIVE=1` is required for a real send;
+   unset (the default) means dry-run and no socket is opened.
+2. **Was a recipient picked up?** `VALIDSIM_SMTP_TO` must name at least one
+   address that passes validation. An address that fails is **dropped**, so a
+   single typo does not disable the valid ones — but a list where *every*
+   address fails disables the channel entirely (`/api/v1/health` reports
+   `notify.email.configured` and `recipient_count`, never the addresses).
+3. **Severity routing.** `VALIDSIM_SMTP_MIN_SEVERITY` shares the webhook
+   channel's decision. A `warn`-threshold channel receives nothing for an
+   `APPROVE` run — that is correct behaviour, not a delivery failure, and it
+   yields **no** `DeliveryResult` at all.
+4. **A failure is reported, never raised.** A broken mail server produces a
+   result with `ok=False` and an `error` string; it never fails the run.
+   `VALIDSIM_SMTP_HOST` and `VALIDSIM_SMTP_FROM` must both be set for a live
+   send — a missing one is reported as a failed delivery, not an exception.
 
 ### 4.5 LLM scenario generation failing
 

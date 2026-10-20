@@ -36,6 +36,11 @@ Enhancements:
       scorecard (see :func:`severity_from_scorecard`); on dispatch a hook
       only receives events whose severity meets or exceeds its threshold.
       The default ``"info"`` keeps the historical send-to-everyone behaviour.
+    * An **SMTP email channel** is dispatched alongside the webhooks, using
+      the same severity routing so both channels agree on whether an event
+      was worth sending. It is configured by ``VALIDSIM_SMTP_TO`` and is
+      dry-run by default; ``VALIDSIM_SMTP_LIVE=1`` performs real delivery.
+      The email layer itself is :mod:`validsim.notify.email`.
 """
 
 from __future__ import annotations
@@ -46,11 +51,14 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
 from validsim.engine.scorecard import Scorecard
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from validsim.notify.config import EmailSpec
 
 __all__ = [
     "DeliveryResult",
@@ -438,7 +446,7 @@ class WebhookDispatcher:
 
 
 def notify_run_completion(scorecard: Scorecard) -> list[DeliveryResult]:
-    """Fan a completed run's scorecard out to every configured webhook.
+    """Fan a completed run's scorecard out to every configured channel.
 
     This is the seam between a finished run and the notification layer, and it
     **is called from the shipped code**: :func:`validsim.engine.pipeline.run_and_score`
@@ -451,16 +459,21 @@ def notify_run_completion(scorecard: Scorecard) -> list[DeliveryResult]:
     later will not change behaviour until an operator opts in.
 
     Enabling requires *both* ``VALIDSIM_NOTIFY_ENABLED`` to be set to a
-    recognised truthy value *and* at least one ``VALIDSIM_WEBHOOK_URLS``
-    entry. A destination alone is deliberately not consent to send.
+    recognised truthy value *and* at least one destination — a webhook URL
+    (see ``VALIDSIM_WEBHOOK_URLS``) or an SMTP recipient (see
+    ``VALIDSIM_SMTP_TO``). A destination alone is deliberately not consent to
+    send.
+
+    Both channels share one severity routing decision, so a mail and a webhook
+    about the same run agree on whether the event was worth sending.
 
     Args:
         scorecard: The finished run's scorecard.
 
     Returns:
-        The per-hook delivery results, or ``[]`` when notifications are
-        disabled, no destinations are configured, or no hook was eligible for
-        this event's severity.
+        The per-destination delivery results, or ``[]`` when notifications are
+        disabled, no destinations are configured, or no destination was
+        eligible for this event's severity.
 
     .. note::
        This function **never raises**. A run that has already completed and
@@ -476,11 +489,90 @@ def notify_run_completion(scorecard: Scorecard) -> list[DeliveryResult]:
         config = notify_config_from_env()
     except Exception:  # noqa: BLE001 - a config typo must not lose a run
         return []
-    if not config.enabled or not config.hooks:
+    if not config.enabled:
+        return []
+    if not config.hooks and config.email is None:
         return []
 
+    results: list[DeliveryResult] = []
+    if config.hooks:
+        try:
+            dispatcher = config.register_into(WebhookDispatcher())
+            results.extend(dispatcher.dispatch(scorecard))
+        except Exception:  # noqa: BLE001 - delivery must never break the run path
+            pass
+    if config.email is not None:
+        results.extend(_dispatch_email(scorecard, config.email))
+    return results
+
+
+def _dispatch_email(scorecard: Scorecard, spec: "EmailSpec") -> list[DeliveryResult]:
+    """Deliver *scorecard* over SMTP according to *spec*.
+
+    Mirrors the webhook channel's contract: a severity-routed attempt that
+    never raises and always reports a result, so a mail failure is visible
+    rather than silent.
+
+    The result is a :class:`DeliveryResult` rather than the email layer's own
+    :class:`~validsim.notify.email.EmailDelivery` so both channels report
+    through one type. The recipient list is reduced to a count in the
+    ``url`` field: an address list is personally identifying, and a delivery
+    result is the kind of thing that ends up in a log.
+    """
+    # Imported lazily: validsim.notify.email imports the engine layer, and the
+    # dispatcher is imported by the engine pipeline.
+    from validsim.notify.email import EmailNotifier
+
+    name = "email"
+    recipients = tuple(spec.to)
     try:
-        dispatcher = config.register_into(WebhookDispatcher())
-        return dispatcher.dispatch(scorecard)
-    except Exception:  # noqa: BLE001 - delivery must never break the run path
-        return []
+        payload = scorecard.to_dict()
+        event_rank = _SEVERITY_RANK[severity_from_scorecard(payload)]
+        if _SEVERITY_RANK[spec.min_severity] > event_rank:
+            # This channel wants a higher severity than the event carries.
+            return []
+        notifier = EmailNotifier(dry_run=not spec.live)
+        delivery = notifier.send_scorecard(
+            to=list(recipients),
+            subject=_email_subject(payload),
+            scorecard=payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - delivery must never raise
+        return [DeliveryResult(name, f"mailto:{len(recipients)}-recipients", False, None, str(exc))]
+
+    if delivery.ok:
+        return [
+            DeliveryResult(
+                name,
+                f"mailto:{len(recipients)}-recipients",
+                True,
+                None,
+                dry_run=delivery.dry_run,
+            )
+        ]
+    return [
+        DeliveryResult(
+            name,
+            f"mailto:{len(recipients)}-recipients",
+            False,
+            None,
+            delivery.error or "delivery failed",
+            dry_run=delivery.dry_run,
+        )
+    ]
+
+
+def _email_subject(payload: dict[str, Any]) -> str:
+    """Build the mail subject line for a scorecard *payload*.
+
+    Kept short and free of user-controlled text: the subject is a header, and
+    the email layer refuses a subject containing CR/LF. The run id is
+    store-assigned, but building it here rather than trusting it keeps a
+    header-injection guard meaningful.
+    """
+    decision = str(payload.get("deploy_decision", "")).strip().upper()
+    composite = payload.get("composite_score")
+    score = f"{float(composite):.1f}" if isinstance(composite, (int, float)) else "?"
+    run_id = str(payload.get("run_id", "")).strip()
+    suffix = f" [{run_id}]" if run_id else ""
+    return f"ValidSim {decision} - composite {score}{suffix}"

@@ -15,6 +15,29 @@ coverage push that closes the loop on the Docker stack.
 
 ### Added
 
+- **Email notification channel activated** (`validsim/notify/`) — the SMTP
+  notifier was fully implemented (multipart HTML+text scorecard bodies,
+  header-injection guards, TLS, dry-run) but **no production path ever
+  constructed it**, so a completed run could never produce a mail. It is now
+  dispatched by `run_and_score` alongside the webhook channel, sharing the
+  webhook channel's severity decision so both agree on whether an event was
+  worth sending.
+  - Configured by `VALIDSIM_SMTP_TO` (comma-separated recipients, the same
+    list convention as `VALIDSIM_WEBHOOK_URLS`), routed by
+    `VALIDSIM_SMTP_MIN_SEVERITY` (`info`/`warn`/`critical`), and gated by
+    `VALIDSIM_SMTP_LIVE` — delivery is dry-run unless that is exactly `1`,
+    independent of `VALIDSIM_WEBHOOKS_LIVE`, which governs the webhook
+    channel only.
+  - A recipient that fails validation is **dropped**, not fatal: one bad
+    address must not disable the valid ones. The pattern rejects CR/LF,
+    whitespace, angle brackets and quotes, so a crafted address cannot
+    smuggle a second recipient or an extra header past the mail assembly.
+  - The health summary reports a **recipient count**, never an address: a
+    recipient list is personally identifying, and a public probe is not the
+    place to publish one.
+  - A delivery failure is reported as a failed `DeliveryResult`, never
+    raised — a broken mail server must not lose a finished run, but it must
+    not fail silently either.
 - **Named webhook registry** (`validsim/notify/registry.py`) — an
   operator-managed, JSON-backed collection of notification destinations with
   stable names, so a hook can be removed by identity rather than by list

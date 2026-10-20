@@ -151,24 +151,6 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
         "validsim.project_config",
         "ConfigFileError",
     ): "raised by unwired project_config module; no production importer",
-    # -- SMTP email is not mounted on the API, CLI or job worker
-    (
-        "validsim.notify.email",
-        "EmailNotifier",
-    ): "SMTP email is not mounted on the API, CLI or job worker",
-    ("validsim.notify.email", "EmailDelivery"): "result type of the unwired EmailNotifier",
-    (
-        "validsim.notify.email",
-        "scorecard_email_body",
-    ): "SMTP email is not mounted on the API, CLI or job worker",
-    (
-        "validsim.notify.email",
-        "scorecard_text_body",
-    ): "SMTP email is not mounted on the API, CLI or job worker",
-    (
-        "validsim.notify.email",
-        "SmtpSettings",
-    ): "SMTP email is not mounted on the API, CLI or job worker",
     # -- LLM scenario generation is never selected by the pipeline or CLI
     (
         "validsim.scenarios.llm_generator",
@@ -260,7 +242,7 @@ CALIBRATION_SET = {
     "compute_trends": "validsim.engine.trends",
     # "ShadowRunner": "validsim.sim.shadow",  # TODO: verify status
     # "WebhookDispatcher": "validsim.notify.dispatcher",  # NOW WIRED via notify_run_completion
-    "EmailNotifier": "validsim.notify.email",
+    # "EmailNotifier": "validsim.notify.email",  # NOW WIRED via notify_run_completion
     "resolve_asset_path": "validsim.config",
 }
 
@@ -301,6 +283,9 @@ NON_CAPABILITY_EXPORTS = frozenset(
         "app",  # module-level ASGI instance
         "router",  # APIRouter, mounted by create_app
         "ENV_ENABLED",
+        "ENV_EMAIL_LIVE",
+        "ENV_EMAIL_MIN_SEVERITY",
+        "ENV_EMAIL_TO",
         "ENV_FORMATS",
         "ENV_MIN_SEVERITY",
         "ENV_SECRETS",
