@@ -15,6 +15,28 @@ coverage push that closes the loop on the Docker stack.
 
 ### Added
 
+- **Named webhook registry** (`validsim/notify/registry.py`) — an
+  operator-managed, JSON-backed collection of notification destinations with
+  stable names, so a hook can be removed by identity rather than by list
+  position. The `VALIDSIM_WEBHOOK_*` companions pair **by index**, which means
+  removing the first URL from the environment would silently re-sign the
+  second destination with the first one's key; the registry removes that
+  hazard. Stored at `.validsim/hooks.json` (overridable with
+  `VALIDSIM_HOOKS_FILE` or `--registry`), outside the project config tree
+  because a hook URL usually embeds a provider token. The file is written
+  `0600` and a wider mode is tightened on save; the secret is never printed
+  by `list` or `show` (they report `secret=set` / `secret_set: true`).
+  A corrupt registry fails loudly rather than appearing empty, and a missing
+  file is simply an empty registry.
+- **Webhook management CLI** (`validsim webhook add|remove|list|show|env`) —
+  `add` takes a name, URL, `--format` (`json`/`slack`), `--secret`,
+  `--min-severity` and an explicit `--replace`; `list`/`show` are read-only
+  and secret-free; `env` renders the registry as the `VALIDSIM_WEBHOOK_*`
+  export lines the dispatcher reads. Usage errors (bad URL, unsupported
+  format, unknown severity, missing hook, duplicate name) exit `2` with a
+  one-line `error:` message instead of a traceback. The regression engine
+  spells the middle severity `warning` while the notification layer spells it
+  `warn`, so the CLI accepts both and normalises to `warn`.
 - **Async job queue package** (`validsim/jobs/`) — `JobQueue` (thread-safe,
   in-memory) and `RedisJobQueue` (same interface; JSON payloads under
   `validsim:jobs:*` plus a FIFO index list) so the API and out-of-process

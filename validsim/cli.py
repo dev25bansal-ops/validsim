@@ -48,6 +48,12 @@ from validsim.engine.scorecard import Scorecard
 from validsim.jobs.models import JobSpec
 from validsim.jobs.queue import create_job_queue
 from validsim.jobs.worker import JobWorker
+from validsim.notify.registry import (
+    HookRegistry,
+    HookRegistryError,
+    HookValidationError,
+    registry_path_from_env,
+)
 from validsim.sim import create_backend
 from validsim.sim.runner import run_validation, stable_seed
 from validsim.store import create_store, store_backend
@@ -70,6 +76,19 @@ job_app = typer.Typer(
     add_completion=False,
 )
 app.add_typer(job_app, name="job")
+
+#: Sub-command group for managing webhook destinations.
+#: ``validsim webhook add/remove/list`` maintains a named registry that
+#: :mod:`validsim.notify.registry` persists. The registry is the operator's
+#: record of where notifications should go; the dispatcher still resolves
+#: destinations from the environment at dispatch time.
+webhook_app = typer.Typer(
+    name="webhook",
+    help="Manage webhook notification destinations (add, remove, list).",
+    no_args_is_help=True,
+    add_completion=False,
+)
+app.add_typer(webhook_app, name="webhook")
 
 _CACHE_ENV = "VALIDSIM_CACHE_FILE"
 _RUN_ID_RE = re.compile(r"vrun-[0-9a-f]{8}")
@@ -1083,6 +1102,193 @@ def job_enqueue(
         queue.close()
 
     typer.echo(f"Enqueued job {record.job_id} (status: {record.status.value})")
+
+
+# ---------------------------------------------------------------------------
+# `webhook` — managing notification destinations
+# ---------------------------------------------------------------------------
+
+
+def _registry_path() -> Path:
+    """Resolve the hook registry path (honours ``VALIDSIM_HOOKS_FILE``)."""
+    return registry_path_from_env()
+
+
+def _load_registry_or_exit(path: Path) -> HookRegistry:
+    """Load the registry, turning a broken file into a clean CLI error.
+
+    A corrupt registry is an operational problem, not a usage error, so it
+    exits non-zero with the parse error rather than raising a traceback.
+    """
+    try:
+        return HookRegistry.load(path)
+    except HookRegistryError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+
+
+def _save_registry_or_exit(registry: HookRegistry, path: Path) -> None:
+    """Persist the registry, turning an I/O failure into a clean CLI error."""
+    try:
+        registry.save(path)
+    except HookRegistryError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+
+
+@webhook_app.command("add")
+def webhook_add(
+    name: str = typer.Argument(..., help="Name for this hook (used to remove it later)."),
+    url: str = typer.Argument(..., help="Destination URL (absolute http/https)."),
+    fmt: str = typer.Option(
+        "json", "--format", "-f", help="Payload format: json (raw scorecard) or slack (Block Kit)."
+    ),
+    secret: str = typer.Option(
+        None, "--secret", "-s", help="HMAC-SHA256 shared secret for signing the payload."
+    ),
+    min_severity: str = typer.Option(
+        "info",
+        "--min-severity",
+        "-m",
+        help="Lowest severity to deliver: info, warn or critical.",
+    ),
+    replace_existing: bool = typer.Option(
+        False, "--replace", help="Overwrite an existing hook with the same name."
+    ),
+    registry_file: Path = typer.Option(
+        None,
+        "--registry",
+        "-r",
+        help="Path to the hook registry file (default: .validsim/hooks.json).",
+    ),
+) -> None:
+    """Add a webhook destination to the registry.
+
+    The hook is written to the registry file with owner-only permissions,
+    because the shared secret is a credential. Exits 0 on success.
+    """
+    path = registry_file or _registry_path()
+    registry = _load_registry_or_exit(path)
+    try:
+        record = registry.add(
+            name,
+            url,
+            format=fmt,
+            secret=secret,
+            min_severity=min_severity,
+            replace_existing=replace_existing,
+        )
+    except HookValidationError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    _save_registry_or_exit(registry, path)
+    typer.echo(f"Added webhook {record.name} -> {record.url} (format: {record.format})")
+
+
+@webhook_app.command("remove")
+def webhook_remove(
+    name: str = typer.Argument(..., help="Name of the hook to remove."),
+    registry_file: Path = typer.Option(
+        None,
+        "--registry",
+        "-r",
+        help="Path to the hook registry file (default: .validsim/hooks.json).",
+    ),
+) -> None:
+    """Remove a webhook destination from the registry.
+
+    Exits 0 on success. Removing a hook that does not exist is an error —
+    it usually means a typo, and reporting success would hide it.
+    """
+    path = registry_file or _registry_path()
+    registry = _load_registry_or_exit(path)
+    try:
+        record = registry.remove(name)
+    except HookValidationError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2)
+    _save_registry_or_exit(registry, path)
+    typer.echo(f"Removed webhook {record.name}")
+
+
+@webhook_app.command("list")
+def webhook_list(
+    registry_file: Path = typer.Option(
+        None,
+        "--registry",
+        "-r",
+        help="Path to the hook registry file (default: .validsim/hooks.json).",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the registry as JSON."
+    ),
+) -> None:
+    """List the webhook destinations in the registry.
+
+    The shared secret is never printed — only whether one is set. Exits 0
+    even when the registry is empty; an empty registry is not an error.
+    """
+    path = registry_file or _registry_path()
+    registry = _load_registry_or_exit(path)
+    if json_output:
+        typer.echo(json.dumps(registry.to_dict(include_secret=False), indent=2))
+        return
+    if not registry.hooks:
+        typer.echo(f"No webhooks registered ({path})")
+        return
+    for hook in registry.hooks:
+        secret_state = "set" if hook.secret else "unset"
+        typer.echo(
+            f"{hook.name}\t{hook.url}\tformat={hook.format}\t"
+            f"min_severity={hook.min_severity}\tsecret={secret_state}"
+        )
+
+
+@webhook_app.command("show")
+def webhook_show(
+    name: str = typer.Argument(..., help="Name of the hook to show."),
+    registry_file: Path = typer.Option(
+        None,
+        "--registry",
+        "-r",
+        help="Path to the hook registry file (default: .validsim/hooks.json).",
+    ),
+) -> None:
+    """Show one webhook destination.
+
+    Like :command:`webhook list`, the secret itself is never printed.
+    """
+    path = registry_file or _registry_path()
+    registry = _load_registry_or_exit(path)
+    record = registry.get(name)
+    if record is None:
+        known = ", ".join(registry.names()) or "none"
+        typer.echo(f"error: no hook named '{name}' (known hooks: {known})", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(json.dumps(record.to_dict(include_secret=False), indent=2))
+
+
+@webhook_app.command("env")
+def webhook_env(
+    registry_file: Path = typer.Option(
+        None,
+        "--registry",
+        "-r",
+        help="Path to the hook registry file (default: .validsim/hooks.json).",
+    ),
+) -> None:
+    """Render the registry as the environment variables the dispatcher reads.
+
+    The dispatcher resolves destinations from ``VALIDSIM_WEBHOOK_*``; this
+    command prints the equivalent assignment so an operator can export it
+    deliberately. The secret *is* included here, because the whole point is
+    to produce an exportable value — the output is a secret, so it should
+    not be pasted into a shared log.
+    """
+    path = registry_file or _registry_path()
+    registry = _load_registry_or_exit(path)
+    for key, value in registry.to_env().items():
+        typer.echo(f"export {key}={value}")
 
 
 def _drain_worker(

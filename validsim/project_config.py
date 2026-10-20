@@ -181,6 +181,7 @@ INFRA_KEYS: frozenset[str] = frozenset(
         "VALIDSIM_CONFIG",
         "VALIDSIM_CORS_ORIGINS",
         "VALIDSIM_ENV",
+        "VALIDSIM_HOOKS_FILE",
         "VALIDSIM_ISAAC_WORKER_KEY",
         "VALIDSIM_ISAAC_WORKER_URL",
         "VALIDSIM_JOB_LEASE_SECONDS",

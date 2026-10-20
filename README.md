@@ -134,8 +134,8 @@ funnel through — imports `validsim.notify.dispatcher` and calls
 retry/duplicate path re-reads the stored record and deliberately does not
 re-notify, so a run is notified at most once, and the dispatcher never raises,
 so a misconfigured webhook cannot fail a finished run. `EmailNotifier` still
-has **no production caller**. There is also no `POST /api/v1/webhooks` route
-and no CLI flag, so the environment surface below is the only activation path.
+has **no production caller**. There is also no `POST /api/v1/webhooks` route,
+so the environment surface below remains the activation path for dispatch.
 
 The design is fail-closed on two independent switches,
 and **both** must be set:
@@ -159,6 +159,44 @@ Because the default is dry-run *and* the master switch is off, the correct way
 to prove a configuration works is a dry run: a recorded delivery always reports
 `ok=True`, so a "successful" delivery that nobody received almost always means
 either the switch is off or the dispatcher is still in dry-run.
+
+#### Managing destinations (`validsim webhook`)
+
+Editing four environment variables by hand is error-prone, and the companion
+lists pair **by index** — so removing the first URL would silently re-sign the
+second destination with the first one's key. `validsim webhook` manages a
+**named** registry instead, where each destination has a stable name that
+survives reordering.
+
+```bash
+validsim webhook add slack https://hooks.slack.com/services/T/B/X \
+    --format slack --secret "$SLACK_SECRET" --min-severity warn
+validsim webhook list                 # names, URLs, formats, secret=set|unset
+validsim webhook show slack           # one hook, as JSON
+validsim webhook remove slack
+validsim webhook env                  # export lines for the VALIDSIM_WEBHOOK_* vars
+```
+
+- **Storage** — a JSON file at `.validsim/hooks.json`, overridable with
+  `VALIDSIM_HOOKS_FILE` or `--registry`. It sits outside the project config
+  tree, because a hook URL usually embeds a provider token and must never be
+  committed by accident.
+- **Secrets** — the file is written `0600` (owner-only) and a wider mode is
+  tightened on save. The secret is **never printed**: `list` and `show` report
+  `secret=set` / `secret_set: true` instead. `webhook env` is the one
+  exception, because producing an exportable value is its entire purpose —
+  treat its output as a secret.
+- **Safety** — adding a duplicate name is refused unless `--replace` is
+  given, because silently replacing a destination changes where a team's
+  alerts go. A corrupt registry fails loudly rather than appearing empty.
+- **Usage errors** (bad URL, unsupported format, unknown severity, missing
+  hook) exit `2` with a one-line `error:` message; they never raise a
+  traceback.
+
+The registry is the *management* surface; the dispatcher still resolves
+destinations from the environment at dispatch time. `validsim webhook env`
+bridges the two, and prints the exact `export` lines needed to make the
+registry live.
 
 ### Async Job Queue
 
@@ -264,6 +302,7 @@ drain the queue, and stream progress over SSE until the run is persisted.
 - [x] **Paginated list endpoints** — `GET /api/v1/validations` and `GET /api/v1/models` with `limit`/`offset`
 - [x] **CLI `report` command** — `validsim report --latest --format markdown|html`; `run` gains `--environment` (scene profile)
 - [x] **Slack webhooks** — Block Kit payloads, optional HMAC-SHA256 signing (`X-ValidSim-Signature`), retry with exponential backoff, severity routing, plus an operator-facing config surface. Dispatched by `run_and_score` on run completion (opt-in, dry-run by default; the email channel still has no production caller) — see [Notification dispatch](#notification-dispatch-wired-into-the-run-pipeline).
+- [x] **Named webhook registry** (`notify/registry.py` + `validsim webhook add|remove|list|show|env`) — operator-managed destinations with stable names, persisted as JSON at `.validsim/hooks.json` (owner-only `0600`), secrets never printed, and duplicate/usage errors refused with exit `2` — see [Managing destinations](#managing-destinations-validsim-webhook).
 - [~] **LLM scenario category-coverage guarantee** — missing adversarial categories are auto-topped-up from the deterministic fallback. Implemented on the `LLMScenarioGenerator` path, which no run takes; the rule-based generator guarantees full category coverage by construction (it cycles categories by index), so any `n ≥ 12` is already complete.
 - [x] **Postgres store full-detail parity** — `VALIDSIM_STORE=postgres` now matches the SQLite store's full-detail output (drop-in replacement)
 - [x] **Multi-stage Dockerfile + `requirements-dev.txt`** — slim non-root runtime image; dev deps (pytest, ruff, pytest-cov) split out of the runtime image
