@@ -463,7 +463,10 @@
     // Loading a different run invalidates the table on screen, so it is
     // cleared here rather than left to be misread as the new run's result.
     resetComparisonPanel();
-    renderTaxonomy(view.taxonomyRows);
+    // renderTaxonomy() consumes the [mode, count] pairs from V.taxonomyEntries()
+    // (see its contract below); view.taxonomyRows is the display DTO and has a
+    // different shape, so passing it here throws on pair[0] === undefined.
+    renderTaxonomy(V.taxonomyEntries(card && card.failure_taxonomy));
     highlightHistoryRow(currentRunId);
     return view;
   }

@@ -84,14 +84,29 @@ def _wait_for(port: int, timeout: float = 45.0) -> bool:
     return False
 
 
+def _launch_any_chromium(playwright):
+    """Launch the first Chromium this machine actually has.
+
+    Playwright only ships the browser revision pinned to its own version, so a
+    standalone ``pip install playwright`` can be present while
+    ``playwright install`` was never run. An installed Chrome/Edge is just as
+    good for these assertions and avoids a large download, so fall back to it
+    rather than skipping every browser test on such a machine.
+    """
+    errors = []
+    for kwargs in ({}, {"channel": "chrome"}, {"channel": "msedge"}):
+        try:
+            return playwright.chromium.launch(**kwargs)
+        except PlaywrightError as exc:  # pragma: no cover - environment dependent
+            errors.append(f"{kwargs or 'bundled'}: {str(exc).splitlines()[0]}")
+    pytest.skip("no chromium available: " + " | ".join(errors))
+
+
 @pytest.fixture(scope="module")
 def browser():
     try:
         with sync_playwright() as playwright:
-            try:
-                instance = playwright.chromium.launch()
-            except PlaywrightError as exc:
-                pytest.skip(f"chromium not available: {exc}")
+            instance = _launch_any_chromium(playwright)
             yield instance
             instance.close()
     except Exception as exc:  # pragma: no cover - environment dependent
@@ -155,6 +170,40 @@ def test_block_verdict_shows_its_reasons_in_a_real_browser(browser) -> None:
         assert page.locator("#m-adversarial-count").is_visible()
         assert page.locator("#m-adversarial-rate").is_visible()
         assert page.get_attribute("#run-btn", "aria-busy") == "false"
+
+        # Regression: renderTaxonomy() consumes the [mode, count] pairs built by
+        # V.taxonomyEntries(). It was handed scorecardView()'s
+        # {mode, count, share} display DTO instead, so pair[0] was undefined and
+        # `undefined.replaceAll` threw *after* the scorecard had painted. The
+        # panel then showed a red "Validation failed: ..." status line, an empty
+        # taxonomy table, and a history table that never gained the run it was
+        # already displaying.
+        status_text = page.inner_text("#run-status")
+        assert "Validation failed" not in status_text, status_text
+        assert "is-error" not in (page.get_attribute("#run-status", "class") or "")
+
+        taxonomy = stored.get("failure_taxonomy") or {}
+        shown_modes = [
+            text.strip()
+            for text in page.locator(
+                "#taxonomy-tbody tr td:first-child"
+            ).all_inner_texts()
+        ]
+        assert len(shown_modes) == len(taxonomy)
+        assert sorted(shown_modes) == sorted(
+            mode.replace("_", " ") for mode in taxonomy
+        )
+        shown_counts = [
+            int(text)
+            for text in page.locator(
+                "#taxonomy-tbody tr td:nth-child(2)"
+            ).all_inner_texts()
+        ]
+        assert sum(shown_counts) == sum(taxonomy.values())
+        assert page.locator(
+            f"#history-tbody tr[data-run-id='{run_id}']"
+        ).count() == 1
+
         page.screenshot(path=str(_screenshot("block-reasons.png")), full_page=True)
         page.close()
     finally:

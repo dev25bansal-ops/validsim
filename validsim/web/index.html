@@ -6,6 +6,11 @@
   <meta name="color-scheme" content="dark light">
   <title>ValidSim — Sim-to-Real Validation Dashboard</title>
   <meta name="description" content="ValidSim: submit a robot model checkpoint, run parallel sim episodes, gate deploys on the composite scorecard (APPROVE/BLOCK).">
+  <!-- Inline SVG mark. A data-URI icon means the browser never issues the
+       implicit /favicon.ico request, which this app does not serve — keeping the
+       console/network log clean matters because the dashboard's own smoke tests
+       assert on it. No extra route, no extra request. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f172a'/%3E%3Cpath d='M9 17l5 5 9-11' fill='none' stroke='%2338bdf8' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <!-- Served at three paths, because a key-protected deployment cannot reach
        the other two: with VALIDSIM_API_KEY set the app-level X-API-Key
        dependency covers "/" and "/api/v1/dashboard/" and answers 401
