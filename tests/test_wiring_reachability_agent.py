@@ -231,6 +231,16 @@ UNWIRED_BY_DESIGN: dict[tuple[str, str], str] = {
         "validsim.jobs.router",
         "EnqueueJobRequest",
     ): "body model of the unwired enqueue route; no production importer",
+    # -- audit trail verification primitives: exported for external consumers,
+    # -- never invoked within the product's own run/export request path.
+    (
+        "validsim.audit.export",
+        "verify_audit_chain",
+    ): "chain verification for external auditors; exercised by tests, no production caller",
+    (
+        "validsim.audit.records",
+        "record_digest",
+    ): "content-digest primitive; exercised by tests and exported for external verifiers, no production caller",
 }
 
 #: The seven capabilities named in the module docstring. The analyzer must
@@ -280,6 +290,7 @@ PACKAGE_ROOTS = frozenset(
 NON_CAPABILITY_EXPORTS = frozenset(
     {
         "__version__",
+        "AUDIT_SCHEMA_VERSION",  # string constant: the audit-record schema tag
         "app",  # module-level ASGI instance
         "router",  # APIRouter, mounted by create_app
         "ENV_ENABLED",
@@ -832,6 +843,7 @@ def test_module_level_orphans_are_declared_entry_points() -> None:
     known_unreachable = {
         # Package __init__ shims: reached only as a side effect of importing a
         # sibling, and never imported directly by the tree.
+        "validsim.audit",
         "validsim.api",
         "validsim.engine",
         "validsim.jobs",

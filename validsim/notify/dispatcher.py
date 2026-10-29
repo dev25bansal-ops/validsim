@@ -55,7 +55,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
+from validsim._log import get_logger
 from validsim.engine.scorecard import Scorecard
+from validsim.notify.retry import RetryPolicy
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from validsim.notify.config import EmailSpec
@@ -78,6 +80,17 @@ _TIMEOUT_S = 5.0
 _MAX_RETRIES = 2
 #: Base delay (seconds) for exponential backoff between retries.
 _BACKOFF_BASE_S = 0.1
+#: Ceiling (seconds) on any *single* adaptive wait, including one derived
+#: from a receiver's ``Retry-After`` header. A receiver controls that header,
+#: so it is clamped rather than trusted.
+_RETRY_MAX_DELAY_S = 2.0
+#: Ceiling (seconds) on the *sum* of every wait in one delivery's ladder.
+#:
+#: This must stay comfortably above the legacy fixed ladder
+#: (``0.1 + 0.2 = 0.3``) so the adaptive policy never truncates a transient
+#: failure's retries, while remaining well inside the fan-out deadline
+#: (:data:`_DISPATCH_BUDGET_S`).
+_RETRY_MAX_TOTAL_DELAY_S = 2.0
 #: Wall-clock ceiling (seconds) for ONE ``dispatch()`` fan-out, across every
 #: hook. Hooks are delivered serially and each may burn
 #: ``(1 + _MAX_RETRIES) * _TIMEOUT_S`` on a black hole, so without a shared
@@ -87,6 +100,16 @@ _BACKOFF_BASE_S = 0.1
 _DISPATCH_BUDGET_S = 5.0
 #: Custom signature header name for HMAC-SHA256 body signing.
 _SIGNATURE_HEADER = "X-ValidSim-Signature"
+#: Whether a *permanent* failure (a 4xx that means the request itself was
+#: wrong) ends the retry ladder immediately.
+#:
+#: Retrying a 404/401/400 is pure waste: the same request will be rejected
+#: again, and every retry delays the operator's signal by another backoff
+#: interval. Transient failures (transport errors, 408, 429, 5xx) still get
+#: the full ladder.
+_PERMANENT_FAILURES_TERMINAL = True
+#: Logger for the notification layer.
+_logger = get_logger("notify.dispatcher")
 
 #: Supported hook payload formats.
 HookFormat = Literal["json", "slack"]
@@ -213,6 +236,48 @@ def format_slack_blocks(payload: dict[str, Any]) -> dict[str, Any]:
 def _sign_body(body: str, secret: str) -> str:
     """Return the hex HMAC-SHA256 of ``body`` keyed by ``secret``."""
     return hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _retry_after_seconds(response: Any) -> float | None:
+    """Extract a usable ``Retry-After`` hint from a response, if any.
+
+    The receiver's hint is *better* information than our own backoff curve,
+    so it is preferred when present. It is also the only header a remote
+    party controls, so it is treated as hostile input:
+
+    * a non-numeric or negative value is ignored, not coerced;
+    * the value is clamped by the policy's ``max_delay_s`` before use, so a
+      receiver cannot park a delivery for hours;
+    * a missing ``headers`` attribute (which a minimal HTTP stub may not
+      provide) is simply "no hint".
+
+    Args:
+        response: The HTTP response, or ``None`` when the attempt never
+            produced one.
+
+    Returns:
+        The hint in seconds, or ``None`` when there is no usable hint.
+    """
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    try:
+        raw = headers.get("Retry-After")
+    except AttributeError:  # pragma: no cover - exotic header containers
+        return None
+    if raw is None:
+        return None
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        # An HTTP-date form is legal but not worth parsing here: guessing a
+        # clock-skewed date would be worse than ignoring the hint.
+        return None
+    if value <= 0:
+        return None
+    return value
 
 
 @dataclass(frozen=True)
@@ -407,6 +472,18 @@ class WebhookDispatcher:
             headers[_SIGNATURE_HEADER] = _sign_body(body, secret)
 
         last: DeliveryResult | None = None
+        # One policy per delivery: it owns the retry *decision* and the
+        # accumulated delay budget for this hook. The policy is pure -- it
+        # never sleeps, never touches the network, never reads a clock -- so
+        # every timing decision stays here in the dispatcher, where the shared
+        # fan-out deadline can clamp it.
+        policy = RetryPolicy(
+            max_retries=_MAX_RETRIES,
+            base_delay_s=_BACKOFF_BASE_S,
+            max_delay_s=_RETRY_MAX_DELAY_S,
+            max_total_delay_s=_RETRY_MAX_TOTAL_DELAY_S,
+            permanent_is_terminal=_PERMANENT_FAILURES_TERMINAL,
+        )
         for attempt in range(_MAX_RETRIES + 1):
             # Re-clamp per attempt: earlier hooks and earlier retries of this
             # hook may have spent the budget since it was computed.
@@ -416,24 +493,44 @@ class WebhookDispatcher:
                 if remaining <= 0:
                     break  # budget gone: keep the last failure, stop retrying
                 attempt_timeout = min(attempt_timeout, remaining)
+            response = None
             try:
                 response = httpx.post(
                     url, content=body, headers=headers, timeout=attempt_timeout
                 )
             except Exception as exc:  # noqa: BLE001 - never let delivery raise
                 last = DeliveryResult(name, url, False, None, str(exc), dry_run=False)
+                status_code: int | None = None
+                error_text: str | None = str(exc)
             else:
-                ok = 200 <= response.status_code < 300
-                error = None if ok else f"HTTP {response.status_code}"
-                last = DeliveryResult(name, url, ok, response.status_code, error, dry_run=False)
+                status_code = response.status_code
+                ok = 200 <= status_code < 300
+                error_text = None if ok else f"HTTP {status_code}"
+                last = DeliveryResult(name, url, ok, status_code, error_text, dry_run=False)
                 if ok:
                     return last
-            if attempt < _MAX_RETRIES:
-                # Backoff is itself budget: do not sleep past the deadline.
-                delay = _BACKOFF_BASE_S * (2**attempt)
-                if deadline is not None:
-                    delay = min(delay, max(0.0, deadline - time.monotonic()))
-                time.sleep(delay)
+            decision = policy.decide(
+                attempt=attempt,
+                status_code=status_code,
+                error=error_text,
+                retry_after_s=_retry_after_seconds(response),
+            )
+            if not decision.retry:
+                # The policy declined another attempt: a permanent failure, an
+                # exhausted retry budget, or an exhausted delay budget. The
+                # last result already describes the failure, so the reason is
+                # only worth a log line.
+                _logger.warning(
+                    "notification delivery stopped: %s",
+                    decision.reason,
+                    extra={"hook": name, "failure_kind": decision.kind},
+                )
+                break
+            # Backoff is itself budget: do not sleep past the deadline.
+            delay = decision.delay_s
+            if deadline is not None:
+                delay = min(delay, max(0.0, deadline - time.monotonic()))
+            time.sleep(delay)
         if last is None:
             # Unreachable while ``_MAX_RETRIES >= 0``, but a zero-retry future
             # would otherwise trip the assert below with an unhelpful message.
