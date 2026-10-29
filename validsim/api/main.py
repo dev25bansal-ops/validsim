@@ -104,6 +104,7 @@ from starlette.datastructures import Headers, MutableHeaders
 
 from validsim import __version__
 from validsim.api.metrics import Metrics, metrics_router
+from validsim.audit.export import export_audit_log
 from validsim.config import ValidationRequest
 from validsim.engine.export import scorecard_to_html, scorecard_to_markdown
 from validsim.engine.pdf import scorecard_pdf_bytes
@@ -1167,6 +1168,45 @@ def create_app(store: ValidationStore | None = None) -> FastAPI:
     def get_validation(run_id: str, st: ValidationStore = Depends(get_store)) -> dict[str, Any]:
         """Run summary (no episode payloads)."""
         return _require_run(st, run_id).summary()
+
+    @application.get("/api/v1/audit")
+    def export_audit(
+        fmt: str = Query(default="csv", pattern="^(csv|json|jsonl)$"),
+        since: str | None = Query(default=None),
+        until: str | None = Query(default=None),
+        st: ValidationStore = Depends(get_store),
+    ) -> Response:
+        """Export the hash-chained audit trail over the stored runs.
+
+        Every stored run becomes one canonical audit record, and each record
+        is chained to its predecessor, so an edit to any earlier record
+        invalidates every later link. The export is a pure function of the
+        stored run set: the same runs always produce byte-identical output.
+
+        Args:
+            fmt: ``csv`` (default, spreadsheet-friendly), ``json`` (one
+                document), or ``jsonl`` (one object per line).
+            since: Optional inclusive ISO-8601 lower bound on ``created_at``.
+            until: Optional inclusive ISO-8601 upper bound on ``created_at``.
+
+        Returns:
+            The rendered audit log, with a ``Content-Disposition`` filename
+            that names the format so a browser saves it usefully.
+        """
+        since = _validate_iso_filter(since, field="since")
+        until = _validate_iso_filter(until, field="until")
+        history = st.history(since=since, until=until)  # oldest first
+        body = export_audit_log(history, fmt)  # type: ignore[arg-type]
+        media_type = {
+            "csv": "text/csv; charset=utf-8",
+            "json": "application/json; charset=utf-8",
+            "jsonl": "application/x-ndjson; charset=utf-8",
+        }[fmt]
+        return Response(
+            content=body,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="validsim-audit.{fmt}"'},
+        )
 
     @application.delete(
         "/api/v1/validations/{run_id}",

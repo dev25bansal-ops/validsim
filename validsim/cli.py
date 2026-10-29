@@ -40,6 +40,7 @@ from typing import Any
 import typer
 
 from validsim import __version__
+from validsim.audit.export import export_audit_log
 from validsim.config import EnvironmentSpec, RobotSpec, TaskConfig
 from validsim.engine.export import scorecard_to_html, scorecard_to_markdown
 from validsim.engine.pipeline import run_and_score
@@ -790,6 +791,53 @@ def models() -> None:
         )
     )
     typer.echo(f"{total} total runs stored")
+
+
+@app.command()
+def audit(
+    fmt: str = typer.Option(
+        "csv", "--format", "-f", help="Export format: csv, json or jsonl."
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Write the export to a file instead of stdout."
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Inclusive ISO-8601 lower bound on created_at."
+    ),
+    until: str | None = typer.Option(
+        None, "--until", help="Inclusive ISO-8601 upper bound on created_at."
+    ),
+) -> None:
+    """Export the hash-chained audit trail over every stored run.
+
+    Each stored run becomes one canonical audit record, and every record is
+    chained to its predecessor, so an edit to an earlier record invalidates
+    every later link. The export is a pure function of the stored run set:
+    the same runs always produce byte-identical output.
+
+    Writes to stdout by default, or to ``--output`` when given. Exits 0 on
+    success and 2 if the format is not one of csv/json/jsonl.
+    """
+    normalized = fmt.strip().lower()
+    if normalized not in ("csv", "json", "jsonl"):
+        typer.echo(
+            f"error: unsupported audit format '{fmt}' (expected csv, json or jsonl)",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    store = create_store()
+    try:
+        history = store.history(since=since, until=until)
+    finally:
+        store.close()
+
+    body = export_audit_log(history, normalized)  # type: ignore[arg-type]
+    if output is None:
+        typer.echo(body, nl=False)
+        return
+    output.write_text(body, encoding="utf-8")
+    typer.echo(f"Wrote {len(history)} audit records to {output}")
 
 
 @app.command()

@@ -353,6 +353,7 @@ class TestRouteTableContract:
             ("GET", "/api/v1/jobs/{job_id}/status"),
             ("GET", "/api/v1/jobs/{job_id}/events"),
             ("GET", "/api/v1/metrics"),
+            ("GET", "/api/v1/audit"),
         }
         assert observed == expected
 
